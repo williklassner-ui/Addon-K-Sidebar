@@ -540,15 +540,28 @@ document.getElementById('makrosList').addEventListener('click', (e) => {
                     target: { tabId: tabs[0].id },
                     func: (stepsList) => {
                         const executeAction = (step, attempt) => {
-                            const el = document.querySelector(step.target);
+                            let el = null;
+                            try { el = document.querySelector(step.target); } catch (e) {}
+
+                            // Koordinaten-Fallback: scroll zur aufgezeichneten Position und nutze elementFromPoint
+                            if (!el && step._px !== undefined && step._py !== undefined) {
+                                window.scrollTo({ top: step._py - window.innerHeight / 2, behavior: 'instant' });
+                                const vx = step._px - window.scrollX;
+                                const vy = step._py - window.scrollY;
+                                el = document.elementFromPoint(vx, vy);
+                            }
+
                             if (!el) {
                                 if ((attempt || 0) < 3) setTimeout(() => executeAction(step, (attempt || 0) + 1), 300);
                                 return;
                             }
                             el.focus();
                             if (step.type === 'click') {
-                                el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
-                                el.click();
+                                const cx = step._px !== undefined ? step._px - window.scrollX : 0;
+                                const cy = step._py !== undefined ? step._py - window.scrollY : 0;
+                                el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, clientX: cx, clientY: cy }));
+                                el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, clientX: cx, clientY: cy }));
+                                el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, clientX: cx, clientY: cy }));
                             } else if (step.type === 'type') {
                                 if (el.isContentEditable || el.tagName === 'DIV') {
                                     el.focus();
@@ -601,6 +614,17 @@ document.getElementById('recordMakroBtn').addEventListener('click', () => {
                 func: () => {
                     sessionStorage.setItem('_makroSteps', JSON.stringify([]));
 
+                    // Visuelles Feedback: CSS in Seite injizieren
+                    const style = document.createElement('style');
+                    style.id = '_makroStyle';
+                    style.textContent = `
+                        ._makro-hover { outline: 2px dashed #ff8c00 !important; outline-offset: 3px !important; cursor: crosshair !important; }
+                        ._makro-recorded { outline: 3px solid #4caf50 !important; outline-offset: 3px !important; }
+                        @keyframes _makroFlash { 0%,100%{opacity:1} 50%{opacity:0.4} }
+                        ._makro-recorded { animation: _makroFlash 0.4s ease 2; }
+                    `;
+                    document.head.appendChild(style);
+
                     const getPath = (el) => {
                         if (!el) return '*';
                         if (el.id) return `#${CSS.escape(el.id)}`;
@@ -619,12 +643,27 @@ document.getElementById('recordMakroBtn').addEventListener('click', () => {
                         return tag;
                     };
 
+                    window._makroHoverHandler = (e) => {
+                        document.querySelectorAll('._makro-hover').forEach(el => el.classList.remove('_makro-hover'));
+                        e.target.classList.add('_makro-hover');
+                    };
+                    window._makroMouseOutHandler = (e) => {
+                        e.target.classList.remove('_makro-hover');
+                    };
+
                     window._makroClickHandler = (e) => {
                         try {
                             const path = getPath(e.target);
+                            const rect = e.target.getBoundingClientRect();
+                            const px = Math.round(rect.left + rect.width / 2 + window.scrollX);
+                            const py = Math.round(rect.top + rect.height / 2 + window.scrollY);
                             let steps = JSON.parse(sessionStorage.getItem('_makroSteps') || '[]');
-                            steps.push({ type: 'click', target: path });
+                            steps.push({ type: 'click', target: path, _px: px, _py: py });
                             sessionStorage.setItem('_makroSteps', JSON.stringify(steps));
+                            // Grüner Flash als Bestätigung
+                            e.target.classList.remove('_makro-hover');
+                            e.target.classList.add('_makro-recorded');
+                            setTimeout(() => e.target.classList.remove('_makro-recorded'), 800);
                         } catch (err) {}
                     };
 
@@ -634,9 +673,13 @@ document.getElementById('recordMakroBtn').addEventListener('click', () => {
                             let steps = JSON.parse(sessionStorage.getItem('_makroSteps') || '[]');
                             steps.push({ type: 'type', target: path, value: e.target.value || e.target.innerText });
                             sessionStorage.setItem('_makroSteps', JSON.stringify(steps));
+                            e.target.classList.add('_makro-recorded');
+                            setTimeout(() => e.target.classList.remove('_makro-recorded'), 800);
                         } catch (err) {}
                     };
 
+                    document.addEventListener('mouseover', window._makroHoverHandler, { capture: true });
+                    document.addEventListener('mouseout', window._makroMouseOutHandler, { capture: true });
                     document.addEventListener('click', window._makroClickHandler, { capture: true });
                     document.addEventListener('change', window._makroChangeHandler, { capture: true });
                 }
@@ -644,7 +687,7 @@ document.getElementById('recordMakroBtn').addEventListener('click', () => {
         } else {
             btn.innerHTML = '<span class="record-dot"></span> Aufnahme';
             btn.classList.remove('recording');
-            
+
             chrome.scripting.executeScript({
                 target: { tabId: tabs[0].id },
                 func: () => {
@@ -653,13 +696,24 @@ document.getElementById('recordMakroBtn').addEventListener('click', () => {
                         steps = JSON.parse(sessionStorage.getItem('_makroSteps') || '[]');
                         sessionStorage.removeItem('_makroSteps');
                     } catch (e) {}
-                    
+
                     if (window._makroClickHandler) document.removeEventListener('click', window._makroClickHandler, { capture: true });
                     if (window._makroChangeHandler) document.removeEventListener('change', window._makroChangeHandler, { capture: true });
-                    
+                    if (window._makroHoverHandler) document.removeEventListener('mouseover', window._makroHoverHandler, { capture: true });
+                    if (window._makroMouseOutHandler) document.removeEventListener('mouseout', window._makroMouseOutHandler, { capture: true });
+
                     delete window._makroClickHandler;
                     delete window._makroChangeHandler;
-                    
+                    delete window._makroHoverHandler;
+                    delete window._makroMouseOutHandler;
+
+                    // Injiziertes CSS entfernen
+                    const s = document.getElementById('_makroStyle');
+                    if (s) s.remove();
+                    document.querySelectorAll('._makro-hover, ._makro-recorded').forEach(el => {
+                        el.classList.remove('_makro-hover', '_makro-recorded');
+                    });
+
                     return steps;
                 }
             }, (results) => {
@@ -991,38 +1045,14 @@ document.getElementById('sessionsView').addEventListener('click', (e) => {
     }
     if (action === 'restore-all') {
         if (session) {
-            const openInNew = confirm("Session wiederherstellen:\n\nOK = Neues Fenster öffnen\nAbbrechen = Im aktuellen Fenster öffnen");
-            if (session.windows && session.windows.length > 0) {
-                session.windows.forEach((win, winIdx) => {
-                    if (win.tabs && win.tabs.length > 0) {
-                        if (!openInNew && winIdx === 0) {
-                            win.tabs.forEach(t => chrome.tabs.create({ url: t.url || "about:blank" }));
-                        } else {
-                            const createData = { url: win.tabs.map(t => t.url || "about:blank") };
-                            if (win.width && win.height) {
-                                createData.width = win.width;
-                                createData.height = win.height;
-                                createData.top = win.top;
-                                createData.left = win.left;
-                            }
-                            chrome.windows.create(createData);
-                        }
-                    }
-                });
-            } else if (session.tabs && session.tabs.length > 0) {
-                if (!openInNew) {
-                    session.tabs.forEach(t => chrome.tabs.create({ url: t.url || "about:blank" }));
-                } else {
-                    const createData = { url: session.tabs.map(t => t.url || "about:blank") };
-                    if (session.width && session.height) {
-                        createData.width = session.width;
-                        createData.height = session.height;
-                        createData.top = session.top;
-                        createData.left = session.left;
-                    }
-                    chrome.windows.create(createData);
-                }
-            }
+            let totalTabs = 0;
+            if (session.windows) session.windows.forEach(w => { totalTabs += (w.tabs || []).length; });
+            else if (session.tabs) totalTabs = session.tabs.length;
+            const popup = document.getElementById('sessionRestorePopup');
+            document.getElementById('sessionRestorePopupInfo').textContent =
+                `„${session.name || 'Unbenannte Session'}" mit ${totalTabs} Tab(s) wiederherstellen.`;
+            popup.dataset.sessionIdx = sIdx;
+            popup.style.display = 'flex';
         }
         return;
     }
@@ -1136,6 +1166,51 @@ document.getElementById('sessionsView').addEventListener('click', (e) => {
             chrome.storage.sync.set({ savedSessions });
         }
     }
+});
+
+function doSessionRestore(openInNew) {
+    const popup = document.getElementById('sessionRestorePopup');
+    const sIdx = parseInt(popup.dataset.sessionIdx);
+    popup.style.display = 'none';
+    const session = savedSessions[sIdx];
+    if (!session) return;
+    if (session.windows && session.windows.length > 0) {
+        session.windows.forEach((win, winIdx) => {
+            if (win.tabs && win.tabs.length > 0) {
+                if (!openInNew && winIdx === 0) {
+                    win.tabs.forEach(t => chrome.tabs.create({ url: t.url || "about:blank" }));
+                } else {
+                    const createData = { url: win.tabs.map(t => t.url || "about:blank") };
+                    if (win.width && win.height) {
+                        createData.width = win.width;
+                        createData.height = win.height;
+                        createData.top = win.top;
+                        createData.left = win.left;
+                    }
+                    chrome.windows.create(createData);
+                }
+            }
+        });
+    } else if (session.tabs && session.tabs.length > 0) {
+        if (!openInNew) {
+            session.tabs.forEach(t => chrome.tabs.create({ url: t.url || "about:blank" }));
+        } else {
+            const createData = { url: session.tabs.map(t => t.url || "about:blank") };
+            if (session.width && session.height) {
+                createData.width = session.width;
+                createData.height = session.height;
+                createData.top = session.top;
+                createData.left = session.left;
+            }
+            chrome.windows.create(createData);
+        }
+    }
+}
+
+document.getElementById('restoreNewWindowBtn').addEventListener('click', () => doSessionRestore(true));
+document.getElementById('restoreCurrentWindowBtn').addEventListener('click', () => doSessionRestore(false));
+document.getElementById('restoreCancelBtn').addEventListener('click', () => {
+    document.getElementById('sessionRestorePopup').style.display = 'none';
 });
 
 function closeGroupEditMode() {

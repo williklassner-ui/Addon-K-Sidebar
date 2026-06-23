@@ -193,3 +193,8 @@ h3 { margin: 0; font-size: 14px; text-transform: uppercase; letter-spacing: 0.5p
   0%, 100% { opacity: 1; transform: scale(1); }
   50% { opacity: 0.3; transform: scale(0.7); }
 }
+
+#sessionRestorePopup { position: absolute; inset: 0; z-index: 9999; display: flex; align-items: center; justify-content: center; }
+.popup-backdrop { position: absolute; inset: 0; background: rgba(0, 0, 0, 0.6); }
+.popup-box { position: relative; background: var(--card-bg); border: 1px solid var(--input-border); border-radius: 12px; padding: 20px; width: calc(100% - 40px); max-width: 280px; box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5); z-index: 1; }
+.popup-box h3 { margin: 0 0 4px; }

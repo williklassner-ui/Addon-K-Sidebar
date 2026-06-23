@@ -304,6 +304,19 @@
     <button id="emptyTrashBtn" class="danger-btn" style="width:100%; margin-top:15px;">Papierkorb leeren</button>
   </div>
 
+  <div id="sessionRestorePopup" style="display:none;">
+    <div class="popup-backdrop"></div>
+    <div class="popup-box">
+      <h3>📂 Session wiederherstellen</h3>
+      <p id="sessionRestorePopupInfo" style="font-size:13px; opacity:0.8; margin:8px 0 16px;"></p>
+      <div style="display:flex; flex-direction:column; gap:8px;">
+        <button id="restoreNewWindowBtn" class="primary-btn">🪟 Neues Fenster öffnen</button>
+        <button id="restoreCurrentWindowBtn" class="btn-icon-elegant" style="padding:10px; font-size:13px;">📑 Im aktuellen Fenster öffnen</button>
+        <button id="restoreCancelBtn" class="danger-btn" style="margin-top:4px;">✕ Abbrechen</button>
+      </div>
+    </div>
+  </div>
+
   <script src="sidepanel.js"></script>
 </body>
 </html>
