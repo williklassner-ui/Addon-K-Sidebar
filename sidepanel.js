@@ -581,9 +581,13 @@ document.getElementById('makrosList').addEventListener('click', (e) => {
                                     return;
                                 }
                                 el.focus();
-                                el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, clientX: vx, clientY: vy }));
-                                el.dispatchEvent(new MouseEvent('mouseup',   { bubbles: true, cancelable: true, clientX: vx, clientY: vy }));
-                                el.dispatchEvent(new MouseEvent('click',     { bubbles: true, cancelable: true, clientX: vx, clientY: vy }));
+                                // Klick immer in die Mitte des gefundenen Elements
+                                const rect = el.getBoundingClientRect();
+                                const cx = rect.left + rect.width / 2;
+                                const cy = rect.top + rect.height / 2;
+                                el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, clientX: cx, clientY: cy }));
+                                el.dispatchEvent(new MouseEvent('mouseup',   { bubbles: true, cancelable: true, clientX: cx, clientY: cy }));
+                                el.dispatchEvent(new MouseEvent('click',     { bubbles: true, cancelable: true, clientX: cx, clientY: cy }));
                             } else if (step.type === 'type') {
                                 // Selektor primär, Koordinaten als Fallback
                                 let el = null;
@@ -878,9 +882,12 @@ document.getElementById('stepPlaybackRunBtn').addEventListener('click', () => {
                     if (!el || el === document.body) el = originalEl;
                     if (!el) return;
                     el.focus();
-                    el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, clientX: vx, clientY: vy }));
-                    el.dispatchEvent(new MouseEvent('mouseup',   { bubbles: true, cancelable: true, clientX: vx, clientY: vy }));
-                    el.dispatchEvent(new MouseEvent('click',     { bubbles: true, cancelable: true, clientX: vx, clientY: vy }));
+                    const rect = el.getBoundingClientRect();
+                    const cx = rect.left + rect.width / 2;
+                    const cy = rect.top + rect.height / 2;
+                    el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, clientX: cx, clientY: cy }));
+                    el.dispatchEvent(new MouseEvent('mouseup',   { bubbles: true, cancelable: true, clientX: cx, clientY: cy }));
+                    el.dispatchEvent(new MouseEvent('click',     { bubbles: true, cancelable: true, clientX: cx, clientY: cy }));
                 } else if (step.type === 'type') {
                     let el = null;
                     try { el = document.querySelector(step.target); } catch(e) {}
