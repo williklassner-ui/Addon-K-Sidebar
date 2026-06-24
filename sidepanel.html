@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <link rel="stylesheet" href="sidepanel.css">
+</head>
+<body data-theme="dark">
+  <div class="top-controls">
+    <button id="trashToggleBtn" class="btn-icon-elegant top-btn" title="Papierkorb öffnen">🗑️</button>
+    <button id="backupToggleBtn" class="btn-icon-elegant top-btn" title="Backup & Sync Manager">🛡️ Backup & Sync</button>
+    <button id="themeToggle" class="theme-btn">◑</button>
+  </div>
+
+  <div id="mainContainer">
+    <div id="promptsView" class="tab-view">
+      <div class="header">
+        <input type="text" id="searchInput" placeholder="⌕ Promts durchsuchen...">
+        <button id="addToggleBtn" class="btn-icon" title="Prompt hinzufügen">＋</button>
+      </div>
+      <div id="promptList"></div>
+    </div>
+
+    <div id="sessionsView" class="tab-view" style="display:none;">
+      <div class="session-actions-top">
+        <button id="saveCurrentSessionBtn" class="primary-btn" style="width:100%;">💾 geöffnete Session sichern</button>
+      </div>
+      
+      <div class="session-split">
+        <div class="session-section">
+          <div id="sessionList"></div>
+        </div>
+      </div>
+    </div>
+
+    <div id="notesView" class="tab-view" style="display:none;">
+      <div class="header">
+        <input type="text" id="searchNotesInput" placeholder="⌕ Notizen durchsuchen...">
+        <button id="addNoteToggleBtn" class="btn-icon" title="Notiz hinzufügen">＋</button>
+      </div>
+      <div id="pinnedNotesSection" class="notes-block-section" style="display:none;">
+        <div class="field-label" style="margin-bottom:8px;">📌 Angepinnt</div>
+        <div id="pinnedNotesList" class="notes-grid-list"></div>
+      </div>
+      <div id="allNotesSection" class="notes-block-section">
+        <div id="notesList"></div>
+      </div>
+    </div>
+
+    <div id="makrosView" class="tab-view" style="display:none;">
+      <div class="header">
+        <input type="text" id="searchMakrosInput" placeholder="⌕ Makros durchsuchen...">
+        <button id="recordMakroBtn" class="record-btn" title="Makro live im aktiven Tab aufnehmen"><span class="record-dot"></span> Aufnahme</button>
+      </div>
+      <div id="makrosList"></div>
+    </div>
+
+    <div class="tabs-nav" id="tabsNavContainer">
+      <button id="navPrompts" class="tab-btn active" data-tab="prompts">Promts</button>
+      <button id="navSessions" class="tab-btn" data-tab="sessions">Sessions</button>
+      <button id="navNotes" class="tab-btn" data-tab="notes">Notizen</button>
+      <button id="navMakros" class="tab-btn" data-tab="makros">Makros</button>
+    </div>
+  </div>
+    
+  <div id="tabContextMenu" class="context-menu" style="display:none; position:fixed; z-index:99999; width: 140px;">
+    <label style="font-size:11px; display:block; margin-bottom:5px; font-weight:bold;">Reiter-Farbe:</label>
+    <input type="color" id="tabColorPicker" style="width:100%; height:30px; cursor:pointer; padding:0;">
+    <button id="resetTabColorBtn" class="danger-btn" style="margin-top:6px; font-size:11px; width:100%; padding:4px; border-radius:4px !important;">Zurücksetzen</button>
+    <div style="border-top: 1px solid var(--input-border); margin-top: 8px; padding-top: 6px; display: flex; gap: 4px;">
+      <button id="moveTabLeftBtn" class="btn-icon-elegant" style="flex:1; padding:4px; font-size:11px;" title="Nach links verschieben">◀</button>
+      <button id="moveTabRightBtn" class="btn-icon-elegant" style="flex:1; padding:4px; font-size:11px;" title="Nach rechts verschieben">▶</button>
+    </div>
+  </div>
+
+  <div id="inputGroup" style="display:none;">
+    <div class="input-header">
+      <h3>✨ Prompt bearbeiten</h3>
+    </div>
+    <input type="hidden" id="editIndex" value="">
+    
+    <div class="field-block">
+      <label class="field-label">Titel</label>
+      <input type="text" id="titleInput" placeholder="Titel eingeben...">
+    </div>
+
+    <div class="field-block">
+      <label class="field-label">Prompt Text</label>
+      <textarea id="textInput" placeholder="Prompt Text eingeben..."></textarea>
+    </div>
+
+    <div class="field-block">
+      <label class="field-label">Farbe</label>
+      <div class="input-row">
+        <input type="color" id="promptColor" value="#ff8c00">
+      </div>
+    </div>
+
+    <div class="field-block">
+      <label class="field-label">Zuletzt verwendete Farben</label>
+      <div id="recentColorsPrompt" class="recent-colors-box"></div>
+    </div>
+
+    <div class="field-block">
+      <label class="field-label">Shortcut</label>
+      <input type="text" id="shortcutInput" placeholder="Shortcut (z.B. Alt+1)">
+    </div>
+
+    <div class="field-block">
+      <label class="field-label">KI-Anbieter</label>
+      <select id="aiProvider">
+        <option value="none">Kein Anbieter</option>
+        <option value="ChatGPT">✦ ChatGPT</option>
+        <option value="Gemini">✦ Gemini</option>
+        <option value="Claude">⚛ Claude</option>
+        <option value="Copilot">✵ Copilot</option>
+        <option value="Perplexity">◈ Perplexity</option>
+        <option value="DeepL">⚲ DeepL</option>
+      </select>
+    </div>
+
+    <div class="field-block">
+      <label class="field-label">Zugehörige Gruppe</label>
+      <div class="input-row-vertical">
+        <select id="groupSelectOptions" style="width:100%;"></select>
+        <input type="text" id="groupInput" placeholder="Namen für neue Gruppe eingeben..." style="display:none; width:100%; margin-top:5px;">
+      </div>
+    </div>
+
+    <div class="editor-footer-buttons">
+      <button id="cancelBtn" class="danger-btn icon-btn-large" title="Abbrechen" style="background: #cf6679; flex:1;">✕</button>
+      <button id="saveBtn" class="primary-btn icon-btn-large" title="Speichern" style="flex:1;">💾</button>
+    </div>
+  </div>
+
+  <div id="noteInputGroup" style="display:none;">
+    <div class="input-header">
+      <h3>📝 Notiz bearbeiten</h3>
+    </div>
+    <input type="hidden" id="editNoteIndex" value="">
+    
+    <div class="field-block">
+      <label class="field-label">Titel</label>
+      <input type="text" id="noteTitleInput" placeholder="Titel eingeben...">
+    </div>
+
+    <div class="field-block">
+      <label class="field-label">Beschreibung / Text</label>
+      <textarea id="noteTextInput" placeholder="Notiztext eingeben..."></textarea>
+    </div>
+
+    <div class="field-block">
+      <label class="field-label">Google Notes Checkliste (To-Do)</label>
+      <div id="editorTodoList" style="display:flex; flex-direction:column; gap:6px;"></div>
+      <div class="input-row" style="margin-top:5px;">
+        <input type="text" id="newTodoItemInput" placeholder="Neues To-Do Item..." style="flex:1;">
+        <button id="addTodoItemBtn" class="btn-icon">＋</button>
+      </div>
+    </div>
+
+    <div class="field-block">
+      <label class="field-label">Hintergrundfarbe (Kachelfarbe)</label>
+      <div class="input-row">
+        <input type="color" id="noteColor" value="#ff8c00">
+        <label style="font-size:12px; display:flex; align-items:center; gap:5px; cursor:pointer;">
+          <input type="checkbox" id="notePinnedInput"> 📌 Oben anpinnen (Pinned)
+        </label>
+      </div>
+    </div>
+
+    <div class="field-block">
+      <label class="field-label">Zuletzt verwendete Farben</label>
+      <div id="recentColorsNote" class="recent-colors-box"></div>
+    </div>
+
+    <div class="field-block">
+      <label class="field-label">Zugehörige Gruppe (Label)</label>
+      <div class="input-row-vertical">
+        <select id="noteGroupSelectOptions" style="width:100%;"></select>
+        <input type="text" id="noteGroupInput" placeholder="Neues Label eingeben..." style="display:none; width:100%; margin-top:5px;">
+      </div>
+    </div>
+
+    <div class="editor-footer-buttons">
+      <button id="cancelNoteBtn" class="danger-btn icon-btn-large" title="Abbrechen" style="background: #cf6679; flex:1;">✕</button>
+      <button id="saveNoteBtn" class="primary-btn icon-btn-large" title="Speichern" style="flex:1;">💾</button>
+    </div>
+  </div>
+
+  <div id="makroInputGroup" style="display:none;">
+    <div class="input-header">
+      <h3>🤖 Makro bearbeiten</h3>
+    </div>
+    <input type="hidden" id="editMakroIndex" value="">
+    
+    <div class="field-block">
+      <label class="field-label">Makro-Name</label>
+      <input type="text" id="makroTitleInput" placeholder="Name für das Makro eingeben...">
+    </div>
+
+    <div class="field-block">
+      <label class="field-label">Aktionen (JSON Format)</label>
+      <textarea id="makroStepsInput" placeholder='[\n  {"type": "click", "target": "#button-id"},\n  {"type": "type", "target": "input[name=q]", "value": "Hallo Welt"}\n]' style="font-family: monospace; font-size:12px;"></textarea>
+      <small style="opacity: 0.6; font-size:11px; line-height:1.2;">Format: Liste von Objekten mit "type" ("click" oder "type"), "target" (CSS Selektor) und optional "value".</small>
+    </div>
+
+    <div class="field-block">
+      <div class="input-row" style="gap:6px;">
+        <button id="showStepsOnPageBtn" class="btn-icon-elegant" style="flex:1;">👁 Schritte auf Seite zeigen</button>
+        <button id="applyPageEditsBtn" class="btn-icon-elegant" style="flex:1; display:none;">✓ Änderungen übernehmen</button>
+        <button id="cancelPageEditsBtn" class="btn-icon" style="display:none;">✕</button>
+      </div>
+    </div>
+
+    <div class="field-block">
+      <label class="field-label">Farbe</label>
+      <div class="input-row">
+        <input type="color" id="makroColor" value="#ff8c00">
+      </div>
+    </div>
+
+    <div class="field-block">
+      <label class="field-label">Zuletzt verwendete Farben</label>
+      <div id="recentColorsMakro" class="recent-colors-box"></div>
+    </div>
+
+    <div class="field-block">
+      <label class="field-label">Wiederholungen</label>
+      <div class="input-row" style="align-items:center; gap:10px;">
+        <input type="number" id="makroRepeatInput" min="1" max="99" value="1" style="width:70px;">
+        <span style="font-size:12px; opacity:0.6;">× ausführen</span>
+      </div>
+    </div>
+
+    <div class="editor-footer-buttons">
+      <button id="cancelMakroBtn" class="danger-btn icon-btn-large" title="Abbrechen" style="background: #cf6679; flex:1;">✕</button>
+      <button id="saveMakroBtn" class="primary-btn icon-btn-large" title="Speichern" style="flex:1;">💾</button>
+    </div>
+  </div>
+
+  <div id="groupEditorGroup" style="display:none;">
+    <div class="input-header">
+      <h3>📁 Gruppe bearbeiten</h3>
+      <button id="cancelGroupBtn" class="btn-icon">✕</button>
+    </div>
+    <input type="hidden" id="editGroupOldName" value="">
+    
+    <div class="field-block">
+      <label class="field-label">Gruppenname</label>
+      <input type="text" id="groupTitleInput" placeholder="Gruppenname">
+    </div>
+
+    <div class="field-block">
+      <label class="field-label">Gruppen-Icon</label>
+      <select id="groupIconInput">
+        <option value="📁">📁 Ordner Standard</option>
+        <option value="🚀">🚀 Projekte / Schnell</option>
+        <option value="⚛">⚛ KI / Wissenschaft</option>
+        <option value="📝">📝 Texte / Entwürfe</option>
+        <option value="🛠️">🛠️ Tools / Utilities</option>
+        <option value="⭐">⭐ Favoriten</option>
+        <option value="🧠">🧠 Brainstorming</option>
+        <option value="🎨">🎨 Design / Medien</option>
+      </select>
+    </div>
+
+    <div class="field-block">
+      <label class="field-label">Gruppen-Anbieter Standard</label>
+      <select id="groupAiProvider">
+        <option value="default">Gruppen-Anbieter (Standard)</option>
+        <option value="ChatGPT">ChatGPT</option>
+        <option value="Gemini">Gemini</option>
+        <option value="Claude">Claude</option>
+        <option value="Copilot">Copilot</option>
+        <option value="Perplexity">Perplexity</option>
+      </select>
+    </div>
+
+    <div class="field-block">
+      <label class="field-label">Gruppen-Farbe</label>
+      <div class="input-row">
+        <input type="color" id="groupColorInput" value="#ff8c00">
+      </div>
+    </div>
+
+    <div class="field-block">
+      <label class="field-label">Zuletzt verwendete Farben</label>
+      <div id="recentColorsGroup" class="recent-colors-box"></div>
+    </div>
+
+    <button id="saveGroupBtn" class="primary-btn icon-btn-large" title="Gruppe Speichern">💾 Gruppe Speichern</button>
+  </div>
+
+  <div id="backupOverlay" style="display:none;">
+    <div class="input-header">
+      <h3>🛡️ Backup & Sync Manager</h3>
+      <button id="closeBackupBtn" class="btn-icon">✕</button>
+    </div>
+    <div class="backup-box-content">
+      <div id="syncStatusBox" class="prompt-card" style="margin-bottom:15px; border-left: 3px solid #ff8c00; background:rgba(0,0,0,0.2);">
+        <div class="field-label">Status der Google Synchronisierung</div>
+        <div id="syncStatusText" style="margin-top:5px; font-size:13px; font-weight:bold;">Prüfe Verbindung...</div>
+      </div>
+      <p style="font-size:13px; opacity:0.8; line-height:1.4; margin-bottom:20px;">
+        Verwalte deine Daten-Backups und stelle sicher, dass die Google-Synchronisierung aktiv ist.
+      </p>
+      <div style="display:flex; flex-direction:column; gap:12px;">
+        <button id="btnExecuteBackupExport" class="primary-btn">📥 Backup erstellen</button>
+        <button id="btnExecuteBackupImport" class="btn-icon-elegant" style="padding:12px; font-size:13px;">📤 Backup wiederherstellen</button>
+        <input type="file" id="backupFileInput" style="display:none;" accept=".json">
+      </div>
+    </div>
+  </div>
+
+  <div id="trashOverlay" style="display:none;">
+    <div class="input-header">
+      <h3>🗑️ Papierkorb</h3>
+      <button id="closeTrashBtn" class="btn-icon">✕</button>
+    </div>
+    <div id="trashList"></div>
+    <button id="emptyTrashBtn" class="danger-btn" style="width:100%; margin-top:15px;">Papierkorb leeren</button>
+  </div>
+
+  <div id="sessionRestorePopup" style="display:none;">
+    <div class="popup-backdrop"></div>
+    <div class="popup-box">
+      <h3>📂 Session wiederherstellen</h3>
+      <p id="sessionRestorePopupInfo" style="font-size:13px; opacity:0.8; margin:8px 0 16px;"></p>
+      <div style="display:flex; flex-direction:column; gap:8px;">
+        <button id="restoreNewWindowBtn" class="primary-btn">🪟 Neues Fenster öffnen</button>
+        <button id="restoreCurrentWindowBtn" class="btn-icon-elegant" style="padding:10px; font-size:13px;">📑 Im aktuellen Fenster öffnen</button>
+        <button id="restoreCancelBtn" class="danger-btn" style="margin-top:4px;">✕ Abbrechen</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="stepPlaybackPanel" style="display:none;">
+    <div class="input-header">
+      <h3 id="stepPlaybackTitle">Makro</h3>
+      <button id="stepPlaybackAbortBtn" class="btn-icon">✕</button>
+    </div>
+    <div class="field-label" id="stepPlaybackCounter" style="margin:10px 0 6px;"></div>
+    <div id="stepPlaybackDesc" style="background:rgba(0,0,0,0.2);border-radius:6px;padding:10px;font-size:12px;font-family:monospace;line-height:1.5;border-left:3px solid var(--accent);white-space:pre-wrap;"></div>
+
+    <div id="stepEditClick" style="display:none;" class="field-block">
+      <label class="field-label">Position korrigieren</label>
+      <div class="input-row">
+        <input type="number" id="stepEditPx" style="width:80px;" placeholder="X">
+        <input type="number" id="stepEditPy" style="width:80px;" placeholder="Y">
+      </div>
+    </div>
+    <div id="stepEditType" style="display:none;" class="field-block">
+      <label class="field-label">Text korrigieren</label>
+      <input type="text" id="stepEditValue" placeholder="Wert...">
+    </div>
+    <button id="stepEditSaveBtn" class="btn-icon-elegant" style="width:100%; margin-top:4px;">💾 Schritt speichern</button>
+
+    <div class="editor-footer-buttons" style="margin-top:12px;">
+      <button id="stepPlaybackSkipBtn" class="btn-icon-elegant" style="flex:1;">⏭ Überspringen</button>
+      <button id="stepPlaybackRunBtn" class="primary-btn" style="flex:1;">▶ Ausführen</button>
+    </div>
+  </div>
+
+  <script src="sidepanel.js"></script>
+</body>
+</html>
