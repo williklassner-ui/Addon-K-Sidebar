@@ -560,7 +560,6 @@ document.getElementById('makrosList').addEventListener('click', (e) => {
                                 window.scrollTo({ top: step._py - window.innerHeight / 2, behavior: 'instant' });
                                 const vx = step._px - window.scrollX;
                                 const vy = step._py - window.scrollY;
-                                showClickIndicator(vx, vy);
                                 let el = document.elementFromPoint(vx, vy);
                                 const originalEl = el;
                                 // Walk up max 5 levels to find a proper clickable ancestor
@@ -585,6 +584,8 @@ document.getElementById('makrosList').addEventListener('click', (e) => {
                                 const rect = el.getBoundingClientRect();
                                 const cx = rect.left + rect.width / 2;
                                 const cy = rect.top + rect.height / 2;
+                                // Indikator immer exakt auf der getroffenen Mitte zeigen
+                                showClickIndicator(cx, cy);
                                 el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, clientX: cx, clientY: cy }));
                                 el.dispatchEvent(new MouseEvent('mouseup',   { bubbles: true, cancelable: true, clientX: cx, clientY: cy }));
                                 el.dispatchEvent(new MouseEvent('click',     { bubbles: true, cancelable: true, clientX: cx, clientY: cy }));
@@ -693,17 +694,30 @@ document.getElementById('recordMakroBtn').addEventListener('click', () => {
 
                     window._makroClickHandler = (e) => {
                         try {
-                            const path = getPath(e.target);
-                            const rect = e.target.getBoundingClientRect();
+                            // Echtes klickbares Element finden (z.B. Button statt span darin)
+                            let target = e.target;
+                            let candidate = e.target;
+                            for (let d = 0; d < 5 && candidate && candidate !== document.body; d++) {
+                                const tag = candidate.tagName.toLowerCase();
+                                const role = (candidate.getAttribute && candidate.getAttribute('role')) || '';
+                                if (['button','a','input','select','label'].includes(tag) ||
+                                    role === 'button' || role === 'link' || role === 'menuitem' || role === 'tab') {
+                                    target = candidate; break;
+                                }
+                                candidate = candidate.parentElement;
+                            }
+                            const path = getPath(target);
+                            // Mitte des erkannten Elements speichern
+                            const rect = target.getBoundingClientRect();
                             const px = Math.round(rect.left + rect.width / 2 + window.scrollX);
                             const py = Math.round(rect.top + rect.height / 2 + window.scrollY);
                             let steps = JSON.parse(sessionStorage.getItem('_makroSteps') || '[]');
                             steps.push({ type: 'click', target: path, _px: px, _py: py });
                             sessionStorage.setItem('_makroSteps', JSON.stringify(steps));
-                            // Grüner Flash als Bestätigung
+                            // Grüner Flash als Bestätigung auf dem erkannten Element
                             e.target.classList.remove('_makro-hover');
-                            e.target.classList.add('_makro-recorded');
-                            setTimeout(() => e.target.classList.remove('_makro-recorded'), 800);
+                            target.classList.add('_makro-recorded');
+                            setTimeout(() => target.classList.remove('_makro-recorded'), 800);
                         } catch (err) {}
                     };
 
@@ -870,7 +884,6 @@ document.getElementById('stepPlaybackRunBtn').addEventListener('click', () => {
                 if (step.type === 'click' && step._px !== undefined) {
                     window.scrollTo({ top: step._py - window.innerHeight / 2, behavior: 'instant' });
                     const vx = step._px - window.scrollX, vy = step._py - window.scrollY;
-                    showClickIndicator(vx, vy);
                     let el = document.elementFromPoint(vx, vy);
                     const originalEl = el;
                     let candidate = el;
@@ -885,6 +898,7 @@ document.getElementById('stepPlaybackRunBtn').addEventListener('click', () => {
                     const rect = el.getBoundingClientRect();
                     const cx = rect.left + rect.width / 2;
                     const cy = rect.top + rect.height / 2;
+                    showClickIndicator(cx, cy);
                     el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, clientX: cx, clientY: cy }));
                     el.dispatchEvent(new MouseEvent('mouseup',   { bubbles: true, cancelable: true, clientX: cx, clientY: cy }));
                     el.dispatchEvent(new MouseEvent('click',     { bubbles: true, cancelable: true, clientX: cx, clientY: cy }));
