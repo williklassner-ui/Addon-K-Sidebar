@@ -12,6 +12,8 @@ let tabColors = {};
 let tabOrder = ['prompts', 'sessions', 'notes', 'makros'];
 let isRecording = false;
 let stepPlaybackState = null;
+let recordingTabId = null;
+let recordingBuffer = [];
 
 const tabNames = {
     'prompts': 'Promts',
@@ -547,11 +549,12 @@ document.getElementById('makrosList').addEventListener('click', (e) => {
                     func: ({ stepsList, repeat }) => {
                         const showClickIndicator = (x, y) => {
                             const dot = document.createElement('div');
-                            dot.style.cssText = `position:fixed;left:${x}px;top:${y}px;width:24px;height:24px;border-radius:50%;background:rgba(255,140,0,0.6);border:2px solid #ff8c00;transform:translate(-50%,-50%) scale(0);animation:_mkRipple 0.55s ease forwards;pointer-events:none;z-index:999999;`;
+                            dot.style.cssText = `position:fixed;left:${x}px;top:${y}px;width:24px;height:24px;border-radius:50%;background:rgba(255,140,0,0.6);border:2px solid #ff8c00;transform:translate(-50%,-50%) scale(0);animation:_mkRipple 0.55s ease forwards;pointer-events:none;z-index:2147483647;inset:auto;margin:0;`;
                             const st = document.createElement('style');
                             st.textContent = `@keyframes _mkRipple{0%{transform:translate(-50%,-50%) scale(0);opacity:1}100%{transform:translate(-50%,-50%) scale(2.8);opacity:0}}`;
                             document.head.appendChild(st);
-                            document.body.appendChild(dot);
+                            try { dot.setAttribute('popover','manual'); document.documentElement.appendChild(dot); dot.showPopover(); }
+                            catch(e) { document.documentElement.appendChild(dot); }
                             setTimeout(() => { dot.remove(); st.remove(); }, 600);
                         };
                         const executeAction = (step, attempt) => {
@@ -635,6 +638,105 @@ document.getElementById('makrosList').addEventListener('click', (e) => {
     }
 });
 
+// Recorder-Injektion (wird bei Start und nach jedem Reload/Navigation neu aufgerufen)
+function injectRecorder(tabId) {
+    chrome.scripting.executeScript({
+        target: { tabId },
+        func: () => {
+            if (window._makroRecordingActive) return;
+            window._makroRecordingActive = true;
+
+            const style = document.createElement('style');
+            style.id = '_makroStyle';
+            style.textContent = `
+                ._makro-hover { outline: 2px dashed #ff8c00 !important; outline-offset: 3px !important; cursor: crosshair !important; }
+                ._makro-recorded { outline: 3px solid #4caf50 !important; outline-offset: 3px !important; }
+                @keyframes _makroFlash { 0%,100%{opacity:1} 50%{opacity:0.4} }
+                ._makro-recorded { animation: _makroFlash 0.4s ease 2; }
+            `;
+            document.head.appendChild(style);
+
+            const getPath = (el) => {
+                if (!el) return '*';
+                if (el.id) return `#${CSS.escape(el.id)}`;
+                if (el.dataset && el.dataset.testid) return `[data-testid="${el.dataset.testid}"]`;
+                if (el.getAttribute && el.getAttribute('aria-label')) return `${el.tagName.toLowerCase()}[aria-label="${el.getAttribute('aria-label')}"]`;
+                if (el.name) return `${el.tagName.toLowerCase()}[name="${el.name}"]`;
+                if (el.getAttribute && el.getAttribute('placeholder')) return `${el.tagName.toLowerCase()}[placeholder="${el.getAttribute('placeholder')}"]`;
+                const tag = el.tagName ? el.tagName.toLowerCase() : '*';
+                if (el.parentElement) {
+                    const siblings = Array.from(el.parentElement.children).filter(c => c.tagName === el.tagName);
+                    if (siblings.length > 1) {
+                        const idx = siblings.indexOf(el) + 1;
+                        return `${tag}:nth-of-type(${idx})`;
+                    }
+                }
+                return tag;
+            };
+
+            window._makroHoverHandler = (e) => {
+                document.querySelectorAll('._makro-hover').forEach(el => el.classList.remove('_makro-hover'));
+                e.target.classList.add('_makro-hover');
+            };
+            window._makroMouseOutHandler = (e) => {
+                e.target.classList.remove('_makro-hover');
+            };
+
+            window._makroClickHandler = (e) => {
+                try {
+                    let target = e.target;
+                    let candidate = e.target;
+                    for (let d = 0; d < 5 && candidate && candidate !== document.body; d++) {
+                        const tag = candidate.tagName.toLowerCase();
+                        const role = (candidate.getAttribute && candidate.getAttribute('role')) || '';
+                        if (['button','a','input','select','label'].includes(tag) ||
+                            role === 'button' || role === 'link' || role === 'menuitem' || role === 'tab') {
+                            target = candidate; break;
+                        }
+                        candidate = candidate.parentElement;
+                    }
+                    const path = getPath(target);
+                    const rect = target.getBoundingClientRect();
+                    const px = Math.round(rect.left + rect.width / 2 + window.scrollX);
+                    const py = Math.round(rect.top + rect.height / 2 + window.scrollY);
+                    chrome.runtime.sendMessage({ _makroRecStep: { type: 'click', target: path, _px: px, _py: py } });
+                    e.target.classList.remove('_makro-hover');
+                    target.classList.add('_makro-recorded');
+                    setTimeout(() => target.classList.remove('_makro-recorded'), 800);
+                } catch (err) {}
+            };
+
+            window._makroChangeHandler = (e) => {
+                try {
+                    const path = getPath(e.target);
+                    chrome.runtime.sendMessage({ _makroRecStep: { type: 'type', target: path, value: e.target.value || e.target.innerText } });
+                    e.target.classList.add('_makro-recorded');
+                    setTimeout(() => e.target.classList.remove('_makro-recorded'), 800);
+                } catch (err) {}
+            };
+
+            document.addEventListener('mouseover', window._makroHoverHandler, { capture: true });
+            document.addEventListener('mouseout', window._makroMouseOutHandler, { capture: true });
+            document.addEventListener('click', window._makroClickHandler, { capture: true });
+            document.addEventListener('change', window._makroChangeHandler, { capture: true });
+        }
+    });
+}
+
+// Schritte aus dem injizierten Recorder puffern
+chrome.runtime.onMessage.addListener((msg) => {
+    if (msg._makroRecStep && isRecording) {
+        recordingBuffer.push(msg._makroRecStep);
+    }
+});
+
+// Nach Reload/Navigation Recorder neu injizieren (Puffer bleibt erhalten)
+chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+    if (isRecording && tabId === recordingTabId && changeInfo.status === 'complete') {
+        injectRecorder(tabId);
+    }
+});
+
 // Live Aufnahme-Logik für Makros
 document.getElementById('recordMakroBtn').addEventListener('click', () => {
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
@@ -642,102 +744,16 @@ document.getElementById('recordMakroBtn').addEventListener('click', () => {
             alert("Kein aktiver Tab für eine Aufnahme gefunden.");
             return;
         }
-        
+
         isRecording = !isRecording;
         const btn = document.getElementById('recordMakroBtn');
-        
+
         if (isRecording) {
             btn.innerHTML = '<span class="record-dot"></span> ⏹ Stoppen';
             btn.classList.add('recording');
-
-            chrome.scripting.executeScript({
-                target: { tabId: tabs[0].id },
-                func: () => {
-                    sessionStorage.setItem('_makroSteps', JSON.stringify([]));
-
-                    // Visuelles Feedback: CSS in Seite injizieren
-                    const style = document.createElement('style');
-                    style.id = '_makroStyle';
-                    style.textContent = `
-                        ._makro-hover { outline: 2px dashed #ff8c00 !important; outline-offset: 3px !important; cursor: crosshair !important; }
-                        ._makro-recorded { outline: 3px solid #4caf50 !important; outline-offset: 3px !important; }
-                        @keyframes _makroFlash { 0%,100%{opacity:1} 50%{opacity:0.4} }
-                        ._makro-recorded { animation: _makroFlash 0.4s ease 2; }
-                    `;
-                    document.head.appendChild(style);
-
-                    const getPath = (el) => {
-                        if (!el) return '*';
-                        if (el.id) return `#${CSS.escape(el.id)}`;
-                        if (el.dataset && el.dataset.testid) return `[data-testid="${el.dataset.testid}"]`;
-                        if (el.getAttribute && el.getAttribute('aria-label')) return `${el.tagName.toLowerCase()}[aria-label="${el.getAttribute('aria-label')}"]`;
-                        if (el.name) return `${el.tagName.toLowerCase()}[name="${el.name}"]`;
-                        if (el.getAttribute && el.getAttribute('placeholder')) return `${el.tagName.toLowerCase()}[placeholder="${el.getAttribute('placeholder')}"]`;
-                        const tag = el.tagName ? el.tagName.toLowerCase() : '*';
-                        if (el.parentElement) {
-                            const siblings = Array.from(el.parentElement.children).filter(c => c.tagName === el.tagName);
-                            if (siblings.length > 1) {
-                                const idx = siblings.indexOf(el) + 1;
-                                return `${tag}:nth-of-type(${idx})`;
-                            }
-                        }
-                        return tag;
-                    };
-
-                    window._makroHoverHandler = (e) => {
-                        document.querySelectorAll('._makro-hover').forEach(el => el.classList.remove('_makro-hover'));
-                        e.target.classList.add('_makro-hover');
-                    };
-                    window._makroMouseOutHandler = (e) => {
-                        e.target.classList.remove('_makro-hover');
-                    };
-
-                    window._makroClickHandler = (e) => {
-                        try {
-                            // Echtes klickbares Element finden (z.B. Button statt span darin)
-                            let target = e.target;
-                            let candidate = e.target;
-                            for (let d = 0; d < 5 && candidate && candidate !== document.body; d++) {
-                                const tag = candidate.tagName.toLowerCase();
-                                const role = (candidate.getAttribute && candidate.getAttribute('role')) || '';
-                                if (['button','a','input','select','label'].includes(tag) ||
-                                    role === 'button' || role === 'link' || role === 'menuitem' || role === 'tab') {
-                                    target = candidate; break;
-                                }
-                                candidate = candidate.parentElement;
-                            }
-                            const path = getPath(target);
-                            // Mitte des erkannten Elements speichern
-                            const rect = target.getBoundingClientRect();
-                            const px = Math.round(rect.left + rect.width / 2 + window.scrollX);
-                            const py = Math.round(rect.top + rect.height / 2 + window.scrollY);
-                            let steps = JSON.parse(sessionStorage.getItem('_makroSteps') || '[]');
-                            steps.push({ type: 'click', target: path, _px: px, _py: py });
-                            sessionStorage.setItem('_makroSteps', JSON.stringify(steps));
-                            // Grüner Flash als Bestätigung auf dem erkannten Element
-                            e.target.classList.remove('_makro-hover');
-                            target.classList.add('_makro-recorded');
-                            setTimeout(() => target.classList.remove('_makro-recorded'), 800);
-                        } catch (err) {}
-                    };
-
-                    window._makroChangeHandler = (e) => {
-                        try {
-                            const path = getPath(e.target);
-                            let steps = JSON.parse(sessionStorage.getItem('_makroSteps') || '[]');
-                            steps.push({ type: 'type', target: path, value: e.target.value || e.target.innerText });
-                            sessionStorage.setItem('_makroSteps', JSON.stringify(steps));
-                            e.target.classList.add('_makro-recorded');
-                            setTimeout(() => e.target.classList.remove('_makro-recorded'), 800);
-                        } catch (err) {}
-                    };
-
-                    document.addEventListener('mouseover', window._makroHoverHandler, { capture: true });
-                    document.addEventListener('mouseout', window._makroMouseOutHandler, { capture: true });
-                    document.addEventListener('click', window._makroClickHandler, { capture: true });
-                    document.addEventListener('change', window._makroChangeHandler, { capture: true });
-                }
-            });
+            recordingTabId = tabs[0].id;
+            recordingBuffer = [];
+            injectRecorder(recordingTabId);
         } else {
             btn.innerHTML = '<span class="record-dot"></span> Aufnahme';
             btn.classList.remove('recording');
@@ -745,12 +761,6 @@ document.getElementById('recordMakroBtn').addEventListener('click', () => {
             chrome.scripting.executeScript({
                 target: { tabId: tabs[0].id },
                 func: () => {
-                    let steps = [];
-                    try {
-                        steps = JSON.parse(sessionStorage.getItem('_makroSteps') || '[]');
-                        sessionStorage.removeItem('_makroSteps');
-                    } catch (e) {}
-
                     if (window._makroClickHandler) document.removeEventListener('click', window._makroClickHandler, { capture: true });
                     if (window._makroChangeHandler) document.removeEventListener('change', window._makroChangeHandler, { capture: true });
                     if (window._makroHoverHandler) document.removeEventListener('mouseover', window._makroHoverHandler, { capture: true });
@@ -760,19 +770,19 @@ document.getElementById('recordMakroBtn').addEventListener('click', () => {
                     delete window._makroChangeHandler;
                     delete window._makroHoverHandler;
                     delete window._makroMouseOutHandler;
+                    delete window._makroRecordingActive;
 
-                    // Injiziertes CSS entfernen
                     const s = document.getElementById('_makroStyle');
                     if (s) s.remove();
                     document.querySelectorAll('._makro-hover, ._makro-recorded').forEach(el => {
                         el.classList.remove('_makro-hover', '_makro-recorded');
                     });
-
-                    return steps;
                 }
-            }, (results) => {
-                if (results && results[0] && results[0].result && results[0].result.length > 0) {
-                    const recordedSteps = results[0].result;
+            }, () => {
+                const recordedSteps = recordingBuffer;
+                recordingTabId = null;
+                recordingBuffer = [];
+                if (recordedSteps.length > 0) {
                     const mName = prompt("Makro-Aufnahme erfolgreich! Name eingeben:", `Makro vom ${new Date().toLocaleTimeString()}`);
                     if (mName !== null) {
                         const newMakro = {
@@ -874,11 +884,12 @@ document.getElementById('stepPlaybackRunBtn').addEventListener('click', () => {
             func: (step) => {
                 const showClickIndicator = (x, y) => {
                     const dot = document.createElement('div');
-                    dot.style.cssText = `position:fixed;left:${x}px;top:${y}px;width:24px;height:24px;border-radius:50%;background:rgba(255,140,0,0.6);border:2px solid #ff8c00;transform:translate(-50%,-50%) scale(0);animation:_mkRipple 0.55s ease forwards;pointer-events:none;z-index:999999;`;
+                    dot.style.cssText = `position:fixed;left:${x}px;top:${y}px;width:24px;height:24px;border-radius:50%;background:rgba(255,140,0,0.6);border:2px solid #ff8c00;transform:translate(-50%,-50%) scale(0);animation:_mkRipple 0.55s ease forwards;pointer-events:none;z-index:2147483647;inset:auto;margin:0;`;
                     const st = document.createElement('style');
                     st.textContent = `@keyframes _mkRipple{0%{transform:translate(-50%,-50%) scale(0);opacity:1}100%{transform:translate(-50%,-50%) scale(2.8);opacity:0}}`;
                     document.head.appendChild(st);
-                    document.body.appendChild(dot);
+                    try { dot.setAttribute('popover','manual'); document.documentElement.appendChild(dot); dot.showPopover(); }
+                    catch(e) { document.documentElement.appendChild(dot); }
                     setTimeout(() => { dot.remove(); st.remove(); }, 600);
                 };
                 if (step.type === 'click' && step._px !== undefined) {
