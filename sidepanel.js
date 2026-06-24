@@ -348,7 +348,7 @@ function renderMakros() {
                     <div class="makro-info" data-makro-action="run" data-index="${i}" title="Makro abspielen">
                         <span style="color: #4caf50; font-size:14px;">▶</span>
                         <span class="makro-title" style="font-weight:600;">${m.title || 'Unbenanntes Makro'}</span>
-                        <span style="font-size:10px; opacity:0.5;">(${stepsCount} Schritte)</span>
+                        <span style="font-size:10px; opacity:0.5;">(${stepsCount} Schritte)${(m.repeat && m.repeat > 1) ? ` <span style="color:#ff8c00;">${m.repeat}×</span>` : ''}</span>
                     </div>
                     <div class="card-actions">
                         <button class="btn-icon" data-makro-action="toggle-json" data-index="${i}" title="JSON Code anzeigen">👁</button>
@@ -526,7 +526,8 @@ document.getElementById('makrosList').addEventListener('click', (e) => {
             document.getElementById('makroTitleInput').value = m.title || '';
             document.getElementById('makroStepsInput').value = JSON.stringify(m.steps, null, 2);
             document.getElementById('makroColor').value = m.color || '#ff8c00';
-            
+            document.getElementById('makroRepeatInput').value = m.repeat || 1;
+
             document.getElementById('mainContainer').style.display = 'none';
             document.getElementById('makroInputGroup').style.display = 'flex';
             renderRecentColors();
@@ -538,33 +539,44 @@ document.getElementById('makrosList').addEventListener('click', (e) => {
                 if (!tabs[0]) return;
                 chrome.scripting.executeScript({
                     target: { tabId: tabs[0].id },
-                    func: (stepsList) => {
+                    func: ({ stepsList, repeat }) => {
                         const executeAction = (step, attempt) => {
-                            let el = null;
-                            try { el = document.querySelector(step.target); } catch (e) {}
-
-                            // Koordinaten-Fallback: scroll zur aufgezeichneten Position und nutze elementFromPoint
-                            if (!el && step._px !== undefined && step._py !== undefined) {
+                            if (step.type === 'click' && step._px !== undefined) {
+                                // Koordinaten als primäre Methode für Klicks
                                 window.scrollTo({ top: step._py - window.innerHeight / 2, behavior: 'instant' });
                                 const vx = step._px - window.scrollX;
                                 const vy = step._py - window.scrollY;
-                                el = document.elementFromPoint(vx, vy);
-                            }
-
-                            if (!el) {
-                                if ((attempt || 0) < 3) setTimeout(() => executeAction(step, (attempt || 0) + 1), 300);
-                                return;
-                            }
-                            el.focus();
-                            if (step.type === 'click') {
-                                const cx = step._px !== undefined ? step._px - window.scrollX : 0;
-                                const cy = step._py !== undefined ? step._py - window.scrollY : 0;
-                                el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, clientX: cx, clientY: cy }));
-                                el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, clientX: cx, clientY: cy }));
-                                el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, clientX: cx, clientY: cy }));
+                                let el = document.elementFromPoint(vx, vy);
+                                // Klickbaren Ancestor finden falls nötig (z.B. span innerhalb button)
+                                while (el && el !== document.body) {
+                                    const tag = el.tagName.toLowerCase();
+                                    const role = (el.getAttribute && el.getAttribute('role')) || '';
+                                    if (['button','a','input','select','label'].includes(tag) ||
+                                        role === 'button' || role === 'link' || el.onclick) break;
+                                    el = el.parentElement;
+                                }
+                                if (!el) {
+                                    if (attempt < 3) setTimeout(() => executeAction(step, attempt + 1), 300);
+                                    return;
+                                }
+                                el.focus();
+                                el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, clientX: vx, clientY: vy }));
+                                el.dispatchEvent(new MouseEvent('mouseup',   { bubbles: true, cancelable: true, clientX: vx, clientY: vy }));
+                                el.dispatchEvent(new MouseEvent('click',     { bubbles: true, cancelable: true, clientX: vx, clientY: vy }));
                             } else if (step.type === 'type') {
+                                // Selektor primär, Koordinaten als Fallback
+                                let el = null;
+                                try { el = document.querySelector(step.target); } catch (e) {}
+                                if (!el && step._px !== undefined) {
+                                    window.scrollTo({ top: step._py - window.innerHeight / 2, behavior: 'instant' });
+                                    el = document.elementFromPoint(step._px - window.scrollX, step._py - window.scrollY);
+                                }
+                                if (!el) {
+                                    if (attempt < 3) setTimeout(() => executeAction(step, attempt + 1), 300);
+                                    return;
+                                }
+                                el.focus();
                                 if (el.isContentEditable || el.tagName === 'DIV') {
-                                    el.focus();
                                     document.execCommand('selectAll', false, null);
                                     document.execCommand('insertText', false, step.value);
                                     el.dispatchEvent(new Event('input', { bubbles: true }));
@@ -581,13 +593,16 @@ document.getElementById('makrosList').addEventListener('click', (e) => {
                                 }
                             }
                         };
-                        let delay = 0;
-                        stepsList.forEach((step) => {
-                            setTimeout(() => { executeAction(step, 0); }, delay);
-                            delay += 600;
-                        });
+                        const stepDelay = 700;
+                        const pauseDelay = 900;
+                        for (let r = 0; r < repeat; r++) {
+                            const runOffset = r * (stepsList.length * stepDelay + pauseDelay);
+                            stepsList.forEach((step, i) => {
+                                setTimeout(() => executeAction(step, 0), runOffset + i * stepDelay);
+                            });
+                        }
                     },
-                    args: [m.steps]
+                    args: [{ stepsList: m.steps, repeat: m.repeat || 1 }]
                 });
             });
         }
@@ -743,6 +758,7 @@ function closeMakroEditMode() {
     document.getElementById('editMakroIndex').value = "";
     document.getElementById('makroTitleInput').value = '';
     document.getElementById('makroStepsInput').value = '';
+    document.getElementById('makroRepeatInput').value = '1';
 }
 
 document.getElementById('cancelMakroBtn').addEventListener('click', closeMakroEditMode);
@@ -762,7 +778,8 @@ document.getElementById('saveMakroBtn').addEventListener('click', () => {
     const newMakro = {
         title: document.getElementById('makroTitleInput').value,
         steps: parsedSteps,
-        color: selectedColor
+        color: selectedColor,
+        repeat: Math.max(1, parseInt(document.getElementById('makroRepeatInput').value) || 1)
     };
 
     if (i !== "") {
