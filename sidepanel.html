@@ -325,6 +325,19 @@
     </div>
   </div>
 
+  <div id="stepPlaybackPanel" style="display:none;">
+    <div class="input-header">
+      <h3 id="stepPlaybackTitle">Makro</h3>
+      <button id="stepPlaybackAbortBtn" class="btn-icon">✕</button>
+    </div>
+    <div class="field-label" id="stepPlaybackCounter" style="margin:10px 0 6px;"></div>
+    <div id="stepPlaybackDesc" style="background:rgba(0,0,0,0.2);border-radius:6px;padding:10px;font-size:12px;font-family:monospace;line-height:1.5;border-left:3px solid var(--accent);white-space:pre-wrap;"></div>
+    <div class="editor-footer-buttons" style="margin-top:16px;">
+      <button id="stepPlaybackSkipBtn" class="btn-icon-elegant" style="flex:1;">⏭ Überspringen</button>
+      <button id="stepPlaybackRunBtn" class="primary-btn" style="flex:1;">▶ Ausführen</button>
+    </div>
+  </div>
+
   <script src="sidepanel.js"></script>
 </body>
 </html>

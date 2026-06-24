@@ -11,6 +11,7 @@ let groupMetadata = {};
 let tabColors = {};
 let tabOrder = ['prompts', 'sessions', 'notes', 'makros'];
 let isRecording = false;
+let stepPlaybackState = null;
 
 const tabNames = {
     'prompts': 'Promts',
@@ -351,6 +352,7 @@ function renderMakros() {
                         <span style="font-size:10px; opacity:0.5;">(${stepsCount} Schritte)${(m.repeat && m.repeat > 1) ? ` <span style="color:#ff8c00;">${m.repeat}×</span>` : ''}</span>
                     </div>
                     <div class="card-actions">
+                        <button class="btn-icon" data-makro-action="step" data-index="${i}" title="Einzelschritt-Wiedergabe">▶|</button>
                         <button class="btn-icon" data-makro-action="toggle-json" data-index="${i}" title="JSON Code anzeigen">👁</button>
                         <button class="btn-icon" data-makro-action="edit" data-index="${i}" title="Bearbeiten">✎</button>
                         <button class="btn-icon" data-makro-action="delete" data-index="${i}" title="Löschen">✕</button>
@@ -516,6 +518,9 @@ document.getElementById('makrosList').addEventListener('click', (e) => {
         const el = document.getElementById(`makro-content-${i}`);
         if (el) el.style.display = el.style.display === 'block' ? 'none' : 'block';
     }
+    else if (action === 'step') {
+        openStepPlayback(i);
+    }
     else if (action === 'delete') {
         makros.splice(i, 1);
         chrome.storage.sync.set({ makros }, renderMakros);
@@ -540,12 +545,22 @@ document.getElementById('makrosList').addEventListener('click', (e) => {
                 chrome.scripting.executeScript({
                     target: { tabId: tabs[0].id },
                     func: ({ stepsList, repeat }) => {
+                        const showClickIndicator = (x, y) => {
+                            const dot = document.createElement('div');
+                            dot.style.cssText = `position:fixed;left:${x}px;top:${y}px;width:24px;height:24px;border-radius:50%;background:rgba(255,140,0,0.6);border:2px solid #ff8c00;transform:translate(-50%,-50%) scale(0);animation:_mkRipple 0.55s ease forwards;pointer-events:none;z-index:999999;`;
+                            const st = document.createElement('style');
+                            st.textContent = `@keyframes _mkRipple{0%{transform:translate(-50%,-50%) scale(0);opacity:1}100%{transform:translate(-50%,-50%) scale(2.8);opacity:0}}`;
+                            document.head.appendChild(st);
+                            document.body.appendChild(dot);
+                            setTimeout(() => { dot.remove(); st.remove(); }, 600);
+                        };
                         const executeAction = (step, attempt) => {
                             if (step.type === 'click' && step._px !== undefined) {
                                 // Koordinaten als primäre Methode für Klicks
                                 window.scrollTo({ top: step._py - window.innerHeight / 2, behavior: 'instant' });
                                 const vx = step._px - window.scrollX;
                                 const vy = step._py - window.scrollY;
+                                showClickIndicator(vx, vy);
                                 let el = document.elementFromPoint(vx, vy);
                                 // Klickbaren Ancestor finden falls nötig (z.B. span innerhalb button)
                                 while (el && el !== document.body) {
@@ -762,6 +777,112 @@ function closeMakroEditMode() {
 }
 
 document.getElementById('cancelMakroBtn').addEventListener('click', closeMakroEditMode);
+
+function openStepPlayback(i) {
+    const m = makros[i];
+    if (!m || !m.steps || m.steps.length === 0) return;
+    stepPlaybackState = { makro: m, stepIndex: 0, repeat: m.repeat || 1, currentRun: 0 };
+    document.getElementById('stepPlaybackTitle').textContent = m.title || 'Makro';
+    document.getElementById('mainContainer').style.display = 'none';
+    document.getElementById('stepPlaybackPanel').style.display = 'flex';
+    renderStepPanel();
+}
+
+function renderStepPanel() {
+    if (!stepPlaybackState) return;
+    const { makro, stepIndex, repeat, currentRun } = stepPlaybackState;
+    const totalSteps = makro.steps.length;
+    const step = makro.steps[stepIndex];
+    const runLabel = repeat > 1 ? ` (Durchlauf ${currentRun + 1}/${repeat})` : '';
+    document.getElementById('stepPlaybackCounter').textContent = `Schritt ${stepIndex + 1} / ${totalSteps}${runLabel}`;
+    const desc = step.type === 'click'
+        ? `🖱 Klick\nZiel: ${step.target}\nPosition: x=${step._px}, y=${step._py}`
+        : `⌨ Text eingeben\nZiel: ${step.target}\nWert: "${step.value}"`;
+    document.getElementById('stepPlaybackDesc').textContent = desc;
+}
+
+function advanceStep() {
+    if (!stepPlaybackState) return;
+    const { makro, repeat } = stepPlaybackState;
+    stepPlaybackState.stepIndex++;
+    if (stepPlaybackState.stepIndex >= makro.steps.length) {
+        stepPlaybackState.stepIndex = 0;
+        stepPlaybackState.currentRun++;
+        if (stepPlaybackState.currentRun >= repeat) {
+            closeStepPanel();
+            return;
+        }
+    }
+    renderStepPanel();
+}
+
+function closeStepPanel() {
+    stepPlaybackState = null;
+    document.getElementById('stepPlaybackPanel').style.display = 'none';
+    document.getElementById('mainContainer').style.display = 'block';
+}
+
+document.getElementById('stepPlaybackAbortBtn').addEventListener('click', closeStepPanel);
+document.getElementById('stepPlaybackSkipBtn').addEventListener('click', advanceStep);
+document.getElementById('stepPlaybackRunBtn').addEventListener('click', () => {
+    if (!stepPlaybackState) return;
+    const step = stepPlaybackState.makro.steps[stepPlaybackState.stepIndex];
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        if (!tabs[0]) { advanceStep(); return; }
+        chrome.scripting.executeScript({
+            target: { tabId: tabs[0].id },
+            func: (step) => {
+                const showClickIndicator = (x, y) => {
+                    const dot = document.createElement('div');
+                    dot.style.cssText = `position:fixed;left:${x}px;top:${y}px;width:24px;height:24px;border-radius:50%;background:rgba(255,140,0,0.6);border:2px solid #ff8c00;transform:translate(-50%,-50%) scale(0);animation:_mkRipple 0.55s ease forwards;pointer-events:none;z-index:999999;`;
+                    const st = document.createElement('style');
+                    st.textContent = `@keyframes _mkRipple{0%{transform:translate(-50%,-50%) scale(0);opacity:1}100%{transform:translate(-50%,-50%) scale(2.8);opacity:0}}`;
+                    document.head.appendChild(st);
+                    document.body.appendChild(dot);
+                    setTimeout(() => { dot.remove(); st.remove(); }, 600);
+                };
+                if (step.type === 'click' && step._px !== undefined) {
+                    window.scrollTo({ top: step._py - window.innerHeight / 2, behavior: 'instant' });
+                    const vx = step._px - window.scrollX, vy = step._py - window.scrollY;
+                    showClickIndicator(vx, vy);
+                    let el = document.elementFromPoint(vx, vy);
+                    while (el && el !== document.body) {
+                        const tag = el.tagName.toLowerCase(), role = (el.getAttribute && el.getAttribute('role')) || '';
+                        if (['button','a','input','select','label'].includes(tag) || role === 'button' || role === 'link' || el.onclick) break;
+                        el = el.parentElement;
+                    }
+                    if (!el) return;
+                    el.focus();
+                    el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, clientX: vx, clientY: vy }));
+                    el.dispatchEvent(new MouseEvent('mouseup',   { bubbles: true, cancelable: true, clientX: vx, clientY: vy }));
+                    el.dispatchEvent(new MouseEvent('click',     { bubbles: true, cancelable: true, clientX: vx, clientY: vy }));
+                } else if (step.type === 'type') {
+                    let el = null;
+                    try { el = document.querySelector(step.target); } catch(e) {}
+                    if (!el && step._px !== undefined) {
+                        window.scrollTo({ top: step._py - window.innerHeight / 2, behavior: 'instant' });
+                        el = document.elementFromPoint(step._px - window.scrollX, step._py - window.scrollY);
+                    }
+                    if (!el) return;
+                    el.focus();
+                    if (el.isContentEditable || el.tagName === 'DIV') {
+                        document.execCommand('selectAll', false, null);
+                        document.execCommand('insertText', false, step.value);
+                        el.dispatchEvent(new Event('input', { bubbles: true }));
+                    } else {
+                        const proto = el.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+                        const nativeSetter = Object.getOwnPropertyDescriptor(proto, 'value');
+                        if (nativeSetter && nativeSetter.set) nativeSetter.set.call(el, step.value); else el.value = step.value;
+                        el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: step.value }));
+                        el.dispatchEvent(new Event('change', { bubbles: true }));
+                    }
+                }
+            },
+            args: [step]
+        });
+        advanceStep();
+    });
+});
 
 document.getElementById('saveMakroBtn').addEventListener('click', () => {
     const i = document.getElementById('editMakroIndex').value;
