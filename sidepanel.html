@@ -204,6 +204,14 @@
     </div>
 
     <div class="field-block">
+      <div class="input-row" style="gap:6px;">
+        <button id="showStepsOnPageBtn" class="btn-icon-elegant" style="flex:1;">👁 Schritte auf Seite zeigen</button>
+        <button id="applyPageEditsBtn" class="btn-icon-elegant" style="flex:1; display:none;">✓ Änderungen übernehmen</button>
+        <button id="cancelPageEditsBtn" class="btn-icon" style="display:none;">✕</button>
+      </div>
+    </div>
+
+    <div class="field-block">
       <label class="field-label">Farbe</label>
       <div class="input-row">
         <input type="color" id="makroColor" value="#ff8c00">
@@ -332,7 +340,21 @@
     </div>
     <div class="field-label" id="stepPlaybackCounter" style="margin:10px 0 6px;"></div>
     <div id="stepPlaybackDesc" style="background:rgba(0,0,0,0.2);border-radius:6px;padding:10px;font-size:12px;font-family:monospace;line-height:1.5;border-left:3px solid var(--accent);white-space:pre-wrap;"></div>
-    <div class="editor-footer-buttons" style="margin-top:16px;">
+
+    <div id="stepEditClick" style="display:none;" class="field-block">
+      <label class="field-label">Position korrigieren</label>
+      <div class="input-row">
+        <input type="number" id="stepEditPx" style="width:80px;" placeholder="X">
+        <input type="number" id="stepEditPy" style="width:80px;" placeholder="Y">
+      </div>
+    </div>
+    <div id="stepEditType" style="display:none;" class="field-block">
+      <label class="field-label">Text korrigieren</label>
+      <input type="text" id="stepEditValue" placeholder="Wert...">
+    </div>
+    <button id="stepEditSaveBtn" class="btn-icon-elegant" style="width:100%; margin-top:4px;">💾 Schritt speichern</button>
+
+    <div class="editor-footer-buttons" style="margin-top:12px;">
       <button id="stepPlaybackSkipBtn" class="btn-icon-elegant" style="flex:1;">⏭ Überspringen</button>
       <button id="stepPlaybackRunBtn" class="primary-btn" style="flex:1;">▶ Ausführen</button>
     </div>
