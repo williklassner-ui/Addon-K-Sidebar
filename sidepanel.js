@@ -1905,4 +1905,78 @@ document.getElementById('moveTabRightBtn').addEventListener('click', () => {
     }
 });
 
+// Kontextmenü für Rechtsklick auf Prompt-Karte und Gruppe
+document.getElementById('promptList').addEventListener('contextmenu', (e) => {
+    const card = e.target.closest('.prompt-card');
+    const groupHeader = e.target.closest('.group-header');
+
+    document.getElementById('promptContextMenu').style.display = 'none';
+    document.getElementById('groupContextMenu').style.display = 'none';
+
+    if (card) {
+        e.preventDefault();
+        const actionEl = card.querySelector('[data-index]');
+        if (!actionEl) return;
+        const i = parseInt(actionEl.dataset.index);
+        let x = e.clientX, y = e.clientY;
+        if (x + 170 > window.innerWidth) x = window.innerWidth - 170;
+        if (y + 60 > window.innerHeight) y = window.innerHeight - 60;
+        const menu = document.getElementById('promptContextMenu');
+        menu.style.left = x + 'px';
+        menu.style.top = y + 'px';
+        menu.style.display = 'block';
+        menu.dataset.index = i;
+        return;
+    }
+
+    if (groupHeader && groupHeader.dataset.group) {
+        e.preventDefault();
+        const gName = groupHeader.dataset.group;
+        let x = e.clientX, y = e.clientY;
+        if (x + 170 > window.innerWidth) x = window.innerWidth - 170;
+        if (y + 60 > window.innerHeight) y = window.innerHeight - 60;
+        const menu = document.getElementById('groupContextMenu');
+        menu.style.left = x + 'px';
+        menu.style.top = y + 'px';
+        menu.style.display = 'block';
+        menu.dataset.groupname = gName;
+    }
+});
+
+document.getElementById('ctxDuplicatePrompt').addEventListener('click', () => {
+    const menu = document.getElementById('promptContextMenu');
+    const i = parseInt(menu.dataset.index);
+    menu.style.display = 'none';
+    if (isNaN(i) || !promts[i]) return;
+    const copy = Object.assign({}, promts[i], { title: promts[i].title + ' (Kopie)' });
+    promts.splice(i + 1, 0, copy);
+    chrome.storage.sync.set({ promts }, render);
+});
+
+document.getElementById('ctxDuplicateGroup').addEventListener('click', () => {
+    const menu = document.getElementById('groupContextMenu');
+    const gName = menu.dataset.groupname;
+    menu.style.display = 'none';
+    if (!gName) return;
+    let newName = gName + ' (Kopie)';
+    let counter = 2;
+    while (promts.some(p => p.group === newName) || groupMetadata[newName]) {
+        newName = gName + ` (Kopie ${counter++})`;
+    }
+    if (groupMetadata[gName]) {
+        groupMetadata[newName] = Object.assign({}, groupMetadata[gName]);
+    }
+    const copies = promts
+        .filter(p => p.group === gName)
+        .map(p => Object.assign({}, p, { group: newName }));
+    const insertAt = promts.reduce((last, p, i) => p.group === gName ? i + 1 : last, 0);
+    promts.splice(insertAt, 0, ...copies);
+    chrome.storage.sync.set({ promts, groupMetadata }, render);
+});
+
+document.addEventListener('click', () => {
+    document.getElementById('promptContextMenu').style.display = 'none';
+    document.getElementById('groupContextMenu').style.display = 'none';
+});
+
 loadData();
