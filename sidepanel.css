@@ -79,7 +79,10 @@ body { font-family: system-ui, -apple-system, sans-serif; margin: 0; display: fl
 
 #searchInput, #searchNotesInput, #searchMakrosInput { flex: 1; padding: 10px; background-color: var(--input-bg); border: 1px solid var(--input-border); color: var(--text-color); border-radius: 6px; }
 
-#inputGroup, #noteInputGroup, #makroInputGroup, #groupEditorGroup, #trashOverlay, #backupOverlay, #stepPlaybackPanel { display: flex; flex-direction: column; gap: 14px; padding: 20px; background: var(--bg-color); position: absolute; top: 0; left: 0; right: 0; bottom: 0; z-index: 2000; overflow-y: auto; }
+#inputGroup, #noteInputGroup, #makroInputGroup, #groupEditorGroup, #trashOverlay, #backupOverlay { display: flex; flex-direction: column; gap: 14px; padding: 20px; background: var(--bg-color); position: absolute; top: 0; left: 0; right: 0; bottom: 0; z-index: 2000; overflow-y: auto; }
+#stepPlaybackPanel { display: flex; flex-direction: column; gap: 14px; padding: 20px; background: var(--bg-color); position: fixed; top: 0; left: 0; right: 0; bottom: 0; z-index: 9500; overflow-y: auto; }
+.makro-step-item { display: flex; align-items: center; gap: 6px; padding: 3px 6px; border-radius: 4px; cursor: pointer; font-size: 11px; user-select: none; }
+.makro-step-item:hover { background: rgba(255,255,255,0.06); }
 .input-header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #333; padding-bottom: 8px; }
 .input-row { display: flex; gap: 10px; align-items: center; }
 .input-row-vertical { display: flex; flex-direction: column; }

@@ -480,22 +480,31 @@ function renderMakros() {
 
     mList.innerHTML = makros.map((m, i) => {
         const stepsCount = m.steps ? m.steps.length : 0;
+        const stepsHtml = (m.steps || []).map((s, j) => `
+            <div class="makro-step-item" draggable="true" data-makro-idx="${i}" data-step-idx="${j}" title="Klicken zum Hervorheben auf Seite">
+                <span class="drag-handle">⠿</span>
+                <span>${s.type === 'click' ? '🖱' : '⌨'}</span>
+                <span style="flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${s.type === 'click'
+                    ? `Klick @ (${s._px},${s._py})`
+                    : `Text: "${(s.value||'').slice(0,30)}${s.value&&s.value.length>30?'…':''}"` }</span>
+            </div>
+        `).join('');
         return `
             <div class="makro-card" style="border-left: 3px solid ${m.color || '#ff8c00'}">
                 <div class="card-header">
                     <div class="makro-info" data-makro-action="run" data-index="${i}" title="Makro abspielen">
                         <span style="color: #4caf50; font-size:14px;">▶</span>
                         <span class="makro-title" style="font-weight:600;">${m.title || 'Unbenanntes Makro'}</span>
-                        <span style="font-size:10px; opacity:0.5;">(${stepsCount} Schritte)${(m.repeat && m.repeat > 1) ? ` <span style="color:#ff8c00;">${m.repeat}×</span>` : ''}</span>
+                        <span style="font-size:10px; opacity:0.5;">(${stepsCount} Schritte)${(m.repeat && m.repeat > 1) ? ` <span style="color:#ff8c00;">${m.repeat}×</span>` : ''}${m.domain ? ` <span title="Aufgenommen auf ${m.domain}">🌐</span>` : ''}</span>
                     </div>
                     <div class="card-actions">
                         <button class="btn-icon" data-makro-action="step" data-index="${i}" title="Einzelschritt-Wiedergabe">▶|</button>
-                        <button class="btn-icon" data-makro-action="toggle-json" data-index="${i}" title="JSON Code anzeigen">👁</button>
+                        <button class="btn-icon" data-makro-action="toggle-steps" data-index="${i}" title="Schritte anzeigen">👁</button>
                         <button class="btn-icon" data-makro-action="edit" data-index="${i}" title="Bearbeiten">✎</button>
                         <button class="btn-icon" data-makro-action="delete" data-index="${i}" title="Löschen">✕</button>
                     </div>
                 </div>
-                <div id="makro-content-${i}" class="content-box" style="font-family: monospace; font-size:11px; max-height:150px; overflow-y:auto;">${JSON.stringify(m.steps, null, 2)}</div>
+                <div id="makro-content-${i}" class="content-box" style="display:none; padding:4px;">${stepsHtml}</div>
             </div>
         `;
     }).join('');
@@ -644,6 +653,34 @@ function insertTextIntoPage(text) {
 
 // Event-Handling für Makros
 document.getElementById('makrosList').addEventListener('click', (e) => {
+    // Step-Hervorhebung auf Seite (Klick auf eine Schritt-Zeile)
+    const stepItem = e.target.closest('.makro-step-item');
+    if (stepItem && !e.target.closest('[data-makro-action]') && !e.target.classList.contains('drag-handle')) {
+        const mi = parseInt(stepItem.dataset.makroIdx);
+        const si = parseInt(stepItem.dataset.stepIdx);
+        const step = makros[mi]?.steps?.[si];
+        if (step && step._px !== undefined) {
+            chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+                if (!tabs[0]) return;
+                chrome.scripting.executeScript({
+                    target: { tabId: tabs[0].id },
+                    func: (px, py) => {
+                        window.scrollTo({ top: py - window.innerHeight / 2, behavior: 'smooth' });
+                        const vx = px - window.scrollX, vy = py - window.scrollY;
+                        const el = document.elementFromPoint(vx, vy);
+                        if (!el) return;
+                        const orig = el.style.outline;
+                        el.style.outline = '3px solid #ff8c00';
+                        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                        setTimeout(() => { el.style.outline = orig; }, 1500);
+                    },
+                    args: [step._px, step._py]
+                });
+            });
+        }
+        return;
+    }
+
     const target = e.target.closest('[data-makro-action]');
     if (!target) return;
 
@@ -651,7 +688,7 @@ document.getElementById('makrosList').addEventListener('click', (e) => {
     const i = parseInt(target.dataset.index);
     const m = makros[i];
 
-    if (action === 'toggle-json') {
+    if (action === 'toggle-steps') {
         const el = document.getElementById(`makro-content-${i}`);
         if (el) el.style.display = el.style.display === 'block' ? 'none' : 'block';
     }
@@ -669,6 +706,9 @@ document.getElementById('makrosList').addEventListener('click', (e) => {
             document.getElementById('makroStepsInput').value = JSON.stringify(m.steps, null, 2);
             document.getElementById('makroColor').value = m.color || '#ff8c00';
             document.getElementById('makroRepeatInput').value = m.repeat || 1;
+            const sd = m.speedDelay || 700;
+            document.getElementById('makroSpeedInput').value = sd;
+            document.getElementById('makroSpeedLabel').textContent = sd + ' ms';
 
             document.getElementById('mainContainer').style.display = 'none';
             document.getElementById('makroInputGroup').style.display = 'flex';
@@ -679,9 +719,17 @@ document.getElementById('makrosList').addEventListener('click', (e) => {
         if (m && m.steps) {
             chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
                 if (!tabs[0]) return;
+                if (m.domain) {
+                    let currentDomain = '';
+                    try { currentDomain = new URL(tabs[0].url).hostname; } catch(e) {}
+                    if (currentDomain && m.domain !== currentDomain) {
+                        const ok = confirm(`⚠️ Dieses Makro wurde auf „${m.domain}" aufgenommen.\nAktueller Tab: „${currentDomain}".\nTrotzdem ausführen?`);
+                        if (!ok) return;
+                    }
+                }
                 chrome.scripting.executeScript({
                     target: { tabId: tabs[0].id },
-                    func: ({ stepsList, repeat }) => {
+                    func: ({ stepsList, repeat, speedDelay }) => {
                         const showClickIndicator = (x, y) => {
                             const dot = document.createElement('div');
                             dot.style.cssText = `position:fixed;left:${x}px;top:${y}px;width:24px;height:24px;border-radius:50%;background:rgba(255,140,0,0.6);border:2px solid #ff8c00;transform:translate(-50%,-50%) scale(0);animation:_mkRipple 0.55s ease forwards;pointer-events:none;z-index:2147483647;inset:auto;margin:0;`;
@@ -692,48 +740,51 @@ document.getElementById('makrosList').addEventListener('click', (e) => {
                             catch(e) { document.documentElement.appendChild(dot); }
                             setTimeout(() => { dot.remove(); st.remove(); }, 600);
                         };
+                        const findTopClickable = (vx, vy) => {
+                            const els = document.elementsFromPoint(vx, vy);
+                            const top = els.find(e => {
+                                const cs = window.getComputedStyle(e);
+                                return cs.pointerEvents !== 'none' && cs.visibility !== 'hidden' && cs.display !== 'none'
+                                    && e !== document.documentElement && e !== document.body;
+                            }) || els[0];
+                            if (!top) return null;
+                            let candidate = top;
+                            for (let d = 0; d < 5 && candidate && candidate !== document.body; d++) {
+                                const tag = candidate.tagName.toLowerCase();
+                                const role = (candidate.getAttribute && candidate.getAttribute('role')) || '';
+                                if (['button','a','input','select','label'].includes(tag) ||
+                                    role === 'button' || role === 'link' || role === 'menuitem' || role === 'tab') {
+                                    return candidate;
+                                }
+                                candidate = candidate.parentElement;
+                            }
+                            return top;
+                        };
                         const executeAction = (step, attempt) => {
                             if (step.type === 'click' && step._px !== undefined) {
-                                // Koordinaten als primäre Methode für Klicks
                                 window.scrollTo({ top: step._py - window.innerHeight / 2, behavior: 'instant' });
                                 const vx = step._px - window.scrollX;
                                 const vy = step._py - window.scrollY;
-                                let el = document.elementFromPoint(vx, vy);
-                                const originalEl = el;
-                                // Walk up max 5 levels to find a proper clickable ancestor
-                                let candidate = el;
-                                for (let d = 0; d < 5 && candidate && candidate !== document.body; d++) {
-                                    const tag = candidate.tagName.toLowerCase();
-                                    const role = (candidate.getAttribute && candidate.getAttribute('role')) || '';
-                                    if (['button','a','input','select','label'].includes(tag) ||
-                                        role === 'button' || role === 'link' || role === 'menuitem' || role === 'tab') {
-                                        el = candidate; break;
-                                    }
-                                    candidate = candidate.parentElement;
-                                }
-                                // Fall back to original element if no proper clickable found
-                                if (!el || el === document.body) el = originalEl;
+                                const el = findTopClickable(vx, vy);
                                 if (!el) {
                                     if (attempt < 3) setTimeout(() => executeAction(step, attempt + 1), 300);
                                     return;
                                 }
                                 el.focus();
-                                // Klick immer in die Mitte des gefundenen Elements
                                 const rect = el.getBoundingClientRect();
                                 const cx = rect.left + rect.width / 2;
                                 const cy = rect.top + rect.height / 2;
-                                // Indikator immer exakt auf der getroffenen Mitte zeigen
                                 showClickIndicator(cx, cy);
-                                el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, clientX: cx, clientY: cy }));
-                                el.dispatchEvent(new MouseEvent('mouseup',   { bubbles: true, cancelable: true, clientX: cx, clientY: cy }));
-                                el.dispatchEvent(new MouseEvent('click',     { bubbles: true, cancelable: true, clientX: cx, clientY: cy }));
+                                el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, composed: true, clientX: cx, clientY: cy }));
+                                el.dispatchEvent(new MouseEvent('mouseup',   { bubbles: true, cancelable: true, composed: true, clientX: cx, clientY: cy }));
+                                el.dispatchEvent(new MouseEvent('click',     { bubbles: true, cancelable: true, composed: true, clientX: cx, clientY: cy }));
+                                try { el.click(); } catch(e2) {}
                             } else if (step.type === 'type') {
-                                // Selektor primär, Koordinaten als Fallback
                                 let el = null;
                                 try { el = document.querySelector(step.target); } catch (e) {}
                                 if (!el && step._px !== undefined) {
                                     window.scrollTo({ top: step._py - window.innerHeight / 2, behavior: 'instant' });
-                                    el = document.elementFromPoint(step._px - window.scrollX, step._py - window.scrollY);
+                                    el = findTopClickable(step._px - window.scrollX, step._py - window.scrollY);
                                 }
                                 if (!el) {
                                     if (attempt < 3) setTimeout(() => executeAction(step, attempt + 1), 300);
@@ -757,7 +808,7 @@ document.getElementById('makrosList').addEventListener('click', (e) => {
                                 }
                             }
                         };
-                        const stepDelay = 700;
+                        const stepDelay = speedDelay || 700;
                         const pauseDelay = 900;
                         for (let r = 0; r < repeat; r++) {
                             const runOffset = r * (stepsList.length * stepDelay + pauseDelay);
@@ -766,11 +817,46 @@ document.getElementById('makrosList').addEventListener('click', (e) => {
                             });
                         }
                     },
-                    args: [{ stepsList: m.steps, repeat: m.repeat || 1 }]
+                    args: [{ stepsList: m.steps, repeat: m.repeat || 1, speedDelay: m.speedDelay || 700 }]
                 });
             });
         }
     }
+});
+
+// Drag & Drop für Schritt-Reihenfolge in Makro-Karte
+let stepDragSrc = null;
+document.getElementById('makrosList').addEventListener('dragstart', (e) => {
+    const item = e.target.closest('.makro-step-item');
+    if (!item) return;
+    stepDragSrc = { mi: parseInt(item.dataset.makroIdx), si: parseInt(item.dataset.stepIdx) };
+    e.dataTransfer.effectAllowed = 'move';
+    setTimeout(() => { item.style.opacity = '0.5'; }, 0);
+});
+document.getElementById('makrosList').addEventListener('dragend', (e) => {
+    const item = e.target.closest('.makro-step-item');
+    if (item) item.style.opacity = '';
+    stepDragSrc = null;
+});
+document.getElementById('makrosList').addEventListener('dragover', (e) => {
+    const item = e.target.closest('.makro-step-item');
+    if (item && stepDragSrc) { e.preventDefault(); item.style.outline = '2px dashed var(--accent, #ff8c00)'; }
+});
+document.getElementById('makrosList').addEventListener('dragleave', (e) => {
+    const item = e.target.closest('.makro-step-item');
+    if (item) item.style.outline = '';
+});
+document.getElementById('makrosList').addEventListener('drop', (e) => {
+    const item = e.target.closest('.makro-step-item');
+    if (!item || !stepDragSrc) return;
+    item.style.outline = '';
+    const mi = parseInt(item.dataset.makroIdx);
+    const si = parseInt(item.dataset.stepIdx);
+    if (mi !== stepDragSrc.mi || si === stepDragSrc.si) return;
+    const steps = makros[mi].steps;
+    const moved = steps.splice(stepDragSrc.si, 1)[0];
+    steps.splice(si, 0, moved);
+    chrome.storage.sync.set({ makros }, renderMakros);
 });
 
 // Recorder-Injektion (wird bei Start und nach jedem Reload/Navigation neu aufgerufen)
@@ -920,10 +1006,14 @@ document.getElementById('recordMakroBtn').addEventListener('click', () => {
                 if (recordedSteps.length > 0) {
                     const mName = prompt("Makro-Aufnahme erfolgreich! Name eingeben:", `Makro vom ${new Date().toLocaleTimeString()}`);
                     if (mName !== null) {
+                        let recDomain = '';
+                        try { recDomain = tabs[0] ? new URL(tabs[0].url).hostname : ''; } catch(e) {}
                         const newMakro = {
                             title: mName.trim() || "Aufgenommenes Makro",
                             steps: recordedSteps,
-                            color: "#ff8c00"
+                            color: "#ff8c00",
+                            speedDelay: 700,
+                            domain: recDomain
                         };
                         makros.push(newMakro);
                         chrome.storage.sync.set({ makros }, renderMakros);
@@ -943,6 +1033,8 @@ function closeMakroEditMode() {
     document.getElementById('makroTitleInput').value = '';
     document.getElementById('makroStepsInput').value = '';
     document.getElementById('makroRepeatInput').value = '1';
+    document.getElementById('makroSpeedInput').value = '700';
+    document.getElementById('makroSpeedLabel').textContent = '700 ms';
     document.getElementById('showStepsOnPageBtn').style.display = 'flex';
     document.getElementById('applyPageEditsBtn').style.display = 'none';
     document.getElementById('cancelPageEditsBtn').style.display = 'none';
@@ -950,14 +1042,35 @@ function closeMakroEditMode() {
 
 document.getElementById('cancelMakroBtn').addEventListener('click', closeMakroEditMode);
 
+document.getElementById('makroSpeedInput').addEventListener('input', (e) => {
+    document.getElementById('makroSpeedLabel').textContent = e.target.value + ' ms';
+});
+
 function openStepPlayback(i) {
     const m = makros[i];
     if (!m || !m.steps || m.steps.length === 0) return;
-    stepPlaybackState = { makro: m, stepIndex: 0, repeat: m.repeat || 1, currentRun: 0 };
-    document.getElementById('stepPlaybackTitle').textContent = m.title || 'Makro';
-    document.getElementById('mainContainer').style.display = 'none';
-    document.getElementById('stepPlaybackPanel').style.display = 'flex';
-    renderStepPanel();
+    const doOpen = () => {
+        stepPlaybackState = { makro: m, stepIndex: 0, repeat: m.repeat || 1, currentRun: 0 };
+        document.getElementById('stepPlaybackTitle').textContent = m.title || 'Makro';
+        document.getElementById('mainContainer').style.display = 'none';
+        document.getElementById('stepPlaybackPanel').style.display = 'flex';
+        renderStepPanel();
+    };
+    if (m.domain) {
+        chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+            if (tabs[0] && m.domain) {
+                let currentDomain = '';
+                try { currentDomain = new URL(tabs[0].url).hostname; } catch(e) {}
+                if (currentDomain && m.domain !== currentDomain) {
+                    const ok = confirm(`⚠️ Dieses Makro wurde auf „${m.domain}" aufgenommen.\nAktueller Tab: „${currentDomain}".\nTrotzdem ausführen?`);
+                    if (!ok) return;
+                }
+            }
+            doOpen();
+        });
+    } else {
+        doOpen();
+    }
 }
 
 function renderStepPanel() {
@@ -1027,33 +1140,46 @@ document.getElementById('stepPlaybackRunBtn').addEventListener('click', () => {
                     catch(e) { document.documentElement.appendChild(dot); }
                     setTimeout(() => { dot.remove(); st.remove(); }, 600);
                 };
+                const findTopClickable = (vx, vy) => {
+                    const els = document.elementsFromPoint(vx, vy);
+                    const top = els.find(e => {
+                        const cs = window.getComputedStyle(e);
+                        return cs.pointerEvents !== 'none' && cs.visibility !== 'hidden' && cs.display !== 'none'
+                            && e !== document.documentElement && e !== document.body;
+                    }) || els[0];
+                    if (!top) return null;
+                    let candidate = top;
+                    for (let d = 0; d < 5 && candidate && candidate !== document.body; d++) {
+                        const tag = candidate.tagName.toLowerCase();
+                        const role = (candidate.getAttribute && candidate.getAttribute('role')) || '';
+                        if (['button','a','input','select','label'].includes(tag) ||
+                            role === 'button' || role === 'link' || role === 'menuitem' || role === 'tab') {
+                            return candidate;
+                        }
+                        candidate = candidate.parentElement;
+                    }
+                    return top;
+                };
                 if (step.type === 'click' && step._px !== undefined) {
                     window.scrollTo({ top: step._py - window.innerHeight / 2, behavior: 'instant' });
                     const vx = step._px - window.scrollX, vy = step._py - window.scrollY;
-                    let el = document.elementFromPoint(vx, vy);
-                    const originalEl = el;
-                    let candidate = el;
-                    for (let d = 0; d < 5 && candidate && candidate !== document.body; d++) {
-                        const tag = candidate.tagName.toLowerCase(), role = (candidate.getAttribute && candidate.getAttribute('role')) || '';
-                        if (['button','a','input','select','label'].includes(tag) || role === 'button' || role === 'link' || role === 'menuitem' || role === 'tab') { el = candidate; break; }
-                        candidate = candidate.parentElement;
-                    }
-                    if (!el || el === document.body) el = originalEl;
+                    const el = findTopClickable(vx, vy);
                     if (!el) return;
                     el.focus();
                     const rect = el.getBoundingClientRect();
                     const cx = rect.left + rect.width / 2;
                     const cy = rect.top + rect.height / 2;
                     showClickIndicator(cx, cy);
-                    el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, clientX: cx, clientY: cy }));
-                    el.dispatchEvent(new MouseEvent('mouseup',   { bubbles: true, cancelable: true, clientX: cx, clientY: cy }));
-                    el.dispatchEvent(new MouseEvent('click',     { bubbles: true, cancelable: true, clientX: cx, clientY: cy }));
+                    el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, composed: true, clientX: cx, clientY: cy }));
+                    el.dispatchEvent(new MouseEvent('mouseup',   { bubbles: true, cancelable: true, composed: true, clientX: cx, clientY: cy }));
+                    el.dispatchEvent(new MouseEvent('click',     { bubbles: true, cancelable: true, composed: true, clientX: cx, clientY: cy }));
+                    try { el.click(); } catch(e2) {}
                 } else if (step.type === 'type') {
                     let el = null;
                     try { el = document.querySelector(step.target); } catch(e) {}
                     if (!el && step._px !== undefined) {
                         window.scrollTo({ top: step._py - window.innerHeight / 2, behavior: 'instant' });
-                        el = document.elementFromPoint(step._px - window.scrollX, step._py - window.scrollY);
+                        el = findTopClickable(step._px - window.scrollX, step._py - window.scrollY);
                     }
                     if (!el) return;
                     el.focus();
@@ -1230,10 +1356,10 @@ document.getElementById('cancelPageEditsBtn').addEventListener('click', () => {
 });
 
 document.getElementById('saveMakroBtn').addEventListener('click', () => {
-    const i = document.getElementById('editMakroIndex').value;
+    const editIdx = document.getElementById('editMakroIndex').value;
     const selectedColor = document.getElementById('makroColor').value;
     let parsedSteps = [];
-    
+
     try {
         parsedSteps = JSON.parse(document.getElementById('makroStepsInput').value);
     } catch (err) {
@@ -1241,15 +1367,18 @@ document.getElementById('saveMakroBtn').addEventListener('click', () => {
         return;
     }
 
+    const existingDomain = (editIdx !== '' && makros[parseInt(editIdx)]) ? (makros[parseInt(editIdx)].domain || '') : '';
     const newMakro = {
         title: document.getElementById('makroTitleInput').value,
         steps: parsedSteps,
         color: selectedColor,
-        repeat: Math.max(1, parseInt(document.getElementById('makroRepeatInput').value) || 1)
+        repeat: Math.max(1, parseInt(document.getElementById('makroRepeatInput').value) || 1),
+        speedDelay: Math.max(100, Math.min(3000, parseInt(document.getElementById('makroSpeedInput').value) || 700)),
+        domain: existingDomain
     };
 
-    if (i !== "") {
-        makros[parseInt(i)] = newMakro;
+    if (editIdx !== "") {
+        makros[parseInt(editIdx)] = newMakro;
     } else {
         makros.push(newMakro);
     }

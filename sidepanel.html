@@ -223,6 +223,15 @@
       </div>
     </div>
 
+    <div class="field-block">
+      <label class="field-label">Geschwindigkeit</label>
+      <div class="input-row" style="align-items:center; gap:10px;">
+        <input type="range" id="makroSpeedInput" min="100" max="3000" step="100" value="700" style="flex:1;">
+        <span id="makroSpeedLabel" style="font-size:12px; opacity:0.7; min-width:55px;">700 ms</span>
+      </div>
+      <small style="opacity:0.5; font-size:11px;">Pause zwischen Schritten (schnell ↔ langsam)</small>
+    </div>
+
     <div class="editor-footer-buttons">
       <button id="cancelMakroBtn" class="danger-btn icon-btn-large" title="Abbrechen" style="background: #cf6679; flex:1;">✕</button>
       <button id="saveMakroBtn" class="primary-btn icon-btn-large" title="Speichern" style="flex:1;">💾</button>
