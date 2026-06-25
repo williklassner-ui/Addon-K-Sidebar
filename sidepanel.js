@@ -7,8 +7,11 @@ let collapsedGroups = {};
 let collapsedNoteGroups = {};
 let collapsedSessions = {}; 
 let savedSessions = [];
-let groupMetadata = {}; 
+let groupMetadata = {};
 let tabColors = {};
+let customProviders = [];
+let groupOrder = [];
+let noteGroupOrder = [];
 let tabOrder = ['prompts', 'sessions', 'notes', 'makros'];
 let isRecording = false;
 let stepPlaybackState = null;
@@ -32,19 +35,28 @@ const providerIcons = {
     'none': ''
 };
 
+function getEffectiveProviderIcons() {
+    const merged = Object.assign({}, providerIcons);
+    customProviders.forEach(cp => { merged[cp.name] = cp.icon; });
+    return merged;
+}
+
 let currentEditorTodos = [];
 
 function loadData() {
-    chrome.storage.sync.get({ 
-        promts: [], 
-        notes: [], 
+    chrome.storage.sync.get({
+        promts: [],
+        notes: [],
         makros: [],
-        deletedPromts: [], 
-        recentColors: [], 
+        deletedPromts: [],
+        recentColors: [],
         groupMetadata: {},
         savedSessions: [],
         tabColors: {},
-        tabOrder: ['prompts', 'sessions', 'notes', 'makros']
+        tabOrder: ['prompts', 'sessions', 'notes', 'makros'],
+        customProviders: [],
+        groupOrder: [],
+        noteGroupOrder: []
     }, (res) => {
         promts = res.promts || [];
         notes = res.notes || [];
@@ -55,6 +67,9 @@ function loadData() {
         savedSessions = res.savedSessions || [];
         tabColors = res.tabColors || {};
         tabOrder = res.tabOrder || ['prompts', 'sessions', 'notes', 'makros'];
+        customProviders = res.customProviders || [];
+        groupOrder = res.groupOrder || [];
+        noteGroupOrder = res.noteGroupOrder || [];
         
         savedSessions.forEach((_, idx) => {
             if (collapsedSessions[idx] === undefined) {
@@ -71,7 +86,10 @@ function loadData() {
         renderRecentColors();
         renderSessions();
         populateGroupDropdowns();
+        populateProviderDropdowns();
         checkSyncStatus();
+        initGroupDragDrop(document.getElementById('promptList'), false);
+        initGroupDragDrop(document.getElementById('notesList'), true);
     });
 }
 
@@ -146,6 +164,120 @@ function populateGroupDropdowns() {
     nSelect.innerHTML = baseHtml;
 }
 
+function sortGroupNames(names, orderArray) {
+    if (!orderArray || orderArray.length === 0) return names;
+    const inOrder = orderArray.filter(n => names.includes(n));
+    const rest = names.filter(n => !orderArray.includes(n));
+    return [...inOrder, ...rest];
+}
+
+function populateProviderDropdowns() {
+    const effectiveIcons = getEffectiveProviderIcons();
+    const defaultProviders = ['none', 'ChatGPT', 'Gemini', 'Claude', 'Copilot', 'Perplexity', 'DeepL'];
+    const allNames = [...defaultProviders, ...customProviders.map(cp => cp.name)];
+
+    const buildOptions = (includeDefault) => {
+        let html = '';
+        if (includeDefault) html += '<option value="default">Gruppen-Anbieter (Standard)</option>';
+        allNames.forEach(name => {
+            if (name === 'none') {
+                html += '<option value="none">Kein Anbieter</option>';
+            } else {
+                const ico = effectiveIcons[name] || '';
+                html += `<option value="${name}">${ico ? ico + ' ' : ''}${name}</option>`;
+            }
+        });
+        return html;
+    };
+
+    const prov = document.getElementById('aiProvider');
+    const gProv = document.getElementById('groupAiProvider');
+    if (prov) prov.innerHTML = buildOptions(false);
+    if (gProv) gProv.innerHTML = buildOptions(true);
+    renderCustomProviderList();
+}
+
+function renderCustomProviderList() {
+    const container = document.getElementById('customProviderList');
+    if (!container) return;
+    if (customProviders.length === 0) {
+        container.innerHTML = '<p style="font-size:11px;opacity:0.5;margin:0;">Keine eigenen Anbieter.</p>';
+        return;
+    }
+    container.innerHTML = customProviders.map((cp, i) => `
+        <div style="display:flex;align-items:center;gap:6px;padding:4px 0;">
+            <span style="font-size:16px;min-width:24px;">${cp.icon}</span>
+            <span style="flex:1;font-size:12px;">${cp.name}</span>
+            <button class="group-edit-btn remove-custom-provider" data-index="${i}"
+                    style="color:#cf6679;" title="Entfernen">✕</button>
+        </div>
+    `).join('');
+}
+
+function initGroupDragDrop(containerEl, isNotes) {
+    if (!containerEl) return;
+    let dragSrcName = null;
+
+    containerEl.addEventListener('dragstart', (e) => {
+        const gc = e.target.closest('.group-container[draggable]');
+        if (!gc) return;
+        dragSrcName = gc.dataset.groupname;
+        e.dataTransfer.effectAllowed = 'move';
+        setTimeout(() => { gc.style.opacity = '0.5'; }, 0);
+    });
+
+    containerEl.addEventListener('dragend', (e) => {
+        const gc = e.target.closest('.group-container[draggable]');
+        if (gc) gc.style.opacity = '';
+        containerEl.querySelectorAll('.group-container[draggable]').forEach(el => {
+            el.style.outline = '';
+        });
+        dragSrcName = null;
+    });
+
+    containerEl.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+        const gc = e.target.closest('.group-container[draggable]');
+        if (gc && gc.dataset.groupname !== dragSrcName) {
+            gc.style.outline = '2px dashed var(--accent, #ff8c00)';
+        }
+    });
+
+    containerEl.addEventListener('dragleave', (e) => {
+        const gc = e.target.closest('.group-container[draggable]');
+        if (gc) gc.style.outline = '';
+    });
+
+    containerEl.addEventListener('drop', (e) => {
+        e.preventDefault();
+        const gc = e.target.closest('.group-container[draggable]');
+        if (!gc || !dragSrcName) return;
+        gc.style.outline = '';
+        const targetName = gc.dataset.groupname;
+        if (targetName === dragSrcName) return;
+
+        const allRendered = Array.from(
+            containerEl.querySelectorAll('.group-container[draggable]')
+        ).map(el => el.dataset.groupname);
+
+        let newOrder = [...allRendered];
+        const fromIdx = newOrder.indexOf(dragSrcName);
+        const toIdx = newOrder.indexOf(targetName);
+        if (fromIdx === -1 || toIdx === -1) return;
+        newOrder.splice(fromIdx, 1);
+        newOrder.splice(toIdx, 0, dragSrcName);
+
+        if (isNotes) {
+            noteGroupOrder = newOrder;
+            chrome.storage.sync.set({ noteGroupOrder }, renderNotes);
+        } else {
+            groupOrder = newOrder;
+            chrome.storage.sync.set({ groupOrder }, render);
+        }
+    });
+}
+
 function handleDropdownChange(selectId, inputId) {
     const select = document.getElementById(selectId);
     const textInput = document.getElementById(inputId);
@@ -181,15 +313,16 @@ function render() {
     });
 
     let html = "";
-    Object.keys(groups).forEach(gName => {
+    sortGroupNames(Object.keys(groups), groupOrder).forEach(gName => {
         const isCollapsed = collapsedGroups[gName] || false;
         const meta = groupMetadata[gName] || { color: '#ff8c00', icon: '📁' };
         let totalCount = groups[gName] ? groups[gName].length : 0;
 
         html += `
-            <div class="group-container" style="border-top: 2px solid ${meta.color}">
+            <div class="group-container" draggable="true" data-groupname="${gName}" style="border-top: 2px solid ${meta.color}">
                 <div class="group-header" data-group="${gName}" style="color: ${meta.color};">
                     <div class="group-title-wrapper">
+                        <span class="drag-handle" title="Verschieben">⠿</span>
                         <span>${meta.icon} ${gName}</span>
                     </div>
                     <div class="group-right-wrapper">
@@ -216,7 +349,8 @@ function render() {
 }
 
 function getCardHtml(p, i) {
-    const icon = providerIcons[p.provider] !== undefined ? providerIcons[p.provider] : '⚬';
+    const icons = getEffectiveProviderIcons();
+    const icon = icons[p.provider] !== undefined ? icons[p.provider] : '⚬';
     const showIcon = icon !== '';
     return `
         <div class="prompt-card" style="border-left: 3px solid ${p.color || '#ff8c00'}">
@@ -269,15 +403,16 @@ function renderNotes() {
     });
 
     let html = "";
-    Object.keys(groups).forEach(gName => {
+    sortGroupNames(Object.keys(groups), noteGroupOrder).forEach(gName => {
         const isCollapsed = collapsedNoteGroups[gName] || false;
         const meta = groupMetadata[gName] || { color: '#ff8c00', icon: '📁' };
         let totalCount = groups[gName].length;
 
         html += `
-            <div class="group-container" style="border-top: 2px solid ${meta.color}">
+            <div class="group-container" draggable="true" data-groupname="${gName}" style="border-top: 2px solid ${meta.color}">
                 <div class="group-header" data-notegroup="${gName}" style="color: ${meta.color};">
                     <div class="group-title-wrapper">
+                        <span class="drag-handle" title="Verschieben">⠿</span>
                         <span>${meta.icon} ${gName}</span>
                     </div>
                     <div class="group-right-wrapper">
@@ -1156,8 +1291,9 @@ document.getElementById('promptList').addEventListener('click', (e) => {
         document.getElementById('groupTitleInput').value = oldName;
         document.getElementById('groupIconInput').value = meta.icon;
         document.getElementById('groupColorInput').value = meta.color;
+        populateProviderDropdowns();
         document.getElementById('groupAiProvider').value = meta.groupProvider || 'default';
-        
+
         document.getElementById('mainContainer').style.display = 'none';
         document.getElementById('groupEditorGroup').style.display = 'flex';
         renderRecentColors();
@@ -1193,6 +1329,7 @@ document.getElementById('promptList').addEventListener('click', (e) => {
             document.getElementById('textInput').value = p.text || '';
             document.getElementById('promptColor').value = p.color || '#ff8c00';
             document.getElementById('shortcutInput').value = p.shortcut || '';
+            populateProviderDropdowns();
             document.getElementById('aiProvider').value = p.provider || 'ChatGPT';
             populateGroupDropdowns();
             
@@ -1583,15 +1720,48 @@ document.getElementById('saveGroupBtn').addEventListener('click', () => {
         promts.forEach(p => { if (p.group === oldName) p.group = newName; });
         notes.forEach(n => { if (n.group === oldName) n.group = newName; });
         if (groupMetadata[oldName]) delete groupMetadata[oldName];
+        const goIdx = groupOrder.indexOf(oldName);
+        if (goIdx !== -1) groupOrder[goIdx] = newName;
+        const ngoIdx = noteGroupOrder.indexOf(oldName);
+        if (ngoIdx !== -1) noteGroupOrder[ngoIdx] = newName;
     }
     groupMetadata[newName] = { color, icon, groupProvider };
     updateRecentColors(color);
-    chrome.storage.sync.set({ promts, notes, groupMetadata }, () => {
+    chrome.storage.sync.set({ promts, notes, groupMetadata, groupOrder, noteGroupOrder }, () => {
         closeGroupEditMode();
     });
 });
 
 document.getElementById('cancelGroupBtn').addEventListener('click', closeGroupEditMode);
+
+document.getElementById('groupIconQuickPick').addEventListener('click', (e) => {
+    const btn = e.target.closest('.group-icon-pick');
+    if (btn) document.getElementById('groupIconInput').value = btn.dataset.icon;
+});
+
+document.getElementById('addCustomProviderBtn').addEventListener('click', () => {
+    const nameIn = document.getElementById('customProviderNameInput');
+    const iconIn = document.getElementById('customProviderIconInput');
+    const name = nameIn.value.trim();
+    const icon = iconIn.value.trim() || '⚬';
+    if (!name) return;
+    if (customProviders.some(cp => cp.name === name)) {
+        alert('Ein Anbieter mit diesem Namen existiert bereits.');
+        return;
+    }
+    customProviders.push({ name, icon });
+    nameIn.value = '';
+    iconIn.value = '';
+    chrome.storage.sync.set({ customProviders }, populateProviderDropdowns);
+});
+
+document.getElementById('customProviderList').addEventListener('click', (e) => {
+    const btn = e.target.closest('.remove-custom-provider');
+    if (!btn) return;
+    const idx = parseInt(btn.dataset.index);
+    customProviders.splice(idx, 1);
+    chrome.storage.sync.set({ customProviders }, populateProviderDropdowns);
+});
 
 document.addEventListener('click', (e) => {
     const dot = e.target.closest('.color-dot[data-color]');
@@ -1900,7 +2070,8 @@ document.getElementById('ctxDuplicateGroup').addEventListener('click', () => {
     // Kopien direkt nach dem letzten Prompt der Originalgruppe einfügen
     const lastIdx = promts.reduce((acc, p, i) => p.group === gName ? i : acc, -1);
     promts.splice(lastIdx + 1, 0, ...copies);
-    chrome.storage.sync.set({ promts, groupMetadata }, render);
+    groupOrder.push(newName);
+    chrome.storage.sync.set({ promts, groupMetadata, groupOrder }, render);
 });
 
 // Kontextmenü-Trigger für Rechtsklick auf Reiter

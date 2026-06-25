@@ -107,15 +107,7 @@
 
     <div class="field-block">
       <label class="field-label">KI-Anbieter</label>
-      <select id="aiProvider">
-        <option value="none">Kein Anbieter</option>
-        <option value="ChatGPT">✦ ChatGPT</option>
-        <option value="Gemini">✦ Gemini</option>
-        <option value="Claude">⚛ Claude</option>
-        <option value="Copilot">✵ Copilot</option>
-        <option value="Perplexity">◈ Perplexity</option>
-        <option value="DeepL">⚲ DeepL</option>
-      </select>
+      <select id="aiProvider"></select>
     </div>
 
     <div class="field-block">
@@ -251,28 +243,34 @@
 
     <div class="field-block">
       <label class="field-label">Gruppen-Icon</label>
-      <select id="groupIconInput">
-        <option value="📁">📁 Ordner Standard</option>
-        <option value="🚀">🚀 Projekte / Schnell</option>
-        <option value="⚛">⚛ KI / Wissenschaft</option>
-        <option value="📝">📝 Texte / Entwürfe</option>
-        <option value="🛠️">🛠️ Tools / Utilities</option>
-        <option value="⭐">⭐ Favoriten</option>
-        <option value="🧠">🧠 Brainstorming</option>
-        <option value="🎨">🎨 Design / Medien</option>
-      </select>
+      <input type="text" id="groupIconInput" maxlength="4" placeholder="📁"
+             style="width:60px; font-size:20px; text-align:center; padding:6px;">
+      <div id="groupIconQuickPick" style="display:flex;gap:6px;flex-wrap:wrap;padding:4px 0;">
+        <button class="group-icon-pick btn-icon-elegant" data-icon="📁">📁</button>
+        <button class="group-icon-pick btn-icon-elegant" data-icon="🚀">🚀</button>
+        <button class="group-icon-pick btn-icon-elegant" data-icon="⚛">⚛</button>
+        <button class="group-icon-pick btn-icon-elegant" data-icon="📝">📝</button>
+        <button class="group-icon-pick btn-icon-elegant" data-icon="🛠️">🛠️</button>
+        <button class="group-icon-pick btn-icon-elegant" data-icon="⭐">⭐</button>
+        <button class="group-icon-pick btn-icon-elegant" data-icon="🧠">🧠</button>
+        <button class="group-icon-pick btn-icon-elegant" data-icon="🎨">🎨</button>
+      </div>
     </div>
 
     <div class="field-block">
       <label class="field-label">Gruppen-Anbieter Standard</label>
-      <select id="groupAiProvider">
-        <option value="default">Gruppen-Anbieter (Standard)</option>
-        <option value="ChatGPT">ChatGPT</option>
-        <option value="Gemini">Gemini</option>
-        <option value="Claude">Claude</option>
-        <option value="Copilot">Copilot</option>
-        <option value="Perplexity">Perplexity</option>
-      </select>
+      <select id="groupAiProvider"></select>
+    </div>
+
+    <div class="field-block">
+      <label class="field-label">Eigene KI-Anbieter</label>
+      <div id="customProviderList"></div>
+      <div class="input-row" style="margin-top:6px;gap:6px;">
+        <input type="text" id="customProviderIconInput" maxlength="4"
+               placeholder="⚬" style="width:48px;font-size:16px;text-align:center;padding:6px;">
+        <input type="text" id="customProviderNameInput" placeholder="Anbieter-Name" style="flex:1;">
+        <button id="addCustomProviderBtn" class="btn-icon" title="Hinzufügen">＋</button>
+      </div>
     </div>
 
     <div class="field-block">

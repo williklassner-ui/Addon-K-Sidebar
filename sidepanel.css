@@ -97,6 +97,9 @@ body { font-family: system-ui, -apple-system, sans-serif; margin: 0; display: fl
 .group-container { margin-bottom: 14px; display: flex; flex-direction: column; gap: 6px; background: rgba(255, 255, 255, 0.015); border-radius: 8px; padding: 4px; border: 1px solid rgba(255, 255, 255, 0.04); }
 .group-header { display: flex; justify-content: space-between; align-items: center; background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.05); padding: 8px 12px; border-radius: 6px; cursor: pointer; font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; }
 .group-title-wrapper { display: flex; align-items: center; gap: 8px; flex: 1; }
+.drag-handle { cursor: grab; opacity: 0.4; font-size: 14px; padding-right: 2px; user-select: none; transition: opacity 0.15s; }
+.drag-handle:hover { opacity: 1; }
+.group-container[draggable="true"]:active { cursor: grabbing; }
 .group-right-wrapper { display: flex; align-items: center; gap: 8px; justify-content: flex-end; }
 .group-edit-btn { background: none; border: none; color: var(--text-color); opacity: 0.6; cursor: pointer; padding: 2px; font-size: 13px; display: flex; align-items: center; justify-content: center; transition: color 0.2s; }
 .group-edit-btn:hover { opacity: 1; color: var(--accent); }
