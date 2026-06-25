@@ -1833,11 +1833,83 @@ document.getElementById('saveCurrentSessionBtn').addEventListener('click', () =>
     });
 });
 
+// Kontextmenü-Trigger für Rechtsklick auf Prompts und Gruppen
+document.addEventListener('contextmenu', (e) => {
+    const promptCard = e.target.closest('.prompt-card');
+    const groupHeader = e.target.closest('.group-header[data-group]');
+
+    if (promptCard || groupHeader) {
+        e.preventDefault();
+        document.getElementById('tabContextMenu').style.display = 'none';
+
+        if (promptCard) {
+            const actionEl = promptCard.querySelector('[data-index]');
+            const idx = actionEl ? parseInt(actionEl.dataset.index) : -1;
+            const menu = document.getElementById('promptContextMenu');
+            let x = e.clientX, y = e.clientY;
+            if (x + 170 > window.innerWidth) x = window.innerWidth - 175;
+            if (y + 60 > window.innerHeight) y = window.innerHeight - 65;
+            menu.style.left = x + 'px';
+            menu.style.top = y + 'px';
+            menu.style.display = 'block';
+            menu.dataset.index = idx;
+            document.getElementById('groupContextMenu').style.display = 'none';
+        } else if (groupHeader) {
+            const menu = document.getElementById('groupContextMenu');
+            let x = e.clientX, y = e.clientY;
+            if (x + 170 > window.innerWidth) x = window.innerWidth - 175;
+            if (y + 60 > window.innerHeight) y = window.innerHeight - 65;
+            menu.style.left = x + 'px';
+            menu.style.top = y + 'px';
+            menu.style.display = 'block';
+            menu.dataset.group = groupHeader.dataset.group;
+            document.getElementById('promptContextMenu').style.display = 'none';
+        }
+        return;
+    }
+});
+
+document.getElementById('ctxDuplicatePrompt').addEventListener('click', () => {
+    const menu = document.getElementById('promptContextMenu');
+    const idx = parseInt(menu.dataset.index);
+    menu.style.display = 'none';
+    if (isNaN(idx) || !promts[idx]) return;
+    const orig = promts[idx];
+    const copy = Object.assign({}, orig, { title: orig.title + ' (Kopie)' });
+    promts.splice(idx + 1, 0, copy);
+    chrome.storage.sync.set({ promts }, render);
+});
+
+document.getElementById('ctxDuplicateGroup').addEventListener('click', () => {
+    const menu = document.getElementById('groupContextMenu');
+    const gName = menu.dataset.group;
+    menu.style.display = 'none';
+    if (!gName) return;
+    let newName = gName + ' (Kopie)';
+    let counter = 2;
+    while (promts.some(p => p.group === newName) || groupMetadata[newName]) {
+        newName = gName + ` (Kopie ${counter++})`;
+    }
+    // Gruppe-Metadaten kopieren
+    if (groupMetadata[gName]) {
+        groupMetadata[newName] = Object.assign({}, groupMetadata[gName]);
+    }
+    // Alle Prompts der Gruppe kopieren
+    const groupPrompts = promts.filter(p => p.group === gName);
+    const copies = groupPrompts.map(p => Object.assign({}, p, { title: p.title + ' (Kopie)', group: newName }));
+    // Kopien direkt nach dem letzten Prompt der Originalgruppe einfügen
+    const lastIdx = promts.reduce((acc, p, i) => p.group === gName ? i : acc, -1);
+    promts.splice(lastIdx + 1, 0, ...copies);
+    chrome.storage.sync.set({ promts, groupMetadata }, render);
+});
+
 // Kontextmenü-Trigger für Rechtsklick auf Reiter
 document.addEventListener('contextmenu', (e) => {
     const btn = e.target.closest('.tab-btn');
     if (btn) {
         e.preventDefault();
+        document.getElementById('promptContextMenu').style.display = 'none';
+        document.getElementById('groupContextMenu').style.display = 'none';
         const menu = document.getElementById('tabContextMenu');
         const key = btn.dataset.tab;
         
@@ -1903,75 +1975,6 @@ document.getElementById('moveTabRightBtn').addEventListener('click', () => {
             document.getElementById('tabContextMenu').style.display = 'none';
         });
     }
-});
-
-// Kontextmenü für Rechtsklick auf Prompt-Karte und Gruppe
-document.getElementById('promptList').addEventListener('contextmenu', (e) => {
-    const card = e.target.closest('.prompt-card');
-    const groupHeader = e.target.closest('.group-header');
-
-    document.getElementById('promptContextMenu').style.display = 'none';
-    document.getElementById('groupContextMenu').style.display = 'none';
-
-    if (card) {
-        e.preventDefault();
-        const actionEl = card.querySelector('[data-index]');
-        if (!actionEl) return;
-        const i = parseInt(actionEl.dataset.index);
-        let x = e.clientX, y = e.clientY;
-        if (x + 170 > window.innerWidth) x = window.innerWidth - 170;
-        if (y + 60 > window.innerHeight) y = window.innerHeight - 60;
-        const menu = document.getElementById('promptContextMenu');
-        menu.style.left = x + 'px';
-        menu.style.top = y + 'px';
-        menu.style.display = 'block';
-        menu.dataset.index = i;
-        return;
-    }
-
-    if (groupHeader && groupHeader.dataset.group) {
-        e.preventDefault();
-        const gName = groupHeader.dataset.group;
-        let x = e.clientX, y = e.clientY;
-        if (x + 170 > window.innerWidth) x = window.innerWidth - 170;
-        if (y + 60 > window.innerHeight) y = window.innerHeight - 60;
-        const menu = document.getElementById('groupContextMenu');
-        menu.style.left = x + 'px';
-        menu.style.top = y + 'px';
-        menu.style.display = 'block';
-        menu.dataset.groupname = gName;
-    }
-});
-
-document.getElementById('ctxDuplicatePrompt').addEventListener('click', () => {
-    const menu = document.getElementById('promptContextMenu');
-    const i = parseInt(menu.dataset.index);
-    menu.style.display = 'none';
-    if (isNaN(i) || !promts[i]) return;
-    const copy = Object.assign({}, promts[i], { title: promts[i].title + ' (Kopie)' });
-    promts.splice(i + 1, 0, copy);
-    chrome.storage.sync.set({ promts }, render);
-});
-
-document.getElementById('ctxDuplicateGroup').addEventListener('click', () => {
-    const menu = document.getElementById('groupContextMenu');
-    const gName = menu.dataset.groupname;
-    menu.style.display = 'none';
-    if (!gName) return;
-    let newName = gName + ' (Kopie)';
-    let counter = 2;
-    while (promts.some(p => p.group === newName) || groupMetadata[newName]) {
-        newName = gName + ` (Kopie ${counter++})`;
-    }
-    if (groupMetadata[gName]) {
-        groupMetadata[newName] = Object.assign({}, groupMetadata[gName]);
-    }
-    const copies = promts
-        .filter(p => p.group === gName)
-        .map(p => Object.assign({}, p, { group: newName }));
-    const insertAt = promts.reduce((last, p, i) => p.group === gName ? i + 1 : last, 0);
-    promts.splice(insertAt, 0, ...copies);
-    chrome.storage.sync.set({ promts, groupMetadata }, render);
 });
 
 document.addEventListener('click', () => {
