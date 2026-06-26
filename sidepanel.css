@@ -57,7 +57,7 @@ body { font-family: system-ui, -apple-system, sans-serif; margin: 0; display: fl
   border-color: rgba(0, 0, 0, 0.15) !important;
 }
 
-.btn-icon { padding: 8px 12px; font-size: 14px; border-radius: 6px !important; }
+.btn-icon { padding: 4px 8px; font-size: 11px; border-radius: 6px !important; }
 .btn-icon-elegant { padding: 6px 14px; font-size: 12px; }
 .primary-btn { background-color: rgba(255, 140, 0, 0.1) !important; font-weight: 600; padding: 12px; border-radius: 8px !important; }
 .danger-btn { background-color: rgba(207, 102, 121, 0.1) !important; font-weight: 600; padding: 10px; border-radius: 8px !important; }
@@ -80,7 +80,7 @@ body { font-family: system-ui, -apple-system, sans-serif; margin: 0; display: fl
 #searchInput, #searchNotesInput, #searchMakrosInput { flex: 1; padding: 10px; background-color: var(--input-bg); border: 1px solid var(--input-border); color: var(--text-color); border-radius: 6px; }
 
 #inputGroup, #noteInputGroup, #makroInputGroup, #groupEditorGroup, #trashOverlay, #backupOverlay { display: flex; flex-direction: column; gap: 14px; padding: 20px; background: var(--bg-color); position: absolute; top: 0; left: 0; right: 0; bottom: 0; z-index: 2000; overflow-y: auto; }
-#stepPlaybackPanel { display: flex; flex-direction: column; gap: 14px; padding: 20px; background: var(--bg-color); position: fixed; top: 0; left: 0; right: 0; bottom: 0; z-index: 9500; overflow-y: auto; }
+#stepPlaybackPanel, #makroPreRunPanel { display: flex; flex-direction: column; gap: 14px; padding: 20px; background: var(--bg-color); position: fixed; top: 0; left: 0; right: 0; bottom: 0; z-index: 9500; overflow-y: auto; }
 .makro-step-item { display: flex; align-items: center; gap: 6px; padding: 3px 6px; border-radius: 4px; cursor: pointer; font-size: 11px; user-select: none; }
 .makro-step-item:hover { background: rgba(255,255,255,0.06); }
 .input-header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #333; padding-bottom: 8px; }
@@ -117,10 +117,10 @@ body { font-family: system-ui, -apple-system, sans-serif; margin: 0; display: fl
 .card-header { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
 
 .prompt-info, .note-info, .makro-info { display: flex; align-items: center; gap: 10px; cursor: pointer; flex: 1; }
-.provider-icon { font-size: 1.2em; color: var(--accent); opacity: 0.9; }
+.provider-icon { font-size: 1em; color: var(--accent); opacity: 0.9; }
 .prompt-title, .note-title, .makro-title { font-weight: 500; font-size: 13px; color: var(--text-color); }
 
-.card-actions { display: flex; gap: 4px; }
+.card-actions { display: flex; gap: 2px; }
 .content-box { display: none; margin-top: 8px; padding: 10px; background: rgba(0,0,0,0.25); border-radius: 6px; border-left: 2px solid var(--accent); white-space: pre-wrap; font-size: 13px; line-height: 1.4; }
 
 .note-todo-list-render { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; font-size: 12px; padding-left: 4px; }

@@ -17,6 +17,7 @@ let isRecording = false;
 let stepPlaybackState = null;
 let recordingTabId = null;
 let recordingBuffer = [];
+let preRunMakroIdx = null;
 
 const tabNames = {
     'prompts': 'Promts',
@@ -493,7 +494,7 @@ function renderMakros() {
             <div class="makro-card" style="border-left: 3px solid ${m.color || '#ff8c00'}">
                 <div class="card-header">
                     <div class="makro-info" data-makro-action="run" data-index="${i}" title="Makro abspielen">
-                        <span style="color: #4caf50; font-size:14px;">▶</span>
+                        <span style="color: #4caf50; font-size:12px;">▶</span>
                         <span class="makro-title" style="font-weight:600;">${m.title || 'Unbenanntes Makro'}</span>
                         <span style="font-size:10px; opacity:0.5;">(${stepsCount} Schritte)${(m.repeat && m.repeat > 1) ? ` <span style="color:#ff8c00;">${m.repeat}×</span>` : ''}${m.domain ? ` <span title="Aufgenommen auf ${m.domain}">🌐</span>` : ''}</span>
                     </div>
@@ -727,98 +728,10 @@ document.getElementById('makrosList').addEventListener('click', (e) => {
                         if (!ok) return;
                     }
                 }
-                chrome.scripting.executeScript({
-                    target: { tabId: tabs[0].id },
-                    func: ({ stepsList, repeat, speedDelay }) => {
-                        const showClickIndicator = (x, y) => {
-                            const dot = document.createElement('div');
-                            dot.style.cssText = `position:fixed;left:${x}px;top:${y}px;width:24px;height:24px;border-radius:50%;background:rgba(255,140,0,0.6);border:2px solid #ff8c00;transform:translate(-50%,-50%) scale(0);animation:_mkRipple 0.55s ease forwards;pointer-events:none;z-index:2147483647;inset:auto;margin:0;`;
-                            const st = document.createElement('style');
-                            st.textContent = `@keyframes _mkRipple{0%{transform:translate(-50%,-50%) scale(0);opacity:1}100%{transform:translate(-50%,-50%) scale(2.8);opacity:0}}`;
-                            document.head.appendChild(st);
-                            try { dot.setAttribute('popover','manual'); document.documentElement.appendChild(dot); dot.showPopover(); }
-                            catch(e) { document.documentElement.appendChild(dot); }
-                            setTimeout(() => { dot.remove(); st.remove(); }, 600);
-                        };
-                        const findTopClickable = (vx, vy) => {
-                            const els = document.elementsFromPoint(vx, vy);
-                            const top = els.find(e => {
-                                const cs = window.getComputedStyle(e);
-                                return cs.pointerEvents !== 'none' && cs.visibility !== 'hidden' && cs.display !== 'none'
-                                    && e !== document.documentElement && e !== document.body;
-                            }) || els[0];
-                            if (!top) return null;
-                            let candidate = top;
-                            for (let d = 0; d < 5 && candidate && candidate !== document.body; d++) {
-                                const tag = candidate.tagName.toLowerCase();
-                                const role = (candidate.getAttribute && candidate.getAttribute('role')) || '';
-                                if (['button','a','input','select','label'].includes(tag) ||
-                                    role === 'button' || role === 'link' || role === 'menuitem' || role === 'tab') {
-                                    return candidate;
-                                }
-                                candidate = candidate.parentElement;
-                            }
-                            return top;
-                        };
-                        const executeAction = (step, attempt) => {
-                            if (step.type === 'click' && step._px !== undefined) {
-                                window.scrollTo({ top: step._py - window.innerHeight / 2, behavior: 'instant' });
-                                const vx = step._px - window.scrollX;
-                                const vy = step._py - window.scrollY;
-                                const el = findTopClickable(vx, vy);
-                                if (!el) {
-                                    if (attempt < 3) setTimeout(() => executeAction(step, attempt + 1), 300);
-                                    return;
-                                }
-                                el.focus();
-                                const rect = el.getBoundingClientRect();
-                                const cx = rect.left + rect.width / 2;
-                                const cy = rect.top + rect.height / 2;
-                                showClickIndicator(cx, cy);
-                                el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, composed: true, clientX: cx, clientY: cy }));
-                                el.dispatchEvent(new MouseEvent('mouseup',   { bubbles: true, cancelable: true, composed: true, clientX: cx, clientY: cy }));
-                                el.dispatchEvent(new MouseEvent('click',     { bubbles: true, cancelable: true, composed: true, clientX: cx, clientY: cy }));
-                                try { el.click(); } catch(e2) {}
-                            } else if (step.type === 'type') {
-                                let el = null;
-                                try { el = document.querySelector(step.target); } catch (e) {}
-                                if (!el && step._px !== undefined) {
-                                    window.scrollTo({ top: step._py - window.innerHeight / 2, behavior: 'instant' });
-                                    el = findTopClickable(step._px - window.scrollX, step._py - window.scrollY);
-                                }
-                                if (!el) {
-                                    if (attempt < 3) setTimeout(() => executeAction(step, attempt + 1), 300);
-                                    return;
-                                }
-                                el.focus();
-                                if (el.isContentEditable || el.tagName === 'DIV') {
-                                    document.execCommand('selectAll', false, null);
-                                    document.execCommand('insertText', false, step.value);
-                                    el.dispatchEvent(new Event('input', { bubbles: true }));
-                                } else {
-                                    const proto = el.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
-                                    const nativeSetter = Object.getOwnPropertyDescriptor(proto, 'value');
-                                    if (nativeSetter && nativeSetter.set) {
-                                        nativeSetter.set.call(el, step.value);
-                                    } else {
-                                        el.value = step.value;
-                                    }
-                                    el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: step.value }));
-                                    el.dispatchEvent(new Event('change', { bubbles: true }));
-                                }
-                            }
-                        };
-                        const stepDelay = speedDelay || 700;
-                        const pauseDelay = 900;
-                        for (let r = 0; r < repeat; r++) {
-                            const runOffset = r * (stepsList.length * stepDelay + pauseDelay);
-                            stepsList.forEach((step, i) => {
-                                setTimeout(() => executeAction(step, 0), runOffset + i * stepDelay);
-                            });
-                        }
-                    },
-                    args: [{ stepsList: m.steps, repeat: m.repeat || 1, speedDelay: m.speedDelay || 700 }]
-                });
+                preRunMakroIdx = i;
+                chrome.scripting.executeScript({ target: { tabId: tabs[0].id }, func: injectEditMarkersFunc, args: [m.steps] });
+                document.getElementById('mainContainer').style.display = 'none';
+                document.getElementById('makroPreRunPanel').style.display = 'flex';
             });
         }
     }
@@ -948,6 +861,10 @@ function injectRecorder(tabId) {
 chrome.runtime.onMessage.addListener((msg) => {
     if (msg._makroRecStep && isRecording) {
         recordingBuffer.push(msg._makroRecStep);
+    }
+    if (msg._makroStepPosUpdate) {
+        document.getElementById('stepEditPx').value = msg._makroStepPosUpdate.px;
+        document.getElementById('stepEditPy').value = msg._makroStepPosUpdate.py;
     }
 });
 
@@ -1090,10 +1007,12 @@ function renderStepPanel() {
         document.getElementById('stepEditType').style.display = 'none';
         document.getElementById('stepEditPx').value = step._px || '';
         document.getElementById('stepEditPy').value = step._py || '';
+        document.getElementById('showStepOnPageBtn').style.display = step._px !== undefined ? 'flex' : 'none';
     } else {
         document.getElementById('stepEditClick').style.display = 'none';
         document.getElementById('stepEditType').style.display = 'flex';
         document.getElementById('stepEditValue').value = step.value || '';
+        document.getElementById('showStepOnPageBtn').style.display = 'none';
     }
     const saveBtn = document.getElementById('stepEditSaveBtn');
     saveBtn.textContent = '💾 Schritt speichern';
@@ -1118,6 +1037,15 @@ function closeStepPanel() {
     stepPlaybackState = null;
     document.getElementById('stepPlaybackPanel').style.display = 'none';
     document.getElementById('mainContainer').style.display = 'block';
+    document.getElementById('showStepOnPageBtn').style.display = 'none';
+    // Remove any lingering page marker
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        if (!tabs[0]) return;
+        chrome.scripting.executeScript({
+            target: { tabId: tabs[0].id },
+            func: () => { document.querySelectorAll('._makroEditMarker, #_makroEditPanel, #_makroEditStyle').forEach(el => el.remove()); }
+        });
+    });
 }
 
 document.getElementById('stepPlaybackAbortBtn').addEventListener('click', closeStepPanel);
@@ -1125,6 +1053,24 @@ document.getElementById('stepPlaybackSkipBtn').addEventListener('click', advance
 document.getElementById('stepPlaybackRunBtn').addEventListener('click', () => {
     if (!stepPlaybackState) return;
     const step = stepPlaybackState.makro.steps[stepPlaybackState.stepIndex];
+    // Apply any edited position/value from input fields before running
+    if (step.type === 'click') {
+        const newPx = parseInt(document.getElementById('stepEditPx').value);
+        const newPy = parseInt(document.getElementById('stepEditPy').value);
+        if (!isNaN(newPx)) step._px = newPx;
+        if (!isNaN(newPy)) step._py = newPy;
+    } else if (step.type === 'type') {
+        step.value = document.getElementById('stepEditValue').value;
+    }
+    // Remove any page marker before executing
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        if (tabs[0]) {
+            chrome.scripting.executeScript({
+                target: { tabId: tabs[0].id },
+                func: () => { document.querySelectorAll('._makroEditMarker, #_makroEditPanel, #_makroEditStyle').forEach(el => el.remove()); }
+            });
+        }
+    });
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
         if (!tabs[0]) { advanceStep(); return; }
         chrome.scripting.executeScript({
@@ -1198,6 +1144,7 @@ document.getElementById('stepPlaybackRunBtn').addEventListener('click', () => {
             },
             args: [step]
         });
+        chrome.storage.sync.set({ makros });
         advanceStep();
     });
 });
@@ -1222,6 +1169,86 @@ document.getElementById('stepEditSaveBtn').addEventListener('click', () => {
 });
 
 // Page-Overlay: Schritte auf Seite anzeigen und bearbeiten
+function injectEditMarkersFunc(steps) {
+    document.querySelectorAll('._makroEditMarker, #_makroEditPanel, #_makroEditStyle').forEach(el => el.remove());
+    sessionStorage.setItem('_makroEditSteps', JSON.stringify(steps));
+    const style = document.createElement('style');
+    style.id = '_makroEditStyle';
+    style.textContent = `
+        ._makroEditMarker{position:absolute;z-index:999998;width:26px;height:26px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:bold;color:#fff;cursor:grab;user-select:none;box-shadow:0 2px 8px rgba(0,0,0,0.5);border:2px solid rgba(255,255,255,0.5);}
+        ._makroEditMarker:active{cursor:grabbing;}
+        ._makroEditMarker._click{background:#ff8c00;}
+        ._makroEditMarker._type{background:#2196f3;}
+        #_makroEditPanel{position:fixed;z-index:999999;background:#1e1e1e;border:1px solid #555;border-radius:8px;padding:12px;min-width:210px;box-shadow:0 4px 16px rgba(0,0,0,0.7);font-family:system-ui;font-size:12px;color:#e0e0e0;}
+        #_makroEditPanel label{display:block;font-size:10px;opacity:.6;margin-top:6px;}
+        #_makroEditPanel input,#_makroEditPanel textarea{width:100%;background:#252525;border:1px solid #444;color:#e0e0e0;border-radius:4px;padding:4px;font-size:12px;box-sizing:border-box;margin:2px 0;}
+        #_makroEditPanel button{background:rgba(255,140,0,.2);border:1px solid rgba(255,140,0,.4);color:#ff8c00;border-radius:4px;padding:4px 10px;cursor:pointer;font-size:11px;margin:4px 2px 0;}
+    `;
+    document.head.appendChild(style);
+    steps.forEach((step, idx) => {
+        if (step._px === undefined || step._py === undefined) return;
+        const marker = document.createElement('div');
+        marker.className = `_makroEditMarker ${step.type === 'click' ? '_click' : '_type'}`;
+        marker.textContent = idx + 1;
+        marker.style.left = (step._px - 13) + 'px';
+        marker.style.top = (step._py - 13) + 'px';
+        let isDragging = false, startX, startY, startLeft, startTop;
+        marker.addEventListener('mousedown', (e) => {
+            e.preventDefault();
+            isDragging = false;
+            startX = e.clientX; startY = e.clientY;
+            startLeft = parseInt(marker.style.left); startTop = parseInt(marker.style.top);
+            const onMove = (me) => {
+                if (!isDragging && (Math.abs(me.clientX - startX) > 3 || Math.abs(me.clientY - startY) > 3)) isDragging = true;
+                if (isDragging) {
+                    const nl = startLeft + (me.clientX - startX);
+                    const nt = startTop + (me.clientY - startY);
+                    marker.style.left = nl + 'px'; marker.style.top = nt + 'px';
+                    const stps = JSON.parse(sessionStorage.getItem('_makroEditSteps') || '[]');
+                    stps[idx]._px = nl + 13; stps[idx]._py = nt + 13;
+                    sessionStorage.setItem('_makroEditSteps', JSON.stringify(stps));
+                }
+            };
+            const onUp = () => { document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp); };
+            document.addEventListener('mousemove', onMove);
+            document.addEventListener('mouseup', onUp);
+        });
+        marker.addEventListener('click', (e) => {
+            if (isDragging) { isDragging = false; return; }
+            const existing = document.getElementById('_makroEditPanel');
+            if (existing) existing.remove();
+            const stps = JSON.parse(sessionStorage.getItem('_makroEditSteps') || '[]');
+            const s = stps[idx];
+            const panel = document.createElement('div');
+            panel.id = '_makroEditPanel';
+            panel.style.left = Math.min(e.clientX + 12, window.innerWidth - 230) + 'px';
+            panel.style.top = Math.min(e.clientY + 12, window.innerHeight - 160) + 'px';
+            if (s.type === 'click') {
+                panel.innerHTML = `<b>🖱 Schritt ${idx+1}: Klick</b><label>X:</label><input type="number" id="_ep_px" value="${s._px}"><label>Y:</label><input type="number" id="_ep_py" value="${s._py}"><div><button id="_ep_save">💾 Speichern</button><button id="_ep_close">✕</button></div>`;
+            } else {
+                panel.innerHTML = `<b>⌨ Schritt ${idx+1}: Text</b><label>Ziel:</label><input type="text" id="_ep_target" value="${(s.target||'').replace(/"/g,'&quot;')}"><label>Wert:</label><textarea id="_ep_value" rows="2">${(s.value||'').replace(/</g,'&lt;')}</textarea><div><button id="_ep_save">💾 Speichern</button><button id="_ep_close">✕</button></div>`;
+            }
+            document.body.appendChild(panel);
+            document.getElementById('_ep_close').addEventListener('click', () => panel.remove());
+            document.getElementById('_ep_save').addEventListener('click', () => {
+                const stps2 = JSON.parse(sessionStorage.getItem('_makroEditSteps') || '[]');
+                if (s.type === 'click') {
+                    stps2[idx]._px = parseInt(document.getElementById('_ep_px').value) || stps2[idx]._px;
+                    stps2[idx]._py = parseInt(document.getElementById('_ep_py').value) || stps2[idx]._py;
+                    marker.style.left = (stps2[idx]._px - 13) + 'px';
+                    marker.style.top = (stps2[idx]._py - 13) + 'px';
+                } else {
+                    stps2[idx].target = document.getElementById('_ep_target').value;
+                    stps2[idx].value = document.getElementById('_ep_value').value;
+                }
+                sessionStorage.setItem('_makroEditSteps', JSON.stringify(stps2));
+                panel.remove();
+            });
+        });
+        document.body.appendChild(marker);
+    });
+}
+
 document.getElementById('showStepsOnPageBtn').addEventListener('click', () => {
     let steps = [];
     try { steps = JSON.parse(document.getElementById('makroStepsInput').value); } catch(e) { alert('Ungültiges JSON in Aktionen'); return; }
@@ -1229,85 +1256,7 @@ document.getElementById('showStepsOnPageBtn').addEventListener('click', () => {
         if (!tabs[0]) return;
         chrome.scripting.executeScript({
             target: { tabId: tabs[0].id },
-            func: (steps) => {
-                document.querySelectorAll('._makroEditMarker, #_makroEditPanel, #_makroEditStyle').forEach(el => el.remove());
-                sessionStorage.setItem('_makroEditSteps', JSON.stringify(steps));
-                const style = document.createElement('style');
-                style.id = '_makroEditStyle';
-                style.textContent = `
-                    ._makroEditMarker{position:absolute;z-index:999998;width:26px;height:26px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:bold;color:#fff;cursor:grab;user-select:none;box-shadow:0 2px 8px rgba(0,0,0,0.5);border:2px solid rgba(255,255,255,0.5);}
-                    ._makroEditMarker:active{cursor:grabbing;}
-                    ._makroEditMarker._click{background:#ff8c00;}
-                    ._makroEditMarker._type{background:#2196f3;}
-                    #_makroEditPanel{position:fixed;z-index:999999;background:#1e1e1e;border:1px solid #555;border-radius:8px;padding:12px;min-width:210px;box-shadow:0 4px 16px rgba(0,0,0,0.7);font-family:system-ui;font-size:12px;color:#e0e0e0;}
-                    #_makroEditPanel label{display:block;font-size:10px;opacity:.6;margin-top:6px;}
-                    #_makroEditPanel input,#_makroEditPanel textarea{width:100%;background:#252525;border:1px solid #444;color:#e0e0e0;border-radius:4px;padding:4px;font-size:12px;box-sizing:border-box;margin:2px 0;}
-                    #_makroEditPanel button{background:rgba(255,140,0,.2);border:1px solid rgba(255,140,0,.4);color:#ff8c00;border-radius:4px;padding:4px 10px;cursor:pointer;font-size:11px;margin:4px 2px 0;}
-                `;
-                document.head.appendChild(style);
-                steps.forEach((step, idx) => {
-                    if (step._px === undefined || step._py === undefined) return;
-                    const marker = document.createElement('div');
-                    marker.className = `_makroEditMarker ${step.type === 'click' ? '_click' : '_type'}`;
-                    marker.textContent = idx + 1;
-                    marker.style.left = (step._px - 13) + 'px';
-                    marker.style.top = (step._py - 13) + 'px';
-                    let isDragging = false, startX, startY, startLeft, startTop;
-                    marker.addEventListener('mousedown', (e) => {
-                        e.preventDefault();
-                        isDragging = false;
-                        startX = e.clientX; startY = e.clientY;
-                        startLeft = parseInt(marker.style.left); startTop = parseInt(marker.style.top);
-                        const onMove = (me) => {
-                            if (!isDragging && (Math.abs(me.clientX - startX) > 3 || Math.abs(me.clientY - startY) > 3)) isDragging = true;
-                            if (isDragging) {
-                                const nl = startLeft + (me.clientX - startX);
-                                const nt = startTop + (me.clientY - startY);
-                                marker.style.left = nl + 'px'; marker.style.top = nt + 'px';
-                                const stps = JSON.parse(sessionStorage.getItem('_makroEditSteps') || '[]');
-                                stps[idx]._px = nl + 13; stps[idx]._py = nt + 13;
-                                sessionStorage.setItem('_makroEditSteps', JSON.stringify(stps));
-                            }
-                        };
-                        const onUp = () => { document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp); };
-                        document.addEventListener('mousemove', onMove);
-                        document.addEventListener('mouseup', onUp);
-                    });
-                    marker.addEventListener('click', (e) => {
-                        if (isDragging) { isDragging = false; return; }
-                        const existing = document.getElementById('_makroEditPanel');
-                        if (existing) existing.remove();
-                        const stps = JSON.parse(sessionStorage.getItem('_makroEditSteps') || '[]');
-                        const s = stps[idx];
-                        const panel = document.createElement('div');
-                        panel.id = '_makroEditPanel';
-                        panel.style.left = Math.min(e.clientX + 12, window.innerWidth - 230) + 'px';
-                        panel.style.top = Math.min(e.clientY + 12, window.innerHeight - 160) + 'px';
-                        if (s.type === 'click') {
-                            panel.innerHTML = `<b>🖱 Schritt ${idx+1}: Klick</b><label>X:</label><input type="number" id="_ep_px" value="${s._px}"><label>Y:</label><input type="number" id="_ep_py" value="${s._py}"><div><button id="_ep_save">💾 Speichern</button><button id="_ep_close">✕</button></div>`;
-                        } else {
-                            panel.innerHTML = `<b>⌨ Schritt ${idx+1}: Text</b><label>Ziel:</label><input type="text" id="_ep_target" value="${(s.target||'').replace(/"/g,'&quot;')}"><label>Wert:</label><textarea id="_ep_value" rows="2">${(s.value||'').replace(/</g,'&lt;')}</textarea><div><button id="_ep_save">💾 Speichern</button><button id="_ep_close">✕</button></div>`;
-                        }
-                        document.body.appendChild(panel);
-                        document.getElementById('_ep_close').addEventListener('click', () => panel.remove());
-                        document.getElementById('_ep_save').addEventListener('click', () => {
-                            const stps2 = JSON.parse(sessionStorage.getItem('_makroEditSteps') || '[]');
-                            if (s.type === 'click') {
-                                stps2[idx]._px = parseInt(document.getElementById('_ep_px').value) || stps2[idx]._px;
-                                stps2[idx]._py = parseInt(document.getElementById('_ep_py').value) || stps2[idx]._py;
-                                marker.style.left = (stps2[idx]._px - 13) + 'px';
-                                marker.style.top = (stps2[idx]._py - 13) + 'px';
-                            } else {
-                                stps2[idx].target = document.getElementById('_ep_target').value;
-                                stps2[idx].value = document.getElementById('_ep_value').value;
-                            }
-                            sessionStorage.setItem('_makroEditSteps', JSON.stringify(stps2));
-                            panel.remove();
-                        });
-                    });
-                    document.body.appendChild(marker);
-                });
-            },
+            func: injectEditMarkersFunc,
             args: [steps]
         });
         document.getElementById('showStepsOnPageBtn').style.display = 'none';
@@ -1353,6 +1302,195 @@ document.getElementById('cancelPageEditsBtn').addEventListener('click', () => {
     document.getElementById('showStepsOnPageBtn').style.display = 'flex';
     document.getElementById('applyPageEditsBtn').style.display = 'none';
     document.getElementById('cancelPageEditsBtn').style.display = 'none';
+});
+
+document.getElementById('cancelPreRunBtn').addEventListener('click', () => {
+    document.getElementById('makroPreRunPanel').style.display = 'none';
+    document.getElementById('mainContainer').style.display = 'block';
+    preRunMakroIdx = null;
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        if (!tabs[0]) return;
+        chrome.scripting.executeScript({
+            target: { tabId: tabs[0].id },
+            func: () => {
+                sessionStorage.removeItem('_makroEditSteps');
+                document.querySelectorAll('._makroEditMarker, #_makroEditPanel, #_makroEditStyle').forEach(el => el.remove());
+            }
+        });
+    });
+});
+
+document.getElementById('runAfterPreRunBtn').addEventListener('click', () => {
+    if (preRunMakroIdx === null) return;
+    const m = makros[preRunMakroIdx];
+    if (!m) return;
+    const idx = preRunMakroIdx;
+    preRunMakroIdx = null;
+    document.getElementById('makroPreRunPanel').style.display = 'none';
+    document.getElementById('mainContainer').style.display = 'block';
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        if (!tabs[0]) return;
+        chrome.scripting.executeScript({
+            target: { tabId: tabs[0].id },
+            func: () => {
+                const stps = JSON.parse(sessionStorage.getItem('_makroEditSteps') || 'null');
+                sessionStorage.removeItem('_makroEditSteps');
+                document.querySelectorAll('._makroEditMarker, #_makroEditPanel, #_makroEditStyle').forEach(el => el.remove());
+                return stps;
+            }
+        }, (results) => {
+            const updated = results?.[0]?.result;
+            if (updated) {
+                makros[idx].steps = updated;
+                chrome.storage.sync.set({ makros });
+            }
+            const finalSteps = updated || m.steps;
+            chrome.scripting.executeScript({
+                target: { tabId: tabs[0].id },
+                func: ({ stepsList, repeat, speedDelay }) => {
+                    const showClickIndicator = (x, y) => {
+                        const dot = document.createElement('div');
+                        dot.style.cssText = `position:fixed;left:${x}px;top:${y}px;width:24px;height:24px;border-radius:50%;background:rgba(255,140,0,0.6);border:2px solid #ff8c00;transform:translate(-50%,-50%) scale(0);animation:_mkRipple 0.55s ease forwards;pointer-events:none;z-index:2147483647;inset:auto;margin:0;`;
+                        const st = document.createElement('style');
+                        st.textContent = `@keyframes _mkRipple{0%{transform:translate(-50%,-50%) scale(0);opacity:1}100%{transform:translate(-50%,-50%) scale(2.8);opacity:0}}`;
+                        document.head.appendChild(st);
+                        try { dot.setAttribute('popover','manual'); document.documentElement.appendChild(dot); dot.showPopover(); }
+                        catch(e) { document.documentElement.appendChild(dot); }
+                        setTimeout(() => { dot.remove(); st.remove(); }, 600);
+                    };
+                    const findTopClickable = (vx, vy) => {
+                        const els = document.elementsFromPoint(vx, vy);
+                        const top = els.find(e => {
+                            const cs = window.getComputedStyle(e);
+                            return cs.pointerEvents !== 'none' && cs.visibility !== 'hidden' && cs.display !== 'none'
+                                && e !== document.documentElement && e !== document.body;
+                        }) || els[0];
+                        if (!top) return null;
+                        let candidate = top;
+                        for (let d = 0; d < 5 && candidate && candidate !== document.body; d++) {
+                            const tag = candidate.tagName.toLowerCase();
+                            const role = (candidate.getAttribute && candidate.getAttribute('role')) || '';
+                            if (['button','a','input','select','label'].includes(tag) ||
+                                role === 'button' || role === 'link' || role === 'menuitem' || role === 'tab') {
+                                return candidate;
+                            }
+                            candidate = candidate.parentElement;
+                        }
+                        return top;
+                    };
+                    const executeAction = (step, attempt) => {
+                        if (step.type === 'click' && step._px !== undefined) {
+                            window.scrollTo({ top: step._py - window.innerHeight / 2, behavior: 'instant' });
+                            const vx = step._px - window.scrollX;
+                            const vy = step._py - window.scrollY;
+                            const el = findTopClickable(vx, vy);
+                            if (!el) {
+                                if (attempt < 3) setTimeout(() => executeAction(step, attempt + 1), 300);
+                                return;
+                            }
+                            el.focus();
+                            const rect = el.getBoundingClientRect();
+                            const cx = rect.left + rect.width / 2;
+                            const cy = rect.top + rect.height / 2;
+                            showClickIndicator(cx, cy);
+                            el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, composed: true, clientX: cx, clientY: cy }));
+                            el.dispatchEvent(new MouseEvent('mouseup',   { bubbles: true, cancelable: true, composed: true, clientX: cx, clientY: cy }));
+                            el.dispatchEvent(new MouseEvent('click',     { bubbles: true, cancelable: true, composed: true, clientX: cx, clientY: cy }));
+                            try { el.click(); } catch(e2) {}
+                        } else if (step.type === 'type') {
+                            let el = null;
+                            try { el = document.querySelector(step.target); } catch (e) {}
+                            if (!el && step._px !== undefined) {
+                                window.scrollTo({ top: step._py - window.innerHeight / 2, behavior: 'instant' });
+                                el = findTopClickable(step._px - window.scrollX, step._py - window.scrollY);
+                            }
+                            if (!el) {
+                                if (attempt < 3) setTimeout(() => executeAction(step, attempt + 1), 300);
+                                return;
+                            }
+                            el.focus();
+                            if (el.isContentEditable || el.tagName === 'DIV') {
+                                document.execCommand('selectAll', false, null);
+                                document.execCommand('insertText', false, step.value);
+                                el.dispatchEvent(new Event('input', { bubbles: true }));
+                            } else {
+                                const proto = el.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+                                const nativeSetter = Object.getOwnPropertyDescriptor(proto, 'value');
+                                if (nativeSetter && nativeSetter.set) { nativeSetter.set.call(el, step.value); } else { el.value = step.value; }
+                                el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: step.value }));
+                                el.dispatchEvent(new Event('change', { bubbles: true }));
+                            }
+                        }
+                    };
+                    const stepDelay = speedDelay || 700;
+                    const pauseDelay = 900;
+                    for (let r = 0; r < repeat; r++) {
+                        const runOffset = r * (stepsList.length * stepDelay + pauseDelay);
+                        stepsList.forEach((step, i) => {
+                            setTimeout(() => executeAction(step, 0), runOffset + i * stepDelay);
+                        });
+                    }
+                },
+                args: [{ stepsList: finalSteps, repeat: m.repeat || 1, speedDelay: m.speedDelay || 700 }]
+            });
+        });
+    });
+});
+
+document.getElementById('showStepOnPageBtn').addEventListener('click', () => {
+    if (!stepPlaybackState) return;
+    const step = stepPlaybackState.makro.steps[stepPlaybackState.stepIndex];
+    if (!step || step._px === undefined) return;
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        if (!tabs[0]) return;
+        chrome.scripting.executeScript({
+            target: { tabId: tabs[0].id },
+            func: (px, py, stepIdx) => {
+                document.querySelectorAll('._makroEditMarker, #_makroEditPanel, #_makroEditStyle').forEach(el => el.remove());
+                const style = document.createElement('style');
+                style.id = '_makroEditStyle';
+                style.textContent = `
+                    ._makroEditMarker{position:absolute;z-index:999998;width:26px;height:26px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:bold;color:#fff;cursor:grab;user-select:none;box-shadow:0 2px 8px rgba(0,0,0,0.5);border:2px solid rgba(255,255,255,0.5);}
+                    ._makroEditMarker:active{cursor:grabbing;}
+                    ._makroEditMarker._click{background:#ff8c00;}
+                `;
+                document.head.appendChild(style);
+                const marker = document.createElement('div');
+                marker.className = '_makroEditMarker _click';
+                marker.textContent = stepIdx + 1;
+                marker.style.left = (px - 13) + 'px';
+                marker.style.top = (py - 13) + 'px';
+                let isDragging = false, startX, startY, startLeft, startTop;
+                marker.addEventListener('mousedown', (e) => {
+                    e.preventDefault();
+                    isDragging = false;
+                    startX = e.clientX; startY = e.clientY;
+                    startLeft = parseInt(marker.style.left); startTop = parseInt(marker.style.top);
+                    const onMove = (me) => {
+                        if (!isDragging && (Math.abs(me.clientX - startX) > 3 || Math.abs(me.clientY - startY) > 3)) isDragging = true;
+                        if (isDragging) {
+                            marker.style.left = (startLeft + (me.clientX - startX)) + 'px';
+                            marker.style.top = (startTop + (me.clientY - startY)) + 'px';
+                        }
+                    };
+                    const onUp = () => {
+                        document.removeEventListener('mousemove', onMove);
+                        document.removeEventListener('mouseup', onUp);
+                        if (isDragging) {
+                            const newPx = parseInt(marker.style.left) + 13;
+                            const newPy = parseInt(marker.style.top) + 13;
+                            chrome.runtime.sendMessage({ _makroStepPosUpdate: { px: newPx, py: newPy } });
+                        }
+                    };
+                    document.addEventListener('mousemove', onMove);
+                    document.addEventListener('mouseup', onUp);
+                });
+                document.body.appendChild(marker);
+                window.scrollTo({ top: py - window.innerHeight / 2, behavior: 'smooth' });
+            },
+            args: [step._px, step._py, stepPlaybackState.stepIndex]
+        });
+    });
 });
 
 document.getElementById('saveMakroBtn').addEventListener('click', () => {

@@ -354,6 +354,7 @@
         <input type="number" id="stepEditPx" style="width:80px;" placeholder="X">
         <input type="number" id="stepEditPy" style="width:80px;" placeholder="Y">
       </div>
+      <button id="showStepOnPageBtn" class="btn-icon" style="display:none; margin-top:6px;" title="Klickposition auf Seite anzeigen und verschieben">📍 Auf Seite zeigen</button>
     </div>
     <div id="stepEditType" style="display:none;" class="field-block">
       <label class="field-label">Text korrigieren</label>
@@ -364,6 +365,17 @@
     <div class="editor-footer-buttons" style="margin-top:12px;">
       <button id="stepPlaybackSkipBtn" class="btn-icon-elegant" style="flex:1;">⏭ Überspringen</button>
       <button id="stepPlaybackRunBtn" class="primary-btn" style="flex:1;">▶ Ausführen</button>
+    </div>
+  </div>
+
+  <div id="makroPreRunPanel" style="display:none;">
+    <div class="input-header">
+      <span style="font-weight:600; font-size:14px;">🎯 Klickpositionen prüfen</span>
+      <button id="cancelPreRunBtn" class="btn-icon">✕</button>
+    </div>
+    <p style="font-size:12px; opacity:0.7; margin:0;">Markierungen auf der Seite sind verschiebbar. Änderungen werden beim Ausführen gespeichert.</p>
+    <div class="editor-footer-buttons">
+      <button id="runAfterPreRunBtn" class="primary-btn icon-btn-large" style="flex:1;">▶ Ausführen</button>
     </div>
   </div>
 
