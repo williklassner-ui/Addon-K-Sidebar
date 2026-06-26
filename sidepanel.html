@@ -51,6 +51,12 @@
         <input type="text" id="searchMakrosInput" placeholder="⌕ Makros durchsuchen...">
         <button id="recordMakroBtn" class="record-btn" title="Makro live im aktiven Tab aufnehmen"><span class="record-dot"></span> Aufnahme</button>
       </div>
+      <div id="recordingWaitBar" style="display:none; align-items:center; gap:8px; padding:6px 0; border-bottom:1px solid #333; margin-bottom:6px;">
+        <input type="number" id="insertWaitDuration" value="1000" min="100" max="60000" step="100" style="width:70px; font-size:12px;">
+        <span style="font-size:11px; opacity:0.6;">ms</span>
+        <button id="insertWaitBtn" class="btn-icon" style="font-size:10px;">⏱ Pause einfügen</button>
+        <button id="insertReloadBtn" class="btn-icon" style="font-size:10px;">🔄 Reload warten</button>
+      </div>
       <div id="makrosList"></div>
     </div>
 
@@ -232,6 +238,26 @@
       <small style="opacity:0.5; font-size:11px;">Pause zwischen Schritten (schnell ↔ langsam)</small>
     </div>
 
+    <div class="field-block">
+      <label class="field-label">Aufnahme-Methode</label>
+      <div class="method-toggle">
+        <button class="method-btn" id="methodBtn1" data-method="1" title="Selektor-basiert: findet Elemente anhand CSS-Selektor (robuster)">M1 – Selektor</button>
+        <button class="method-btn active" id="methodBtn2" data-method="2" title="Koordinaten-basiert: nutzt Pixel-Position (aktuell)">M2 – Koordinaten</button>
+      </div>
+      <input type="hidden" id="makroMethodInput" value="2">
+      <small style="opacity:0.5; font-size:11px;">M1 = selektor-basiert (empfohlen), M2 = koordinaten-basiert</small>
+    </div>
+
+    <div class="field-block">
+      <label class="field-label">Schritt einfügen</label>
+      <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
+        <button id="addWaitStepBtn" class="btn-icon-elegant">⏱ Pause</button>
+        <input type="number" id="addWaitStepDuration" value="1000" min="100" max="60000" step="100" style="width:70px; font-size:12px;">
+        <span style="font-size:11px; opacity:0.6;">ms</span>
+        <button id="addReloadStepBtn" class="btn-icon-elegant">🔄 Reload warten</button>
+      </div>
+    </div>
+
     <div class="editor-footer-buttons">
       <button id="cancelMakroBtn" class="danger-btn icon-btn-large" title="Abbrechen" style="background: #cf6679; flex:1;">✕</button>
       <button id="saveMakroBtn" class="primary-btn icon-btn-large" title="Speichern" style="flex:1;">💾</button>
@@ -340,6 +366,22 @@
     </div>
   </div>
 
+  <div id="recordMethodDialog" style="display:none;">
+    <div class="input-header">
+      <span style="font-weight:600; font-size:14px;">🎙 Aufnahme starten</span>
+    </div>
+    <p style="font-size:12px; opacity:0.7; margin:0;">Wähle die Aufnahme-Methode:</p>
+    <div class="method-toggle" style="margin-top:8px;">
+      <button class="method-btn" id="dialogMethodBtn1" data-method="1" title="Selektor-basiert: mehr Schritt-Typen, robuster">M1 – Selektor</button>
+      <button class="method-btn active" id="dialogMethodBtn2" data-method="2" title="Koordinaten-basiert: aktuelles Verhalten">M2 – Koordinaten</button>
+    </div>
+    <small style="opacity:0.5; font-size:11px; display:block; margin-top:4px;">M1 erfasst Doppelklick, Rechtsklick, Scrollen, Tastatur-Shortcuts u.v.m.</small>
+    <div class="editor-footer-buttons" style="margin-top:14px;">
+      <button id="cancelRecordDialogBtn" class="danger-btn" style="flex:1;">✕ Abbrechen</button>
+      <button id="startRecordBtn" class="primary-btn icon-btn-large" style="flex:1;"><span class="record-dot"></span> Aufnehmen</button>
+    </div>
+  </div>
+
   <div id="stepPlaybackPanel" style="display:none;">
     <div class="input-header">
       <h3 id="stepPlaybackTitle">Makro</h3>
@@ -359,6 +401,45 @@
     <div id="stepEditType" style="display:none;" class="field-block">
       <label class="field-label">Text korrigieren</label>
       <input type="text" id="stepEditValue" placeholder="Wert...">
+    </div>
+    <div id="stepEditWait" style="display:none;" class="field-block">
+      <label class="field-label">Pausendauer (ms)</label>
+      <input type="number" id="stepEditWaitDuration" style="width:100px;" placeholder="ms" min="100">
+    </div>
+    <div id="stepEditWaitReload" style="display:none;" class="field-block">
+      <label class="field-label">Max. Wartezeit (ms)</label>
+      <input type="number" id="stepEditReloadTimeout" style="width:100px;" placeholder="ms" min="1000">
+    </div>
+    <div id="stepEditNavigate" style="display:none;" class="field-block">
+      <label class="field-label">URL</label>
+      <input type="text" id="stepEditUrl" placeholder="https://..." style="width:100%;">
+    </div>
+    <div id="stepEditScroll" style="display:none;" class="field-block">
+      <label class="field-label">Selektor oder X/Y</label>
+      <input type="text" id="stepEditScrollSelector" placeholder="CSS-Selektor (optional)" style="width:100%; margin-bottom:4px;">
+      <div class="input-row">
+        <input type="number" id="stepEditScrollX" style="width:80px;" placeholder="X">
+        <input type="number" id="stepEditScrollY" style="width:80px;" placeholder="Y">
+      </div>
+    </div>
+    <div id="stepEditKeypress" style="display:none;" class="field-block">
+      <label class="field-label">Taste</label>
+      <input type="text" id="stepEditKey" placeholder="Enter, Tab, Escape, a, ..." style="width:100%; margin-bottom:6px;">
+      <div style="display:flex; gap:10px; font-size:12px;">
+        <label><input type="checkbox" id="stepEditModCtrl"> Ctrl</label>
+        <label><input type="checkbox" id="stepEditModShift"> Shift</label>
+        <label><input type="checkbox" id="stepEditModAlt"> Alt</label>
+      </div>
+    </div>
+    <div id="stepEditSelect" style="display:none;" class="field-block">
+      <label class="field-label">Selektor</label>
+      <input type="text" id="stepEditSelectSelector" placeholder="CSS-Selektor" style="width:100%; margin-bottom:4px;">
+      <label class="field-label">Wert</label>
+      <input type="text" id="stepEditSelectValue" placeholder="Option-Wert">
+    </div>
+    <div id="stepEditSelectorOnly" style="display:none;" class="field-block">
+      <label class="field-label">Selektor</label>
+      <input type="text" id="stepEditSelector" placeholder="CSS-Selektor" style="width:100%;">
     </div>
     <button id="stepEditSaveBtn" class="btn-icon-elegant" style="width:100%; margin-top:4px;">💾 Schritt speichern</button>
 
