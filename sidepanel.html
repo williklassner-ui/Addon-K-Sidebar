@@ -230,6 +230,17 @@
     </div>
 
     <div class="field-block">
+      <label class="field-label">Warte nach Ausführung bis wiederholt wird</label>
+      <div class="input-row" style="align-items:center; gap:10px;">
+        <input type="number" id="makroRepeatDelayInput" min="0" max="600000" step="100" value="0" style="width:90px;">
+        <span style="font-size:12px; opacity:0.6;">ms</span>
+      </div>
+      <label style="font-size:12px; display:flex; align-items:center; gap:6px; cursor:pointer; margin-top:8px;">
+        <input type="checkbox" id="makroWaitReloadInput"> 🔄 Warte bis Seite neugeladen wurde (vor Wiederholung)
+      </label>
+    </div>
+
+    <div class="field-block">
       <label class="field-label">Geschwindigkeit</label>
       <div class="input-row" style="align-items:center; gap:10px;">
         <input type="range" id="makroSpeedInput" min="100" max="3000" step="100" value="700" style="flex:1;">
@@ -446,17 +457,6 @@
     <div class="editor-footer-buttons" style="margin-top:12px;">
       <button id="stepPlaybackSkipBtn" class="btn-icon-elegant" style="flex:1;">⏭ Überspringen</button>
       <button id="stepPlaybackRunBtn" class="primary-btn" style="flex:1;">▶ Ausführen</button>
-    </div>
-  </div>
-
-  <div id="makroPreRunPanel" style="display:none;">
-    <div class="input-header">
-      <span style="font-weight:600; font-size:14px;">🎯 Klickpositionen prüfen</span>
-      <button id="cancelPreRunBtn" class="btn-icon">✕</button>
-    </div>
-    <p style="font-size:12px; opacity:0.7; margin:0;">Markierungen auf der Seite sind verschiebbar. Änderungen werden beim Ausführen gespeichert.</p>
-    <div class="editor-footer-buttons">
-      <button id="runAfterPreRunBtn" class="primary-btn icon-btn-large" style="flex:1;">▶ Ausführen</button>
     </div>
   </div>
 
