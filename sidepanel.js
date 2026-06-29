@@ -496,9 +496,9 @@ function getNoteCardHtml(n, i) {
                 content += '\n' + n.todos.map(t => (t.done ? '✓ ' : '○ ') + t.text).join('\n');
             }
             navigator.clipboard.writeText(content).then(() => {
-                const orig = titleEl.textContent;
-                titleEl.textContent = '✓ Kopiert';
-                setTimeout(() => { titleEl.textContent = orig; }, 1200);
+                const orig = titleEl.innerHTML;
+                titleEl.innerHTML = '✓ Kopiert';
+                setTimeout(() => { titleEl.innerHTML = orig; }, 1200);
             });
         });
     }
@@ -1924,7 +1924,7 @@ function injectOneRun({ stepsList, speedDelay }) {
             const el = findEl(step); if (el) { el.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, composed: true, clientX: vx, clientY: vy })); showClickRipple(vx, vy); }
         }
     };
-    const stepDelay = speedDelay || 700;
+    const stepDelay = (speedDelay !== undefined && speedDelay !== null) ? speedDelay : 700;
     let cumOffset = 0;
     stepsList.forEach((step) => {
         const delay = cumOffset;
@@ -1946,7 +1946,7 @@ function playMakroFull(tabId, m, steps, overrideRepeat) {
     runningMakroState = {
         tabId,
         steps: steps || m.steps,
-        stepDelay: m.speedDelay || 0,
+        stepDelay: (m.speedDelay !== undefined && m.speedDelay !== null) ? m.speedDelay : 700,
         repeat: Math.max(1, overrideRepeat || m.repeat || 1),
         current: 0,
         repeatDelay: Math.max(0, m.repeatDelay || 0),
