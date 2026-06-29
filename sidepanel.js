@@ -25,6 +25,8 @@ function updatePlaybackBar() {
     const bar = document.getElementById('makroPlaybackBar');
     const counter = document.getElementById('makroPlaybackCounter');
     const pauseBtn = document.getElementById('makroPlaybackPauseBtn');
+    const titleEl = document.getElementById('makroPlaybackTitle');
+    const fill = document.getElementById('makroPlaybackProgressFill');
     if (!runningMakroState) {
         bar.style.display = 'none';
         return;
@@ -33,8 +35,10 @@ function updatePlaybackBar() {
     const cur = (runningMakroState.current || 0) + 1;
     const tot = runningMakroState.repeat || 1;
     const paused = runningMakroState.paused;
-    counter.textContent = (paused ? '⏸ ' : '⏵ ') + cur + ' / ' + tot;
+    counter.textContent = cur + ' / ' + tot;
     pauseBtn.textContent = paused ? '▶' : '⏸';
+    if (titleEl) titleEl.textContent = (paused ? '⏸ ' : '⏵ ') + (runningMakroState.title || 'Makro');
+    if (fill) fill.style.width = Math.round(((cur - 1) / tot) * 100) + '%';
 }
 
 const tabNames = {
@@ -435,7 +439,7 @@ function renderNotes() {
                         <span>${meta.icon ? meta.icon + ' ' : ''}${gName}<span class="group-count-badge">${totalCount}</span></span>
                     </div>
                     <div class="group-right-wrapper">
-                        <span class="badge">${totalCount}</span>
+                        <button class="btn-icon" data-notegroupedit="${gName}" title="Gruppe bearbeiten" style="font-size:10px; padding:2px 5px; opacity:0.7;">✎</button>
                         <span style="font-size:10px; padding-left:4px;">${isCollapsed ? '►' : '▼'}</span>
                     </div>
                 </div>
@@ -487,21 +491,6 @@ function getNoteCardHtml(n, i) {
                 ${todoHtml}
             </div>
     `;
-    const titleEl = noteCardEl.querySelector(`[data-note-copy-idx="${i}"]`);
-    if (titleEl) {
-        titleEl.addEventListener('click', (e) => {
-            e.stopPropagation();
-            let content = n.text || '';
-            if (n.todos && n.todos.length) {
-                content += '\n' + n.todos.map(t => (t.done ? '✓ ' : '○ ') + t.text).join('\n');
-            }
-            navigator.clipboard.writeText(content).then(() => {
-                const orig = titleEl.innerHTML;
-                titleEl.innerHTML = '✓ Kopiert';
-                setTimeout(() => { titleEl.innerHTML = orig; }, 1200);
-            });
-        });
-    }
     return noteCardEl.outerHTML;
 }
 
@@ -755,7 +744,7 @@ document.getElementById('makrosList').addEventListener('click', (e) => {
             document.getElementById('makroStepsInput').value = JSON.stringify(m.steps, null, 2);
             document.getElementById('makroColor').value = m.color || '#ff8c00';
             document.getElementById('makroRepeatInput').value = m.repeat || 1;
-            const sd = m.speedDelay || 0;
+            const sd = (m.speedDelay !== undefined) ? m.speedDelay : 700;
             const speedActive = sd > 0;
             document.getElementById('makroSpeedToggle').checked = speedActive;
             document.getElementById('makroSpeedInput').value = speedActive ? sd : 700;
@@ -766,13 +755,8 @@ document.getElementById('makrosList').addEventListener('click', (e) => {
             document.getElementById('makroLockScrollInput').checked = !!m.lockScroll;
             const mMethod = m.method || 2;
             document.getElementById('makroMethodInput').value = mMethod;
-            if (mMethod === 1) {
-                document.getElementById('methodBtn1').classList.add('active');
-                document.getElementById('methodBtn2').classList.remove('active');
-            } else {
-                document.getElementById('methodBtn2').classList.add('active');
-                document.getElementById('methodBtn1').classList.remove('active');
-            }
+            ['1','2','3','4'].forEach(n => document.getElementById('methodBtn' + n).classList.remove('active'));
+            document.getElementById('methodBtn' + mMethod).classList.add('active');
             document.getElementById('makroRepeatDelayInput').value = m.repeatDelay || 0;
             document.getElementById('makroWaitReloadInput').checked = !!m.waitReloadBetweenRepeats;
 
@@ -933,7 +917,38 @@ function injectRecorder(tabId) {
             document.addEventListener('click', window._makroClickHandler, { capture: true });
             document.addEventListener('change', window._makroChangeHandler, { capture: true });
 
-            if (method === 1) {
+            if (method === 3 || method === 1) {
+                // M3/M1: click als {selector, _px, _py} speichern (statt {target, _px, _py})
+                // Überschreibe den Standard-click-Handler für M3 um selector-Feld korrekt zu setzen
+                if (method === 3) {
+                    document.removeEventListener('click', window._makroClickHandler, { capture: true });
+                    window._makroClickHandler = (e) => {
+                        try {
+                            let target = e.target;
+                            let candidate = e.target;
+                            for (let d = 0; d < 5 && candidate && candidate !== document.body; d++) {
+                                const tag = candidate.tagName.toLowerCase();
+                                const role = (candidate.getAttribute && candidate.getAttribute('role')) || '';
+                                if (['button','a','input','select','label'].includes(tag) ||
+                                    role === 'button' || role === 'link' || role === 'menuitem' || role === 'tab') {
+                                    target = candidate; break;
+                                }
+                                candidate = candidate.parentElement;
+                            }
+                            const path = getPath(target);
+                            const rect = target.getBoundingClientRect();
+                            const px = Math.round(rect.left + rect.width / 2 + window.scrollX);
+                            const py = Math.round(rect.top + rect.height / 2 + window.scrollY);
+                            chrome.runtime.sendMessage({ _makroRecStep: { type: 'click', selector: path, _px: px, _py: py } });
+                            e.target.classList.remove('_makro-hover');
+                            target.classList.add('_makro-recorded');
+                            setTimeout(() => target.classList.remove('_makro-recorded'), 800);
+                        } catch (err) {}
+                    };
+                    document.addEventListener('click', window._makroClickHandler, { capture: true });
+                }
+            }
+            if (method === 1 || method === 3) {
                 // M1: dblclick
                 window._makroDblClickHandler = (e) => {
                     try {
@@ -1003,6 +1018,40 @@ function injectRecorder(tabId) {
                 document.addEventListener('scroll', window._makroScrollHandler, { capture: true, passive: true });
                 document.addEventListener('change', window._makroSelectHandler, { capture: true });
             }
+            if (method === 4) {
+                // M4: Mausbewegungen 1:1 aufzeichnen (throttled 40ms)
+                let _m4LastSend = 0;
+                let _m4Points = [];
+                let _m4StartT = Date.now();
+                window._makroMoveHandler = (e) => {
+                    const now = Date.now();
+                    if (now - _m4LastSend < 40) return;
+                    _m4LastSend = now;
+                    const px = Math.round(e.clientX + window.scrollX);
+                    const py = Math.round(e.clientY + window.scrollY);
+                    _m4Points.push({ x: px, y: py, t: now - _m4StartT });
+                };
+                // Bei Klick: aktuelle Punkte als mousemovepath-Schritt senden, dann click-Schritt
+                document.removeEventListener('click', window._makroClickHandler, { capture: true });
+                window._makroClickHandler = (e) => {
+                    try {
+                        const px = Math.round(e.clientX + window.scrollX);
+                        const py = Math.round(e.clientY + window.scrollY);
+                        const now = Date.now();
+                        _m4Points.push({ x: px, y: py, t: now - _m4StartT });
+                        if (_m4Points.length > 1) {
+                            chrome.runtime.sendMessage({ _makroRecStep: { type: 'mousemovepath', points: _m4Points.slice() } });
+                        }
+                        _m4Points = [];
+                        _m4StartT = Date.now();
+                        chrome.runtime.sendMessage({ _makroRecStep: { type: 'click', selector: '', _px: px, _py: py } });
+                        e.target.classList.add('_makro-recorded');
+                        setTimeout(() => e.target.classList.remove('_makro-recorded'), 800);
+                    } catch(err) {}
+                };
+                document.addEventListener('mousemove', window._makroMoveHandler, { capture: true, passive: true });
+                document.addEventListener('click', window._makroClickHandler, { capture: true });
+            }
         },
         args: [recordingMethod]
     });
@@ -1046,27 +1095,21 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
 });
 
 // Method-Toggle im Editor
-document.getElementById('methodBtn1').addEventListener('click', () => {
-    document.getElementById('methodBtn1').classList.add('active');
-    document.getElementById('methodBtn2').classList.remove('active');
-    document.getElementById('makroMethodInput').value = '1';
-});
-document.getElementById('methodBtn2').addEventListener('click', () => {
-    document.getElementById('methodBtn2').classList.add('active');
-    document.getElementById('methodBtn1').classList.remove('active');
-    document.getElementById('makroMethodInput').value = '2';
+['1','2','3','4'].forEach(n => {
+    document.getElementById('methodBtn' + n).addEventListener('click', () => {
+        ['1','2','3','4'].forEach(m => document.getElementById('methodBtn' + m).classList.remove('active'));
+        document.getElementById('methodBtn' + n).classList.add('active');
+        document.getElementById('makroMethodInput').value = n;
+    });
 });
 
 // Aufnahme-Dialog Method-Toggle
-document.getElementById('dialogMethodBtn1').addEventListener('click', () => {
-    document.getElementById('dialogMethodBtn1').classList.add('active');
-    document.getElementById('dialogMethodBtn2').classList.remove('active');
-    recordingMethod = 1;
-});
-document.getElementById('dialogMethodBtn2').addEventListener('click', () => {
-    document.getElementById('dialogMethodBtn2').classList.add('active');
-    document.getElementById('dialogMethodBtn1').classList.remove('active');
-    recordingMethod = 2;
+['1','2','3','4'].forEach(n => {
+    document.getElementById('dialogMethodBtn' + n).addEventListener('click', () => {
+        ['1','2','3','4'].forEach(m => document.getElementById('dialogMethodBtn' + m).classList.remove('active'));
+        document.getElementById('dialogMethodBtn' + n).classList.add('active');
+        recordingMethod = parseInt(n);
+    });
 });
 
 document.getElementById('cancelRecordDialogBtn').addEventListener('click', () => {
@@ -1147,12 +1190,13 @@ document.getElementById('recordMakroBtn').addEventListener('click', () => {
                     if (window._makroKeyHandler) document.removeEventListener('keydown', window._makroKeyHandler, { capture: true });
                     if (window._makroScrollHandler) document.removeEventListener('scroll', window._makroScrollHandler, { capture: true });
                     if (window._makroSelectHandler) document.removeEventListener('change', window._makroSelectHandler, { capture: true });
+                    if (window._makroMoveHandler) document.removeEventListener('mousemove', window._makroMoveHandler, { capture: true });
 
                     delete window._makroClickHandler; delete window._makroChangeHandler;
                     delete window._makroHoverHandler; delete window._makroMouseOutHandler;
                     delete window._makroDblClickHandler; delete window._makroContextHandler;
                     delete window._makroKeyHandler; delete window._makroScrollHandler;
-                    delete window._makroSelectHandler;
+                    delete window._makroSelectHandler; delete window._makroMoveHandler;
                     delete window._makroRecordingActive; delete window._makroRecordingMethod;
 
                     const s = document.getElementById('_makroStyle');
@@ -1175,6 +1219,7 @@ document.getElementById('recordMakroBtn').addEventListener('click', () => {
                             steps: recordedSteps,
                             color: "#ff8c00",
                             speedDelay: 700,
+                            scrollToEnd: true,
                             domain: recDomain,
                             method: recordingMethod
                         };
@@ -1202,7 +1247,7 @@ function closeMakroEditMode() {
     document.getElementById('makroSpeedRow').style.display = 'flex';
     document.getElementById('makroAskRepeatInput').checked = false;
     document.getElementById('makroScrollToStartInput').checked = false;
-    document.getElementById('makroScrollToEndInput').checked = false;
+    document.getElementById('makroScrollToEndInput').checked = true;
     document.getElementById('makroLockScrollInput').checked = false;
     document.getElementById('showStepsOnPageBtn').style.display = 'flex';
     document.getElementById('applyPageEditsBtn').style.display = 'none';
@@ -1218,7 +1263,7 @@ function closeMakroEditMode() {
             func: () => {
                 sessionStorage.removeItem('_makroEditSteps');
                 if (window._makroMarkerScrollHandler) { window.removeEventListener('scroll', window._makroMarkerScrollHandler); delete window._makroMarkerScrollHandler; }
-                document.querySelectorAll('#_makroMarkerContainer').forEach(c => { if(c._makroMutObs) c._makroMutObs.disconnect(); try{c.hidePopover();}catch(e){} });
+                document.querySelectorAll('#_makroMarkerContainer').forEach(c => { if(c._makroMutObs) c._makroMutObs.disconnect(); if(c._makroDialogObs) c._makroDialogObs.disconnect(); try{c.hidePopover();}catch(e){} });
                 document.querySelectorAll('._makroEditMarker, #_makroEditPanel, #_makroEditStyle, #_makroMarkerContainer').forEach(el => el.remove());
             }
         });
@@ -1388,7 +1433,7 @@ function closeStepPanel() {
             target: { tabId: tabs[0].id },
             func: () => {
                 if (window._makroMarkerScrollHandler) { window.removeEventListener('scroll', window._makroMarkerScrollHandler); delete window._makroMarkerScrollHandler; }
-                document.querySelectorAll('#_makroMarkerContainer').forEach(c => { if(c._makroMutObs) c._makroMutObs.disconnect(); try{c.hidePopover();}catch(e){} });
+                document.querySelectorAll('#_makroMarkerContainer').forEach(c => { if(c._makroMutObs) c._makroMutObs.disconnect(); if(c._makroDialogObs) c._makroDialogObs.disconnect(); try{c.hidePopover();}catch(e){} });
                 document.querySelectorAll('._makroEditMarker, #_makroEditPanel, #_makroEditStyle, #_makroMarkerContainer').forEach(el => el.remove());
             }
         });
@@ -1443,7 +1488,7 @@ document.getElementById('stepPlaybackRunBtn').addEventListener('click', () => {
         if (tabs[0]) {
             chrome.scripting.executeScript({
                 target: { tabId: tabs[0].id },
-                func: () => { document.querySelectorAll('#_makroMarkerContainer').forEach(c => { if(c._makroMutObs) c._makroMutObs.disconnect(); try{c.hidePopover();}catch(e){} }); document.querySelectorAll('._makroEditMarker, #_makroEditPanel, #_makroEditStyle, #_makroMarkerContainer').forEach(el => el.remove()); }
+                func: () => { document.querySelectorAll('#_makroMarkerContainer').forEach(c => { if(c._makroMutObs) c._makroMutObs.disconnect(); if(c._makroDialogObs) c._makroDialogObs.disconnect(); try{c.hidePopover();}catch(e){} }); document.querySelectorAll('._makroEditMarker, #_makroEditPanel, #_makroEditStyle, #_makroMarkerContainer').forEach(el => el.remove()); }
             });
         }
     });
@@ -1607,7 +1652,7 @@ document.getElementById('stepEditSaveBtn').addEventListener('click', () => {
 
 // Page-Overlay: Schritte auf Seite anzeigen und bearbeiten
 function injectEditMarkersFunc(steps) {
-    document.querySelectorAll('#_makroMarkerContainer').forEach(c => { if(c._makroMutObs) c._makroMutObs.disconnect(); try{c.hidePopover();}catch(e){} });
+    document.querySelectorAll('#_makroMarkerContainer').forEach(c => { if(c._makroMutObs) c._makroMutObs.disconnect(); if(c._makroDialogObs) c._makroDialogObs.disconnect(); try{c.hidePopover();}catch(e){} });
     document.querySelectorAll('._makroEditMarker, #_makroEditPanel, #_makroEditStyle, #_makroMarkerContainer').forEach(el => el.remove());
     sessionStorage.setItem('_makroEditSteps', JSON.stringify(steps));
     const style = document.createElement('style');
@@ -1715,13 +1760,18 @@ function injectEditMarkersFunc(steps) {
     try { container.showPopover(); } catch(e) {}
 
     // MutationObserver: Container im Top Layer re-promoten wenn neues Element erscheint
-    const _obs = new MutationObserver(() => {
+    const _repromote = () => {
         try { container.hidePopover(); container.showPopover(); } catch(e) {
             if (document.body.lastElementChild !== container) document.body.appendChild(container);
         }
-    });
+    };
+    const _obs = new MutationObserver(_repromote);
     _obs.observe(document.body, { childList: true });
     container._makroMutObs = _obs;
+    // Zweiter Observer: feuert wenn <dialog> via showModal() das 'open'-Attribut erhält
+    const _dialogObs = new MutationObserver(_repromote);
+    _dialogObs.observe(document.documentElement, { subtree: true, attributes: true, attributeFilter: ['open', 'aria-modal'] });
+    container._makroDialogObs = _dialogObs;
 
     // Update fixed-position markers on scroll
     const updateMarkers = () => {
@@ -1764,7 +1814,7 @@ document.getElementById('applyPageEditsBtn').addEventListener('click', () => {
                 const steps = JSON.parse(sessionStorage.getItem('_makroEditSteps') || '[]');
                 sessionStorage.removeItem('_makroEditSteps');
                 if (window._makroMarkerScrollHandler) { window.removeEventListener('scroll', window._makroMarkerScrollHandler); delete window._makroMarkerScrollHandler; }
-                document.querySelectorAll('#_makroMarkerContainer').forEach(c => { if(c._makroMutObs) c._makroMutObs.disconnect(); try{c.hidePopover();}catch(e){} });
+                document.querySelectorAll('#_makroMarkerContainer').forEach(c => { if(c._makroMutObs) c._makroMutObs.disconnect(); if(c._makroDialogObs) c._makroDialogObs.disconnect(); try{c.hidePopover();}catch(e){} });
                 document.querySelectorAll('._makroEditMarker, #_makroEditPanel, #_makroEditStyle, #_makroMarkerContainer').forEach(el => el.remove());
                 return steps;
             }
@@ -1787,7 +1837,7 @@ document.getElementById('cancelPageEditsBtn').addEventListener('click', () => {
                 func: () => {
                     sessionStorage.removeItem('_makroEditSteps');
                     if (window._makroMarkerScrollHandler) { window.removeEventListener('scroll', window._makroMarkerScrollHandler); delete window._makroMarkerScrollHandler; }
-                    document.querySelectorAll('#_makroMarkerContainer').forEach(c => { if(c._makroMutObs) c._makroMutObs.disconnect(); try{c.hidePopover();}catch(e){} });
+                    document.querySelectorAll('#_makroMarkerContainer').forEach(c => { if(c._makroMutObs) c._makroMutObs.disconnect(); if(c._makroDialogObs) c._makroDialogObs.disconnect(); try{c.hidePopover();}catch(e){} });
                     document.querySelectorAll('._makroEditMarker, #_makroEditPanel, #_makroEditStyle, #_makroMarkerContainer').forEach(el => el.remove());
                 }
             });
@@ -1852,21 +1902,41 @@ function injectOneRun({ stepsList, speedDelay }) {
         }
         return top;
     };
+    // Animierter Maus-Cursor
+    function getCursor() {
+        let cur = document.getElementById('_makroCursor');
+        if (!cur) {
+            const host = document.getElementById('_makroMarkerContainer') || document.body;
+            cur = document.createElement('div');
+            cur.id = '_makroCursor';
+            cur.style.cssText = 'position:fixed;pointer-events:none;z-index:2147483647;width:20px;height:20px;transition:left 0.12s ease,top 0.12s ease;transform:translate(-3px,-2px);';
+            cur.innerHTML = '<svg width="20" height="20" viewBox="0 0 20 20" xmlns="http://www.w3.org/2000/svg"><polygon points="3,2 3,17 7,13 10,19 12,18 9,12 15,12" fill="white" stroke="#333" stroke-width="1.5" stroke-linejoin="round"/></svg>';
+            host.appendChild(cur);
+        }
+        return cur;
+    }
+    function moveCursorTo(vx, vy) {
+        const cur = getCursor();
+        cur.style.left = vx + 'px';
+        cur.style.top = vy + 'px';
+    }
     const findEl = (step) => {
-        if (step.selector) { try { return document.querySelector(step.selector); } catch(e) {} }
+        const sel = step.selector || step.target;
+        if (sel) { try { const found = document.querySelector(sel); if (found) return found; } catch(e) {} }
         if (step._px !== undefined) {
             const vx = (step._px || 0) - window.scrollX;
             const vy = (step._py || 0) - window.scrollY;
-            window.scrollTo({ top: step._py - window.innerHeight / 2, behavior: 'instant' });
+            if (step._py > 0) window.scrollTo({ top: step._py - window.innerHeight / 2, behavior: 'instant' });
             return findTopClickable(vx, vy);
         }
         return null;
     };
     const executeAction = (step, attempt) => {
         if (step.type === 'click' && step._px !== undefined) {
-            window.scrollTo({ top: step._py - window.innerHeight / 2, behavior: 'instant' });
+            if (step._py > 0) window.scrollTo({ top: step._py - window.innerHeight / 2, behavior: 'instant' });
             const vx = (step._px || 0) - window.scrollX;
             const vy = (step._py || 0) - window.scrollY;
+            moveCursorTo(vx, vy);
             const el = findTopClickable(vx, vy);
             if (!el) { if (attempt < 3) setTimeout(() => executeAction(step, attempt + 1), 300); return; }
             el.focus();
@@ -1913,14 +1983,17 @@ function injectOneRun({ stepsList, speedDelay }) {
         } else if (step.type === 'doubleclick') {
             const vx = (step._px || 0) - window.scrollX;
             const vy = (step._py || 0) - window.scrollY;
+            moveCursorTo(vx, vy);
             const el = findEl(step); if (el) { el.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, cancelable: true, composed: true, clientX: vx, clientY: vy })); showClickRipple(vx, vy); }
         } else if (step.type === 'rightclick') {
             const vx = (step._px || 0) - window.scrollX;
             const vy = (step._py || 0) - window.scrollY;
+            moveCursorTo(vx, vy);
             const el = findEl(step); if (el) { el.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, composed: true, clientX: vx, clientY: vy })); showClickRipple(vx, vy); }
         } else if (step.type === 'hover') {
             const vx = (step._px || 0) - window.scrollX;
             const vy = (step._py || 0) - window.scrollY;
+            moveCursorTo(vx, vy);
             const el = findEl(step); if (el) { el.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, composed: true, clientX: vx, clientY: vy })); showClickRipple(vx, vy); }
         }
     };
@@ -1928,16 +2001,35 @@ function injectOneRun({ stepsList, speedDelay }) {
     let cumOffset = 0;
     stepsList.forEach((step) => {
         const delay = cumOffset;
+        if (step.type === 'wait') { cumOffset += stepDelay + (step.duration || 1000); return; }
+        if (step.type === 'waitForReload') { cumOffset += stepDelay; return; }
+        if (step.type === 'mousemovepath') {
+            // M4: Mausbewegungen abspielen
+            const pts = step.points || [];
+            const base = cumOffset;
+            pts.forEach(pt => {
+                setTimeout(() => {
+                    const vx = pt.x - window.scrollX;
+                    const vy = pt.y - window.scrollY;
+                    moveCursorTo(vx, vy);
+                }, base + (pt.t || 0));
+            });
+            cumOffset += stepDelay + (pts.length > 0 ? pts[pts.length - 1].t || 0 : 0);
+            return;
+        }
         cumOffset += stepDelay;
-        if (step.type === 'wait') { cumOffset += (step.duration || 1000); return; }
-        if (step.type === 'waitForReload') { return; }
         setTimeout(() => executeAction(step, 0), delay);
     });
+    // Cursor nach Abschluss entfernen
+    setTimeout(() => { const c = document.getElementById('_makroCursor'); if (c) c.remove(); }, cumOffset + 300);
 }
 
 // Geschätzte Dauer einer Iteration (für Sidebar-Timing)
 function makroIterationDuration(steps, stepDelay) {
-    return steps.reduce((acc, s) => acc + stepDelay + (s.type === 'wait' ? (s.duration || 1000) : 0), 0) + 400;
+    return steps.reduce((acc, s) => {
+        if (s.type === 'mousemovepath') return acc + stepDelay + (s.points && s.points.length ? s.points[s.points.length-1].t || 0 : 0);
+        return acc + stepDelay + (s.type === 'wait' ? (s.duration || 1000) : 0);
+    }, 0) + 400;
 }
 
 // Startet die vollständige Wiedergabe (Wiederholungen werden vom Sidebar gesteuert)
@@ -1957,7 +2049,8 @@ function playMakroFull(tabId, m, steps, overrideRepeat) {
         paused: false,
         scrollToStart: !!m.scrollToStart,
         scrollToEnd: !!m.scrollToEnd,
-        lockScroll: !!m.lockScroll
+        lockScroll: !!m.lockScroll,
+        title: m.title || 'Makro'
     };
     updatePlaybackBar();
     runMakroIteration();
@@ -1969,19 +2062,24 @@ function runMakroIteration() {
     updatePlaybackBar();
     st.reloadSeen = false;
     if (st.scrollToStart && st.current === 0) {
-        const firstClickStep = (st.steps || []).find(s => ['click','doubleclick','rightclick','hover'].includes(s.type) && s._py !== undefined);
+        const firstClickStep = (st.steps || []).find(s => ['click','doubleclick','rightclick','hover'].includes(s.type) && s._py > 0);
         if (firstClickStep) {
             chrome.scripting.executeScript({ target: { tabId: st.tabId }, func: (py) => { window.scrollTo({ top: py - window.innerHeight/2, behavior: 'smooth' }); }, args: [firstClickStep._py] });
         }
     }
-    if (st.lockScroll) {
-        chrome.scripting.executeScript({ target: { tabId: st.tabId }, func: () => { document.documentElement.style.overflow='hidden'; document.body.style.overflow='hidden'; }});
-    }
-    chrome.scripting.executeScript({
+    const _runSteps = () => chrome.scripting.executeScript({
         target: { tabId: st.tabId },
         func: injectOneRun,
         args: [{ stepsList: st.steps, speedDelay: st.stepDelay }]
     });
+    if (st.lockScroll) {
+        chrome.scripting.executeScript({
+            target: { tabId: st.tabId },
+            func: () => { document.documentElement.style.overflow='hidden'; document.body.style.overflow='hidden'; }
+        }).then(_runSteps);
+    } else {
+        _runSteps();
+    }
     const dur = makroIterationDuration(st.steps, st.stepDelay);
     setTimeout(afterMakroIteration, dur);
 }
@@ -2359,6 +2457,61 @@ function handleNotesViewClicks(e) {
 }
 document.getElementById('pinnedNotesList').addEventListener('click', handleNotesViewClicks);
 document.getElementById('notesList').addEventListener('click', handleNotesViewClicks);
+
+// Note-Gruppen bearbeiten: Icon/Farbe via Popup
+document.getElementById('notesList').addEventListener('click', (e) => {
+    const editBtn = e.target.closest('[data-notegroupedit]');
+    if (!editBtn) return;
+    e.stopPropagation();
+    const gName = editBtn.dataset.notegroupedit;
+    const meta = groupMetadata[gName] || { color: '#ff8c00', icon: '📁' };
+    document.getElementById('editNoteGroupName').value = gName;
+    document.getElementById('noteGroupIconInput').value = meta.icon || '📁';
+    document.getElementById('noteGroupColorInput').value = meta.color || '#ff8c00';
+    const popup = document.getElementById('noteGroupEditPopup');
+    const rect = editBtn.getBoundingClientRect();
+    popup.style.display = 'block';
+    popup.style.top = (rect.bottom + 4) + 'px';
+    popup.style.left = Math.max(4, rect.left - 180) + 'px';
+});
+document.getElementById('noteGroupIconPick').addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-icon]');
+    if (btn) document.getElementById('noteGroupIconInput').value = btn.dataset.icon;
+});
+document.getElementById('cancelNoteGroupBtn').addEventListener('click', () => {
+    document.getElementById('noteGroupEditPopup').style.display = 'none';
+});
+document.getElementById('saveNoteGroupBtn').addEventListener('click', () => {
+    const gName = document.getElementById('editNoteGroupName').value;
+    if (!gName) return;
+    groupMetadata[gName] = {
+        ...(groupMetadata[gName] || {}),
+        icon: document.getElementById('noteGroupIconInput').value || '📁',
+        color: document.getElementById('noteGroupColorInput').value || '#ff8c00'
+    };
+    chrome.storage.sync.set({ groupMetadata }, () => {
+        document.getElementById('noteGroupEditPopup').style.display = 'none';
+        renderNotes();
+    });
+});
+
+// Clipboard-Copy via Event-Delegation (Listener muss auf dem DOM-Element sein, nicht auf outerHTML)
+document.getElementById('notesList').addEventListener('click', (e) => {
+    const titleEl = e.target.closest('[data-note-copy-idx]');
+    if (!titleEl) return;
+    e.stopPropagation();
+    const i = parseInt(titleEl.dataset.noteCopyIdx);
+    const n = notes[i];
+    if (!n) return;
+    let content = n.text || '';
+    if (n.todos && n.todos.length)
+        content += '\n' + n.todos.map(t => (t.done ? '✓ ' : '○ ') + t.text).join('\n');
+    navigator.clipboard.writeText(content).then(() => {
+        const orig = titleEl.innerHTML;
+        titleEl.innerHTML = '✓ Kopiert';
+        setTimeout(() => { titleEl.innerHTML = orig; }, 1200);
+    }).catch(() => {});
+});
 
 function renderEditorTodos() {
     const listEl = document.getElementById('editorTodoList');

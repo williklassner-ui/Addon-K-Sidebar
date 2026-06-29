@@ -51,16 +51,24 @@
         <input type="text" id="searchMakrosInput" placeholder="⌕ Makros durchsuchen...">
         <button id="recordMakroBtn" class="record-btn" title="Makro live im aktiven Tab aufnehmen"><span class="record-dot"></span> Aufnahme</button>
       </div>
-      <div id="makroPlaybackBar" style="display:none; align-items:center; gap:8px; padding:6px 8px; border-bottom:1px solid #333; background:rgba(255,140,0,0.08); margin-bottom:4px;">
-        <span id="makroPlaybackCounter" style="font-size:12px; flex:1; font-weight:600;">⏵ 1 / 1</span>
-        <button id="makroPlaybackPauseBtn" class="btn-icon" style="font-size:11px; padding:4px 8px;">⏸</button>
-        <button id="makroPlaybackStopBtn" class="btn-icon" style="font-size:11px; padding:4px 8px;">⏹</button>
+      <div id="makroPlaybackBar" style="display:none; flex-direction:column; padding:8px 10px; border-bottom:1px solid #444; background:rgba(255,140,0,0.1); gap:6px; margin-bottom:2px;">
+        <div style="display:flex; align-items:center; gap:8px;">
+          <span id="makroPlaybackTitle" style="font-size:12px; flex:1; font-weight:600; opacity:0.9; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">Makro</span>
+          <button id="makroPlaybackPauseBtn" class="btn-icon" style="font-size:13px; padding:4px 10px;">⏸</button>
+          <button id="makroPlaybackStopBtn" class="btn-icon" style="font-size:13px; padding:4px 10px;">⏹</button>
+        </div>
+        <div style="display:flex; align-items:center; gap:8px;">
+          <div id="makroPlaybackProgressBar" style="flex:1; height:5px; background:rgba(255,255,255,0.1); border-radius:3px; overflow:hidden;">
+            <div id="makroPlaybackProgressFill" style="height:100%; background:var(--accent,#ff8c00); width:0%; transition:width 0.3s;"></div>
+          </div>
+          <span id="makroPlaybackCounter" style="font-size:11px; opacity:0.7; white-space:nowrap;">1 / 1</span>
+        </div>
       </div>
       <div id="recordingWaitBar" style="display:none; align-items:center; gap:8px; padding:6px 0; border-bottom:1px solid #333; margin-bottom:6px;">
         <input type="number" id="insertWaitDuration" value="1000" min="100" max="60000" step="100" style="width:70px; font-size:12px;">
         <span style="font-size:11px; opacity:0.6;">ms</span>
         <button id="insertWaitBtn" class="btn-icon" style="font-size:10px;">⏱ Pause einfügen</button>
-        <button id="insertReloadBtn" class="btn-icon" style="font-size:10px;">🔄 Reload warten</button>
+        <button id="insertReloadBtn" class="btn-icon" style="font-size:10px;">🔄 Seiten-Reload-Schritt</button>
       </div>
       <div id="makrosList"></div>
     </div>
@@ -262,22 +270,22 @@
     </div>
 
     <div class="field-block">
-      <label class="field-label">Warte nach Ausführung bis wiederholt wird</label>
+      <label class="field-label">Pause zwischen Wiederholungen</label>
       <div class="input-row" style="align-items:center; gap:10px;">
         <input type="number" id="makroRepeatDelayInput" min="0" max="600000" step="100" value="0" style="width:90px;">
         <span style="font-size:12px; opacity:0.6;">ms</span>
       </div>
       <label style="font-size:12px; display:flex; align-items:center; gap:6px; cursor:pointer; margin-top:8px;">
-        <input type="checkbox" id="makroWaitReloadInput"> 🔄 Warte bis Seite neugeladen wurde (vor Wiederholung)
+        <input type="checkbox" id="makroWaitReloadInput"> 🔄 Auf Seiten-Reload warten (zwischen Wiederholungen)
       </label>
     </div>
 
     <div class="field-block">
-      <label class="field-label">Geschwindigkeit</label>
+      <label class="field-label">Schrittpause</label>
       <label style="font-size:12px; display:flex; align-items:center; gap:6px; cursor:pointer; margin-bottom:8px;">
         <input type="checkbox" id="makroSpeedToggle" checked class="toggle-switch-input">
         <span class="toggle-switch-track"></span>
-        Pause zwischen Schritten aktivieren
+        Schrittpause aktiv (ms zwischen Schritten)
       </label>
       <div id="makroSpeedRow" class="input-row" style="align-items:center; gap:10px;">
         <input type="number" id="makroSpeedInput" min="0" step="100" value="700" style="width:100px;">
@@ -310,11 +318,13 @@
     <div class="field-block">
       <label class="field-label">Aufnahme-Methode</label>
       <div class="method-toggle">
-        <button class="method-btn" id="methodBtn1" data-method="1" title="Selektor-basiert: findet Elemente anhand CSS-Selektor (robuster)">M1 – Selektor</button>
-        <button class="method-btn active" id="methodBtn2" data-method="2" title="Koordinaten-basiert: nutzt Pixel-Position (aktuell)">M2 – Koordinaten</button>
+        <button class="method-btn" id="methodBtn1" data-method="1" title="Selektor-basiert: findet Elemente anhand CSS-Selektor">M1 – Selektor</button>
+        <button class="method-btn active" id="methodBtn2" data-method="2" title="Koordinaten-basiert: nutzt Pixel-Position">M2 – Koordinaten</button>
+        <button class="method-btn" id="methodBtn3" data-method="3" title="Hybrid: Selektor mit Koordinaten-Fallback (empfohlen)">M3 – Hybrid</button>
+        <button class="method-btn" id="methodBtn4" data-method="4" title="Mausbewegungen: zeichnet Mausbewegungen 1:1 auf">M4 – Maus</button>
       </div>
       <input type="hidden" id="makroMethodInput" value="2">
-      <small style="opacity:0.5; font-size:11px;">M1 = selektor-basiert (empfohlen), M2 = koordinaten-basiert</small>
+      <small style="opacity:0.5; font-size:11px;">M1=Selektor, M2=Koordinaten, M3=Hybrid (empfohlen), M4=Mausbewegungen</small>
     </div>
 
     <div class="field-block">
@@ -323,7 +333,7 @@
         <button id="addWaitStepBtn" class="btn-icon-elegant">⏱ Pause</button>
         <input type="number" id="addWaitStepDuration" value="1000" min="100" max="60000" step="100" style="width:70px; font-size:12px;">
         <span style="font-size:11px; opacity:0.6;">ms</span>
-        <button id="addReloadStepBtn" class="btn-icon-elegant">🔄 Reload warten</button>
+        <button id="addReloadStepBtn" class="btn-icon-elegant">🔄 Reload-Schritt einfügen</button>
       </div>
     </div>
 
@@ -331,6 +341,35 @@
       <button id="cancelMakroBtn" class="danger-btn icon-btn-large" title="Abbrechen" style="background: #cf6679; flex:1;">✕</button>
       <button id="saveMakroBtn" class="primary-btn icon-btn-large" title="Speichern" style="flex:1;">💾</button>
     </div>
+  </div>
+
+  <div id="noteGroupEditPopup" style="display:none; position:fixed; z-index:99999; background:var(--card-bg,#1e1e1e); border:1px solid #555; border-radius:8px; padding:12px 14px; min-width:220px; box-shadow:0 4px 16px rgba(0,0,0,0.5);">
+    <div style="font-weight:600; font-size:13px; margin-bottom:10px; display:flex; align-items:center; justify-content:space-between;">
+      <span>Gruppe bearbeiten</span>
+      <button id="cancelNoteGroupBtn" class="btn-icon" style="font-size:12px; padding:2px 6px;">✕</button>
+    </div>
+    <input type="hidden" id="editNoteGroupName">
+    <div class="field-block" style="margin-bottom:8px;">
+      <label class="field-label" style="font-size:11px;">Icon</label>
+      <div style="display:flex; gap:4px; align-items:center; flex-wrap:wrap; margin-top:4px;">
+        <input type="text" id="noteGroupIconInput" maxlength="4" style="width:46px; font-size:18px; text-align:center; padding:4px; border:1px solid var(--input-border,#555); border-radius:4px; background:var(--input-bg,#2a2a2a); color:var(--text,#fff);">
+        <div id="noteGroupIconPick" style="display:flex; gap:4px; flex-wrap:wrap;">
+          <button class="note-group-icon-pick btn-icon-elegant" data-icon="📁">📁</button>
+          <button class="note-group-icon-pick btn-icon-elegant" data-icon="📝">📝</button>
+          <button class="note-group-icon-pick btn-icon-elegant" data-icon="⭐">⭐</button>
+          <button class="note-group-icon-pick btn-icon-elegant" data-icon="🔖">🔖</button>
+          <button class="note-group-icon-pick btn-icon-elegant" data-icon="💡">💡</button>
+          <button class="note-group-icon-pick btn-icon-elegant" data-icon="🗒️">🗒️</button>
+          <button class="note-group-icon-pick btn-icon-elegant" data-icon="✅">✅</button>
+          <button class="note-group-icon-pick btn-icon-elegant" data-icon="❗">❗</button>
+        </div>
+      </div>
+    </div>
+    <div class="field-block" style="margin-bottom:10px;">
+      <label class="field-label" style="font-size:11px;">Farbe</label>
+      <input type="color" id="noteGroupColorInput" value="#ff8c00" style="margin-top:4px; width:50px; height:28px; border:none; cursor:pointer;">
+    </div>
+    <button id="saveNoteGroupBtn" class="primary-btn" style="width:100%; padding:8px;">💾 Speichern</button>
   </div>
 
   <div id="groupEditorGroup" style="display:none;">
@@ -441,10 +480,12 @@
     </div>
     <p style="font-size:12px; opacity:0.7; margin:0;">Wähle die Aufnahme-Methode:</p>
     <div class="method-toggle" style="margin-top:8px;">
-      <button class="method-btn" id="dialogMethodBtn1" data-method="1" title="Selektor-basiert: mehr Schritt-Typen, robuster">M1 – Selektor</button>
-      <button class="method-btn active" id="dialogMethodBtn2" data-method="2" title="Koordinaten-basiert: aktuelles Verhalten">M2 – Koordinaten</button>
+      <button class="method-btn" id="dialogMethodBtn1" data-method="1" title="Selektor-basiert: mehr Schritt-Typen">M1 – Selektor</button>
+      <button class="method-btn active" id="dialogMethodBtn2" data-method="2" title="Koordinaten-basiert">M2 – Koordinaten</button>
+      <button class="method-btn" id="dialogMethodBtn3" data-method="3" title="Hybrid: Selektor + Koordinaten-Fallback">M3 – Hybrid</button>
+      <button class="method-btn" id="dialogMethodBtn4" data-method="4" title="Mausbewegungen 1:1 aufzeichnen">M4 – Maus</button>
     </div>
-    <small style="opacity:0.5; font-size:11px; display:block; margin-top:4px;">M1 erfasst Doppelklick, Rechtsklick, Scrollen, Tastatur-Shortcuts u.v.m.</small>
+    <small style="opacity:0.5; font-size:11px; display:block; margin-top:4px;">M3 empfohlen: Selektor mit Koordinaten-Fallback. M4: zeichnet Mausbewegungen auf.</small>
     <div class="editor-footer-buttons" style="margin-top:14px;">
       <button id="cancelRecordDialogBtn" class="danger-btn" style="flex:1;">✕ Abbrechen</button>
       <button id="startRecordBtn" class="primary-btn icon-btn-large" style="flex:1;"><span class="record-dot"></span> Aufnehmen</button>
