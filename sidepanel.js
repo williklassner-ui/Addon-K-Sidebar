@@ -21,6 +21,22 @@ let preRunMakroIdx = null;
 let recordingMethod = 2;
 let runningMakroState = null;
 
+function updatePlaybackBar() {
+    const bar = document.getElementById('makroPlaybackBar');
+    const counter = document.getElementById('makroPlaybackCounter');
+    const pauseBtn = document.getElementById('makroPlaybackPauseBtn');
+    if (!runningMakroState) {
+        bar.style.display = 'none';
+        return;
+    }
+    bar.style.display = 'flex';
+    const cur = (runningMakroState.current || 0) + 1;
+    const tot = runningMakroState.repeat || 1;
+    const paused = runningMakroState.paused;
+    counter.textContent = (paused ? '⏸ ' : '⏵ ') + cur + ' / ' + tot;
+    pauseBtn.textContent = paused ? '▶' : '⏸';
+}
+
 const tabNames = {
     'prompts': 'Promts',
     'sessions': 'Sessions',
@@ -416,7 +432,7 @@ function renderNotes() {
                 <div class="group-header" data-notegroup="${gName}" style="color: ${meta.color};">
                     <div class="group-title-wrapper">
                         <span class="drag-handle" title="Verschieben">⠿</span>
-                        <span>${meta.icon} ${gName}</span>
+                        <span>${meta.icon ? meta.icon + ' ' : ''}${gName}<span class="group-count-badge">${totalCount}</span></span>
                     </div>
                     <div class="group-right-wrapper">
                         <span class="badge">${totalCount}</span>
@@ -452,11 +468,13 @@ function getNoteCardHtml(n, i) {
 
     const tileColor = n.color || '#ff8c00';
 
-    return `
-        <div class="note-card" style="border-left: 3px solid ${tileColor}; background: rgba(0,0,0,0.15);">
+    const noteCardEl = document.createElement('div');
+    noteCardEl.className = 'note-card';
+    noteCardEl.style.cssText = `border-left: 3px solid ${tileColor}; background: rgba(0,0,0,0.15);`;
+    noteCardEl.innerHTML = `
             <div class="card-header">
                 <div class="note-info" data-note-action="toggle-view" data-index="${i}">
-                    <span class="note-title" style="font-weight:bold; color:${tileColor};">${n.pinned ? '📌 ' : ''}${n.title || 'Unbenannte Notiz'}</span>
+                    <span class="note-title" style="font-weight:bold; color:${tileColor}; cursor:pointer;" data-note-copy-idx="${i}">${n.pinned ? '📌 ' : ''}${n.icon ? '<span class="note-card-icon">' + n.icon + '</span> ' : ''}${n.title || 'Unbenannte Notiz'}</span>
                 </div>
                 <div class="card-actions">
                     <button class="btn-icon" data-note-action="toggle-view" data-index="${i}" title="Vorschau">👁</button>
@@ -468,8 +486,23 @@ function getNoteCardHtml(n, i) {
                 <div style="white-space: pre-wrap;">${n.text || ''}</div>
                 ${todoHtml}
             </div>
-        </div>
     `;
+    const titleEl = noteCardEl.querySelector(`[data-note-copy-idx="${i}"]`);
+    if (titleEl) {
+        titleEl.addEventListener('click', (e) => {
+            e.stopPropagation();
+            let content = n.text || '';
+            if (n.todos && n.todos.length) {
+                content += '\n' + n.todos.map(t => (t.done ? '✓ ' : '○ ') + t.text).join('\n');
+            }
+            navigator.clipboard.writeText(content).then(() => {
+                const orig = titleEl.textContent;
+                titleEl.textContent = '✓ Kopiert';
+                setTimeout(() => { titleEl.textContent = orig; }, 1200);
+            });
+        });
+    }
+    return noteCardEl.outerHTML;
 }
 
 function renderMakros() {
@@ -722,9 +755,15 @@ document.getElementById('makrosList').addEventListener('click', (e) => {
             document.getElementById('makroStepsInput').value = JSON.stringify(m.steps, null, 2);
             document.getElementById('makroColor').value = m.color || '#ff8c00';
             document.getElementById('makroRepeatInput').value = m.repeat || 1;
-            const sd = m.speedDelay || 700;
-            document.getElementById('makroSpeedInput').value = sd;
-            document.getElementById('makroSpeedLabel').textContent = sd + ' ms';
+            const sd = m.speedDelay || 0;
+            const speedActive = sd > 0;
+            document.getElementById('makroSpeedToggle').checked = speedActive;
+            document.getElementById('makroSpeedInput').value = speedActive ? sd : 700;
+            document.getElementById('makroSpeedRow').style.display = speedActive ? 'flex' : 'none';
+            document.getElementById('makroAskRepeatInput').checked = !!m.askRepeatBeforePlay;
+            document.getElementById('makroScrollToStartInput').checked = !!m.scrollToStart;
+            document.getElementById('makroScrollToEndInput').checked = !!m.scrollToEnd;
+            document.getElementById('makroLockScrollInput').checked = !!m.lockScroll;
             const mMethod = m.method || 2;
             document.getElementById('makroMethodInput').value = mMethod;
             if (mMethod === 1) {
@@ -761,6 +800,14 @@ document.getElementById('makrosList').addEventListener('click', (e) => {
                         const ok = confirm(`⚠️ Dieses Makro wurde auf „${m.domain}" aufgenommen.\nAktueller Tab: „${currentDomain}".\nTrotzdem ausführen?`);
                         if (!ok) return;
                     }
+                }
+                if (m.askRepeatBeforePlay) {
+                    document.getElementById('makroRepeatAskInput').value = m.repeat || 1;
+                    document.getElementById('mainContainer').style.display = 'none';
+                    document.getElementById('makroRepeatAskDialog').style.display = 'block';
+                    window._pendingPlayTabId = tabs[0].id;
+                    window._pendingPlayMakro = m;
+                    return;
                 }
                 playMakroFull(tabs[0].id, m, m.steps);
             });
@@ -1150,8 +1197,13 @@ function closeMakroEditMode() {
     document.getElementById('makroRepeatInput').value = '1';
     document.getElementById('makroRepeatDelayInput').value = '0';
     document.getElementById('makroWaitReloadInput').checked = false;
+    document.getElementById('makroSpeedToggle').checked = true;
     document.getElementById('makroSpeedInput').value = '700';
-    document.getElementById('makroSpeedLabel').textContent = '700 ms';
+    document.getElementById('makroSpeedRow').style.display = 'flex';
+    document.getElementById('makroAskRepeatInput').checked = false;
+    document.getElementById('makroScrollToStartInput').checked = false;
+    document.getElementById('makroScrollToEndInput').checked = false;
+    document.getElementById('makroLockScrollInput').checked = false;
     document.getElementById('showStepsOnPageBtn').style.display = 'flex';
     document.getElementById('applyPageEditsBtn').style.display = 'none';
     document.getElementById('cancelPageEditsBtn').style.display = 'none';
@@ -1166,7 +1218,8 @@ function closeMakroEditMode() {
             func: () => {
                 sessionStorage.removeItem('_makroEditSteps');
                 if (window._makroMarkerScrollHandler) { window.removeEventListener('scroll', window._makroMarkerScrollHandler); delete window._makroMarkerScrollHandler; }
-                document.querySelectorAll('._makroEditMarker, #_makroEditPanel, #_makroEditStyle').forEach(el => el.remove());
+                document.querySelectorAll('#_makroMarkerContainer').forEach(c => { if(c._makroMutObs) c._makroMutObs.disconnect(); });
+                document.querySelectorAll('._makroEditMarker, #_makroEditPanel, #_makroEditStyle, #_makroMarkerContainer').forEach(el => el.remove());
             }
         });
     });
@@ -1174,8 +1227,8 @@ function closeMakroEditMode() {
 
 document.getElementById('cancelMakroBtn').addEventListener('click', closeMakroEditMode);
 
-document.getElementById('makroSpeedInput').addEventListener('input', (e) => {
-    document.getElementById('makroSpeedLabel').textContent = e.target.value + ' ms';
+document.getElementById('makroSpeedToggle').addEventListener('change', (e) => {
+    document.getElementById('makroSpeedRow').style.display = e.target.checked ? 'flex' : 'none';
 });
 
 function openStepPlayback(i) {
@@ -1335,7 +1388,8 @@ function closeStepPanel() {
             target: { tabId: tabs[0].id },
             func: () => {
                 if (window._makroMarkerScrollHandler) { window.removeEventListener('scroll', window._makroMarkerScrollHandler); delete window._makroMarkerScrollHandler; }
-                document.querySelectorAll('._makroEditMarker, #_makroEditPanel, #_makroEditStyle').forEach(el => el.remove());
+                document.querySelectorAll('#_makroMarkerContainer').forEach(c => { if(c._makroMutObs) c._makroMutObs.disconnect(); });
+                document.querySelectorAll('._makroEditMarker, #_makroEditPanel, #_makroEditStyle, #_makroMarkerContainer').forEach(el => el.remove());
             }
         });
     });
@@ -1389,7 +1443,7 @@ document.getElementById('stepPlaybackRunBtn').addEventListener('click', () => {
         if (tabs[0]) {
             chrome.scripting.executeScript({
                 target: { tabId: tabs[0].id },
-                func: () => { document.querySelectorAll('._makroEditMarker, #_makroEditPanel, #_makroEditStyle').forEach(el => el.remove()); }
+                func: () => { document.querySelectorAll('#_makroMarkerContainer').forEach(c => { if(c._makroMutObs) c._makroMutObs.disconnect(); }); document.querySelectorAll('._makroEditMarker, #_makroEditPanel, #_makroEditStyle, #_makroMarkerContainer').forEach(el => el.remove()); }
             });
         }
     });
@@ -1553,7 +1607,8 @@ document.getElementById('stepEditSaveBtn').addEventListener('click', () => {
 
 // Page-Overlay: Schritte auf Seite anzeigen und bearbeiten
 function injectEditMarkersFunc(steps) {
-    document.querySelectorAll('._makroEditMarker, #_makroEditPanel, #_makroEditStyle').forEach(el => el.remove());
+    document.querySelectorAll('#_makroMarkerContainer').forEach(c => { if(c._makroMutObs) c._makroMutObs.disconnect(); });
+    document.querySelectorAll('._makroEditMarker, #_makroEditPanel, #_makroEditStyle, #_makroMarkerContainer').forEach(el => el.remove());
     sessionStorage.setItem('_makroEditSteps', JSON.stringify(steps));
     const style = document.createElement('style');
     style.id = '_makroEditStyle';
@@ -1651,6 +1706,21 @@ function injectEditMarkersFunc(steps) {
         document.body.appendChild(marker);
     });
 
+    // Create a container sentinel to track last-child position for MutationObserver
+    const container = document.createElement('div');
+    container.id = '_makroMarkerContainer';
+    container.style.cssText = 'position:fixed;top:0;left:0;width:0;height:0;pointer-events:none;z-index:2147483647;';
+    document.body.appendChild(container);
+
+    // MutationObserver: Container immer als letztes DOM-Element halten (über Modals)
+    const _obs = new MutationObserver(() => {
+        if (document.body.lastElementChild !== container) {
+            document.body.appendChild(container);
+        }
+    });
+    _obs.observe(document.body, { childList: true });
+    container._makroMutObs = _obs;
+
     // Update fixed-position markers on scroll
     const updateMarkers = () => {
         const stps = JSON.parse(sessionStorage.getItem('_makroEditSteps') || '[]');
@@ -1692,7 +1762,8 @@ document.getElementById('applyPageEditsBtn').addEventListener('click', () => {
                 const steps = JSON.parse(sessionStorage.getItem('_makroEditSteps') || '[]');
                 sessionStorage.removeItem('_makroEditSteps');
                 if (window._makroMarkerScrollHandler) { window.removeEventListener('scroll', window._makroMarkerScrollHandler); delete window._makroMarkerScrollHandler; }
-                document.querySelectorAll('._makroEditMarker, #_makroEditPanel, #_makroEditStyle').forEach(el => el.remove());
+                document.querySelectorAll('#_makroMarkerContainer').forEach(c => { if(c._makroMutObs) c._makroMutObs.disconnect(); });
+                document.querySelectorAll('._makroEditMarker, #_makroEditPanel, #_makroEditStyle, #_makroMarkerContainer').forEach(el => el.remove());
                 return steps;
             }
         }, (results) => {
@@ -1714,7 +1785,8 @@ document.getElementById('cancelPageEditsBtn').addEventListener('click', () => {
                 func: () => {
                     sessionStorage.removeItem('_makroEditSteps');
                     if (window._makroMarkerScrollHandler) { window.removeEventListener('scroll', window._makroMarkerScrollHandler); delete window._makroMarkerScrollHandler; }
-                    document.querySelectorAll('._makroEditMarker, #_makroEditPanel, #_makroEditStyle').forEach(el => el.remove());
+                    document.querySelectorAll('#_makroMarkerContainer').forEach(c => { if(c._makroMutObs) c._makroMutObs.disconnect(); });
+                    document.querySelectorAll('._makroEditMarker, #_makroEditPanel, #_makroEditStyle, #_makroMarkerContainer').forEach(el => el.remove());
                 }
             });
         }
@@ -1726,6 +1798,15 @@ document.getElementById('cancelPageEditsBtn').addEventListener('click', () => {
 
 // Eine einzelne Makro-Iteration im Tab ausführen (eine injizierte Funktion)
 function injectOneRun({ stepsList, speedDelay }) {
+    function showClickRipple(vx, vy) {
+        const d = document.createElement('div');
+        d.style.cssText = 'position:fixed;left:' + (vx-18) + 'px;top:' + (vy-18) + 'px;width:36px;height:36px;border-radius:50%;border:3px solid #ff8c00;pointer-events:none;z-index:2147483647;animation:_makroRipple 0.5s ease-out forwards;';
+        const s = document.createElement('style');
+        s.textContent = '@keyframes _makroRipple{0%{transform:scale(0.3);opacity:1}100%{transform:scale(1.5);opacity:0}}';
+        if (!document.getElementById('_makroRippleStyle')) { s.id='_makroRippleStyle'; document.head.appendChild(s); }
+        document.body.appendChild(d);
+        setTimeout(() => d.remove(), 600);
+    }
     const showClickIndicator = (x, y) => {
         const dot = document.createElement('div');
         dot.style.cssText = `position:fixed;left:${x}px;top:${y}px;width:24px;height:24px;border-radius:50%;background:rgba(255,140,0,0.6);border:2px solid #ff8c00;transform:translate(-50%,-50%) scale(0);animation:_mkRipple 0.55s ease forwards;pointer-events:none;z-index:2147483647;inset:auto;margin:0;`;
@@ -1759,31 +1840,37 @@ function injectOneRun({ stepsList, speedDelay }) {
     const findEl = (step) => {
         if (step.selector) { try { return document.querySelector(step.selector); } catch(e) {} }
         if (step._px !== undefined) {
+            const vx = (step._px || 0) - window.scrollX;
+            const vy = (step._py || 0) - window.scrollY;
             window.scrollTo({ top: step._py - window.innerHeight / 2, behavior: 'instant' });
-            return findTopClickable(step._px - window.scrollX, step._py - window.scrollY);
+            return findTopClickable(vx, vy);
         }
         return null;
     };
     const executeAction = (step, attempt) => {
         if (step.type === 'click' && step._px !== undefined) {
             window.scrollTo({ top: step._py - window.innerHeight / 2, behavior: 'instant' });
-            const vx = step._px - window.scrollX, vy = step._py - window.scrollY;
+            const vx = (step._px || 0) - window.scrollX;
+            const vy = (step._py || 0) - window.scrollY;
             const el = findTopClickable(vx, vy);
             if (!el) { if (attempt < 3) setTimeout(() => executeAction(step, attempt + 1), 300); return; }
             el.focus();
             const rect = el.getBoundingClientRect();
             const cx = rect.left + rect.width / 2, cy = rect.top + rect.height / 2;
             showClickIndicator(cx, cy);
-            el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, composed: true, clientX: cx, clientY: cy }));
-            el.dispatchEvent(new MouseEvent('mouseup',   { bubbles: true, cancelable: true, composed: true, clientX: cx, clientY: cy }));
-            el.dispatchEvent(new MouseEvent('click',     { bubbles: true, cancelable: true, composed: true, clientX: cx, clientY: cy }));
+            el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, composed: true, clientX: vx, clientY: vy, pageX: step._px, pageY: step._py }));
+            el.dispatchEvent(new MouseEvent('mouseup',   { bubbles: true, cancelable: true, composed: true, clientX: vx, clientY: vy, pageX: step._px, pageY: step._py }));
+            el.dispatchEvent(new MouseEvent('click',     { bubbles: true, cancelable: true, composed: true, clientX: vx, clientY: vy, pageX: step._px, pageY: step._py }));
             try { el.click(); } catch(e2) {}
+            showClickRipple(vx, vy);
         } else if (step.type === 'type') {
             let el = null;
             try { el = document.querySelector(step.target); } catch (e) {}
             if (!el && step._px !== undefined) {
+                const vx = (step._px || 0) - window.scrollX;
+                const vy = (step._py || 0) - window.scrollY;
                 window.scrollTo({ top: step._py - window.innerHeight / 2, behavior: 'instant' });
-                el = findTopClickable(step._px - window.scrollX, step._py - window.scrollY);
+                el = findTopClickable(vx, vy);
             }
             if (!el) { if (attempt < 3) setTimeout(() => executeAction(step, attempt + 1), 300); return; }
             el.focus();
@@ -1809,11 +1896,17 @@ function injectOneRun({ stepsList, speedDelay }) {
             const el = step.selector ? document.querySelector(step.selector) : null;
             if (el) { el.value = step.value; el.dispatchEvent(new Event('change', { bubbles: true })); }
         } else if (step.type === 'doubleclick') {
-            const el = findEl(step); if (el) el.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, cancelable: true, composed: true }));
+            const vx = (step._px || 0) - window.scrollX;
+            const vy = (step._py || 0) - window.scrollY;
+            const el = findEl(step); if (el) { el.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, cancelable: true, composed: true, clientX: vx, clientY: vy })); showClickRipple(vx, vy); }
         } else if (step.type === 'rightclick') {
-            const el = findEl(step); if (el) el.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, composed: true }));
+            const vx = (step._px || 0) - window.scrollX;
+            const vy = (step._py || 0) - window.scrollY;
+            const el = findEl(step); if (el) { el.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, composed: true, clientX: vx, clientY: vy })); showClickRipple(vx, vy); }
         } else if (step.type === 'hover') {
-            const el = findEl(step); if (el) el.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, composed: true }));
+            const vx = (step._px || 0) - window.scrollX;
+            const vy = (step._py || 0) - window.scrollY;
+            const el = findEl(step); if (el) { el.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, composed: true, clientX: vx, clientY: vy })); showClickRipple(vx, vy); }
         }
     };
     const stepDelay = speedDelay || 700;
@@ -1833,27 +1926,42 @@ function makroIterationDuration(steps, stepDelay) {
 }
 
 // Startet die vollständige Wiedergabe (Wiederholungen werden vom Sidebar gesteuert)
-function playMakroFull(tabId, m, steps) {
+function playMakroFull(tabId, m, steps, overrideRepeat) {
     if (runningMakroState && runningMakroState.fallbackTimer) clearTimeout(runningMakroState.fallbackTimer);
     runningMakroState = {
         tabId,
         steps: steps || m.steps,
-        stepDelay: m.speedDelay || 700,
-        repeat: Math.max(1, m.repeat || 1),
+        stepDelay: m.speedDelay || 0,
+        repeat: Math.max(1, overrideRepeat || m.repeat || 1),
         current: 0,
         repeatDelay: Math.max(0, m.repeatDelay || 0),
         waitReload: !!m.waitReloadBetweenRepeats,
         awaitingReload: false,
         reloadSeen: false,
-        fallbackTimer: null
+        fallbackTimer: null,
+        paused: false,
+        scrollToStart: !!m.scrollToStart,
+        scrollToEnd: !!m.scrollToEnd,
+        lockScroll: !!m.lockScroll
     };
+    updatePlaybackBar();
     runMakroIteration();
 }
 
 function runMakroIteration() {
     const st = runningMakroState;
     if (!st) return;
+    updatePlaybackBar();
     st.reloadSeen = false;
+    if (st.scrollToStart && st.current === 0) {
+        const firstClickStep = (st.steps || []).find(s => ['click','doubleclick','rightclick','hover'].includes(s.type) && s._py !== undefined);
+        if (firstClickStep) {
+            chrome.scripting.executeScript({ target: { tabId: st.tabId }, func: (py) => { window.scrollTo({ top: py - window.innerHeight/2, behavior: 'smooth' }); }, args: [firstClickStep._py] });
+        }
+    }
+    if (st.lockScroll) {
+        chrome.scripting.executeScript({ target: { tabId: st.tabId }, func: () => { document.documentElement.style.overflow='hidden'; document.body.style.overflow='hidden'; }});
+    }
     chrome.scripting.executeScript({
         target: { tabId: st.tabId },
         func: injectOneRun,
@@ -1867,7 +1975,26 @@ function afterMakroIteration() {
     const st = runningMakroState;
     if (!st) return;
     st.current++;
-    if (st.current >= st.repeat) { runningMakroState = null; return; }
+    if (st.current >= st.repeat) {
+        if (st.lockScroll) {
+            chrome.scripting.executeScript({ target: { tabId: st.tabId }, func: () => { document.documentElement.style.overflow=''; document.body.style.overflow=''; }});
+        }
+        if (st.scrollToEnd) {
+            const steps = st.steps || [];
+            let lastClickStep = null;
+            for (let i = steps.length-1; i >= 0; i--) { if (['click','doubleclick','rightclick','hover'].includes(steps[i].type) && steps[i]._py !== undefined) { lastClickStep = steps[i]; break; } }
+            if (lastClickStep) {
+                chrome.scripting.executeScript({ target: { tabId: st.tabId }, func: (py) => { window.scrollTo({ top: py - window.innerHeight/2, behavior: 'smooth' }); }, args: [lastClickStep._py] });
+            }
+        }
+        runningMakroState = null;
+        updatePlaybackBar();
+        return;
+    }
+    if (st.paused) {
+        updatePlaybackBar();
+        return;
+    }
     if (st.waitReload) {
         if (st.reloadSeen) {
             // Seite wurde während der Iteration bereits neu geladen → direkt weiter (nach repeatDelay)
@@ -1954,6 +2081,50 @@ document.getElementById('showStepOnPageBtn').addEventListener('click', () => {
     });
 });
 
+document.getElementById('makroPlaybackPauseBtn').addEventListener('click', () => {
+    if (!runningMakroState) return;
+    if (runningMakroState.paused) {
+        runningMakroState.paused = false;
+        updatePlaybackBar();
+        runMakroIteration();
+    } else {
+        runningMakroState.paused = true;
+        updatePlaybackBar();
+    }
+});
+document.getElementById('makroPlaybackStopBtn').addEventListener('click', () => {
+    if (runningMakroState) {
+        const tabId = runningMakroState.tabId;
+        const shouldUnlock = runningMakroState.lockScroll;
+        if (runningMakroState.fallbackTimer) clearTimeout(runningMakroState.fallbackTimer);
+        runningMakroState = null;
+        updatePlaybackBar();
+        if (shouldUnlock) {
+            chrome.scripting.executeScript({ target: { tabId }, func: () => {
+                document.documentElement.style.overflow = '';
+                document.body.style.overflow = '';
+            }});
+        }
+    }
+});
+
+document.getElementById('cancelRepeatAskBtn').addEventListener('click', () => {
+    document.getElementById('makroRepeatAskDialog').style.display = 'none';
+    document.getElementById('mainContainer').style.display = 'block';
+    window._pendingPlayTabId = null;
+    window._pendingPlayMakro = null;
+});
+document.getElementById('confirmRepeatAskBtn').addEventListener('click', () => {
+    const tabId = window._pendingPlayTabId;
+    const m = window._pendingPlayMakro;
+    const overrideRepeat = Math.max(1, parseInt(document.getElementById('makroRepeatAskInput').value) || 1);
+    document.getElementById('makroRepeatAskDialog').style.display = 'none';
+    document.getElementById('mainContainer').style.display = 'block';
+    window._pendingPlayTabId = null;
+    window._pendingPlayMakro = null;
+    if (tabId && m) playMakroFull(tabId, m, m.steps, overrideRepeat);
+});
+
 document.getElementById('saveMakroBtn').addEventListener('click', () => {
     const editIdx = document.getElementById('editMakroIndex').value;
     const selectedColor = document.getElementById('makroColor').value;
@@ -1975,7 +2146,11 @@ document.getElementById('saveMakroBtn').addEventListener('click', () => {
             repeat: Math.max(1, parseInt(document.getElementById('makroRepeatInput').value) || 1),
             repeatDelay: Math.max(0, parseInt(document.getElementById('makroRepeatDelayInput').value) || 0),
             waitReloadBetweenRepeats: document.getElementById('makroWaitReloadInput').checked,
-            speedDelay: Math.max(100, Math.min(3000, parseInt(document.getElementById('makroSpeedInput').value) || 700)),
+            speedDelay: document.getElementById('makroSpeedToggle').checked ? Math.max(0, parseInt(document.getElementById('makroSpeedInput').value) || 0) : 0,
+            askRepeatBeforePlay: document.getElementById('makroAskRepeatInput').checked,
+            scrollToStart: document.getElementById('makroScrollToStartInput').checked,
+            scrollToEnd: document.getElementById('makroScrollToEndInput').checked,
+            lockScroll: document.getElementById('makroLockScrollInput').checked,
             domain: existingDomain,
             method: parseInt(document.getElementById('makroMethodInput').value) || 2
         };
@@ -2160,6 +2335,7 @@ function handleNotesViewClicks(e) {
             textInput.style.display = 'none';
             textInput.value = '';
 
+            document.getElementById('noteIconInput').value = n.icon || '';
             document.getElementById('mainContainer').style.display = 'none';
             document.getElementById('noteInputGroup').style.display = 'flex';
             renderRecentColors();
@@ -2218,9 +2394,15 @@ function closeNoteEditMode() {
     document.getElementById('noteGroupInput').style.display = 'none';
     document.getElementById('noteGroupSelectOptions').value = '';
     currentEditorTodos = [];
+    document.getElementById('noteIconInput').value = '';
 }
 
 document.getElementById('cancelNoteBtn').addEventListener('click', closeNoteEditMode);
+
+document.getElementById('noteIconQuickPick').addEventListener('click', (e) => {
+    const btn = e.target.closest('.note-icon-pick');
+    if (btn) document.getElementById('noteIconInput').value = btn.dataset.icon;
+});
 
 document.getElementById('saveNoteBtn').addEventListener('click', () => {
     const i = document.getElementById('editNoteIndex').value;
@@ -2241,7 +2423,8 @@ document.getElementById('saveNoteBtn').addEventListener('click', () => {
         color: selectedColor,
         pinned: pinned,
         group: finalGroup,
-        todos: currentEditorTodos
+        todos: currentEditorTodos,
+        icon: document.getElementById('noteIconInput').value.trim()
     };
 
     if (i !== "") {

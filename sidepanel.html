@@ -24,7 +24,7 @@
       <div class="session-actions-top">
         <button id="saveCurrentSessionBtn" class="primary-btn" style="width:100%;">💾 geöffnete Session sichern</button>
       </div>
-      
+
       <div class="session-split">
         <div class="session-section">
           <div id="sessionList"></div>
@@ -51,6 +51,11 @@
         <input type="text" id="searchMakrosInput" placeholder="⌕ Makros durchsuchen...">
         <button id="recordMakroBtn" class="record-btn" title="Makro live im aktiven Tab aufnehmen"><span class="record-dot"></span> Aufnahme</button>
       </div>
+      <div id="makroPlaybackBar" style="display:none; align-items:center; gap:8px; padding:6px 8px; border-bottom:1px solid #333; background:rgba(255,140,0,0.08); margin-bottom:4px;">
+        <span id="makroPlaybackCounter" style="font-size:12px; flex:1; font-weight:600;">⏵ 1 / 1</span>
+        <button id="makroPlaybackPauseBtn" class="btn-icon" style="font-size:11px; padding:4px 8px;">⏸</button>
+        <button id="makroPlaybackStopBtn" class="btn-icon" style="font-size:11px; padding:4px 8px;">⏹</button>
+      </div>
       <div id="recordingWaitBar" style="display:none; align-items:center; gap:8px; padding:6px 0; border-bottom:1px solid #333; margin-bottom:6px;">
         <input type="number" id="insertWaitDuration" value="1000" min="100" max="60000" step="100" style="width:70px; font-size:12px;">
         <span style="font-size:11px; opacity:0.6;">ms</span>
@@ -67,7 +72,7 @@
       <button id="navMakros" class="tab-btn" data-tab="makros">Makros</button>
     </div>
   </div>
-    
+
   <div id="tabContextMenu" class="context-menu" style="display:none; position:fixed; z-index:99999; width: 140px;">
     <label style="font-size:11px; display:block; margin-bottom:5px; font-weight:bold;">Reiter-Farbe:</label>
     <input type="color" id="tabColorPicker" style="width:100%; height:30px; cursor:pointer; padding:0;">
@@ -83,7 +88,7 @@
       <h3>✨ Prompt bearbeiten</h3>
     </div>
     <input type="hidden" id="editIndex" value="">
-    
+
     <div class="field-block">
       <label class="field-label">Titel</label>
       <input type="text" id="titleInput" placeholder="Titel eingeben...">
@@ -135,10 +140,29 @@
       <h3>📝 Notiz bearbeiten</h3>
     </div>
     <input type="hidden" id="editNoteIndex" value="">
-    
+
     <div class="field-block">
       <label class="field-label">Titel</label>
       <input type="text" id="noteTitleInput" placeholder="Titel eingeben...">
+    </div>
+
+    <div class="field-block">
+      <label class="field-label">Icon</label>
+      <div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center;">
+        <input type="text" id="noteIconInput" maxlength="4" placeholder="📝" style="width:50px; font-size:18px; text-align:center; padding:5px; border:1px solid var(--input-border); border-radius:4px; background:var(--input-bg); color:var(--text);">
+        <div id="noteIconQuickPick" style="display:flex; gap:4px; flex-wrap:wrap; padding:2px 0;">
+          <button class="note-icon-pick btn-icon-elegant" data-icon="📝">📝</button>
+          <button class="note-icon-pick btn-icon-elegant" data-icon="📌">📌</button>
+          <button class="note-icon-pick btn-icon-elegant" data-icon="⭐">⭐</button>
+          <button class="note-icon-pick btn-icon-elegant" data-icon="🔖">🔖</button>
+          <button class="note-icon-pick btn-icon-elegant" data-icon="💡">💡</button>
+          <button class="note-icon-pick btn-icon-elegant" data-icon="🔍">🔍</button>
+          <button class="note-icon-pick btn-icon-elegant" data-icon="✅">✅</button>
+          <button class="note-icon-pick btn-icon-elegant" data-icon="❗">❗</button>
+          <button class="note-icon-pick btn-icon-elegant" data-icon="💬">💬</button>
+          <button class="note-icon-pick btn-icon-elegant" data-icon="🗒️">🗒️</button>
+        </div>
+      </div>
     </div>
 
     <div class="field-block">
@@ -189,7 +213,7 @@
       <h3>🤖 Makro bearbeiten</h3>
     </div>
     <input type="hidden" id="editMakroIndex" value="">
-    
+
     <div class="field-block">
       <label class="field-label">Makro-Name</label>
       <input type="text" id="makroTitleInput" placeholder="Name für das Makro eingeben...">
@@ -230,6 +254,14 @@
     </div>
 
     <div class="field-block">
+      <label style="font-size:12px; display:flex; align-items:center; gap:6px; cursor:pointer;">
+        <input type="checkbox" id="makroAskRepeatInput" class="toggle-switch-input">
+        <span class="toggle-switch-track"></span>
+        Vor Abspielen nach Wiederholungen fragen
+      </label>
+    </div>
+
+    <div class="field-block">
       <label class="field-label">Warte nach Ausführung bis wiederholt wird</label>
       <div class="input-row" style="align-items:center; gap:10px;">
         <input type="number" id="makroRepeatDelayInput" min="0" max="600000" step="100" value="0" style="width:90px;">
@@ -242,11 +274,37 @@
 
     <div class="field-block">
       <label class="field-label">Geschwindigkeit</label>
-      <div class="input-row" style="align-items:center; gap:10px;">
-        <input type="range" id="makroSpeedInput" min="100" max="3000" step="100" value="700" style="flex:1;">
-        <span id="makroSpeedLabel" style="font-size:12px; opacity:0.7; min-width:55px;">700 ms</span>
+      <label style="font-size:12px; display:flex; align-items:center; gap:6px; cursor:pointer; margin-bottom:8px;">
+        <input type="checkbox" id="makroSpeedToggle" checked class="toggle-switch-input">
+        <span class="toggle-switch-track"></span>
+        Pause zwischen Schritten aktivieren
+      </label>
+      <div id="makroSpeedRow" class="input-row" style="align-items:center; gap:10px;">
+        <input type="number" id="makroSpeedInput" min="0" step="100" value="700" style="width:100px;">
+        <span style="font-size:12px; opacity:0.6;">ms</span>
       </div>
-      <small style="opacity:0.5; font-size:11px;">Pause zwischen Schritten (schnell ↔ langsam)</small>
+    </div>
+
+    <div class="field-block">
+      <label class="field-label">Wiedergabe-Position</label>
+      <label style="font-size:12px; display:flex; align-items:center; gap:6px; cursor:pointer; margin-bottom:6px;">
+        <input type="checkbox" id="makroScrollToStartInput" class="toggle-switch-input">
+        <span class="toggle-switch-track"></span>
+        Vor Ausführung zu erster Klickposition scrollen
+      </label>
+      <label style="font-size:12px; display:flex; align-items:center; gap:6px; cursor:pointer;">
+        <input type="checkbox" id="makroScrollToEndInput" class="toggle-switch-input">
+        <span class="toggle-switch-track"></span>
+        Nach Ausführung zu letzter Klickposition scrollen
+      </label>
+    </div>
+
+    <div class="field-block">
+      <label style="font-size:12px; display:flex; align-items:center; gap:6px; cursor:pointer;">
+        <input type="checkbox" id="makroLockScrollInput" class="toggle-switch-input">
+        <span class="toggle-switch-track"></span>
+        Scrollen während Abspielen unterbinden
+      </label>
     </div>
 
     <div class="field-block">
@@ -281,7 +339,7 @@
       <button id="cancelGroupBtn" class="btn-icon">✕</button>
     </div>
     <input type="hidden" id="editGroupOldName" value="">
-    
+
     <div class="field-block">
       <label class="field-label">Gruppenname</label>
       <input type="text" id="groupTitleInput" placeholder="Gruppenname">
@@ -466,6 +524,23 @@
 
   <div id="groupContextMenu" class="context-menu" style="display:none; position:fixed; z-index:99999; width:160px;">
     <button id="ctxDuplicateGroup" class="btn-icon-elegant" style="width:100%; text-align:left; padding:7px 10px; font-size:12px;">⧉ Gruppe duplizieren</button>
+  </div>
+
+  <div id="makroRepeatAskDialog" style="display:none;">
+    <div class="input-header">
+      <span style="font-weight:600; font-size:14px;">▶ Makro abspielen</span>
+    </div>
+    <div class="field-block">
+      <label class="field-label">Wie oft ausführen?</label>
+      <div class="input-row" style="align-items:center; gap:8px;">
+        <input type="number" id="makroRepeatAskInput" min="1" max="9999" value="1" style="width:80px;">
+        <span style="font-size:12px; opacity:0.6;">× ausführen</span>
+      </div>
+    </div>
+    <div class="editor-footer-buttons" style="margin-top:14px;">
+      <button id="cancelRepeatAskBtn" class="danger-btn" style="flex:1;">✕ Abbrechen</button>
+      <button id="confirmRepeatAskBtn" class="primary-btn" style="flex:1;">▶ Abspielen</button>
+    </div>
   </div>
 
   <script src="sidepanel.js"></script>
