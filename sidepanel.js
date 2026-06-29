@@ -1218,7 +1218,7 @@ function closeMakroEditMode() {
             func: () => {
                 sessionStorage.removeItem('_makroEditSteps');
                 if (window._makroMarkerScrollHandler) { window.removeEventListener('scroll', window._makroMarkerScrollHandler); delete window._makroMarkerScrollHandler; }
-                document.querySelectorAll('#_makroMarkerContainer').forEach(c => { if(c._makroMutObs) c._makroMutObs.disconnect(); });
+                document.querySelectorAll('#_makroMarkerContainer').forEach(c => { if(c._makroMutObs) c._makroMutObs.disconnect(); try{c.hidePopover();}catch(e){} });
                 document.querySelectorAll('._makroEditMarker, #_makroEditPanel, #_makroEditStyle, #_makroMarkerContainer').forEach(el => el.remove());
             }
         });
@@ -1388,7 +1388,7 @@ function closeStepPanel() {
             target: { tabId: tabs[0].id },
             func: () => {
                 if (window._makroMarkerScrollHandler) { window.removeEventListener('scroll', window._makroMarkerScrollHandler); delete window._makroMarkerScrollHandler; }
-                document.querySelectorAll('#_makroMarkerContainer').forEach(c => { if(c._makroMutObs) c._makroMutObs.disconnect(); });
+                document.querySelectorAll('#_makroMarkerContainer').forEach(c => { if(c._makroMutObs) c._makroMutObs.disconnect(); try{c.hidePopover();}catch(e){} });
                 document.querySelectorAll('._makroEditMarker, #_makroEditPanel, #_makroEditStyle, #_makroMarkerContainer').forEach(el => el.remove());
             }
         });
@@ -1443,7 +1443,7 @@ document.getElementById('stepPlaybackRunBtn').addEventListener('click', () => {
         if (tabs[0]) {
             chrome.scripting.executeScript({
                 target: { tabId: tabs[0].id },
-                func: () => { document.querySelectorAll('#_makroMarkerContainer').forEach(c => { if(c._makroMutObs) c._makroMutObs.disconnect(); }); document.querySelectorAll('._makroEditMarker, #_makroEditPanel, #_makroEditStyle, #_makroMarkerContainer').forEach(el => el.remove()); }
+                func: () => { document.querySelectorAll('#_makroMarkerContainer').forEach(c => { if(c._makroMutObs) c._makroMutObs.disconnect(); try{c.hidePopover();}catch(e){} }); document.querySelectorAll('._makroEditMarker, #_makroEditPanel, #_makroEditStyle, #_makroMarkerContainer').forEach(el => el.remove()); }
             });
         }
     });
@@ -1607,7 +1607,7 @@ document.getElementById('stepEditSaveBtn').addEventListener('click', () => {
 
 // Page-Overlay: Schritte auf Seite anzeigen und bearbeiten
 function injectEditMarkersFunc(steps) {
-    document.querySelectorAll('#_makroMarkerContainer').forEach(c => { if(c._makroMutObs) c._makroMutObs.disconnect(); });
+    document.querySelectorAll('#_makroMarkerContainer').forEach(c => { if(c._makroMutObs) c._makroMutObs.disconnect(); try{c.hidePopover();}catch(e){} });
     document.querySelectorAll('._makroEditMarker, #_makroEditPanel, #_makroEditStyle, #_makroMarkerContainer').forEach(el => el.remove());
     sessionStorage.setItem('_makroEditSteps', JSON.stringify(steps));
     const style = document.createElement('style');
@@ -1706,16 +1706,18 @@ function injectEditMarkersFunc(steps) {
         document.body.appendChild(marker);
     });
 
-    // Create a container sentinel to track last-child position for MutationObserver
+    // Container im Browser Top Layer platzieren (Popover API) → über nativen <dialog showModal()>
     const container = document.createElement('div');
     container.id = '_makroMarkerContainer';
-    container.style.cssText = 'position:fixed;top:0;left:0;width:0;height:0;pointer-events:none;z-index:2147483647;';
+    container.setAttribute('popover', 'manual');
+    container.style.cssText = 'position:fixed;top:0;left:0;width:100vw;height:100vh;background:transparent;border:none;padding:0;margin:0;max-width:100vw;max-height:100vh;overflow:visible;pointer-events:none;z-index:2147483647;';
     document.body.appendChild(container);
+    try { container.showPopover(); } catch(e) {}
 
-    // MutationObserver: Container immer als letztes DOM-Element halten (über Modals)
+    // MutationObserver: Container im Top Layer re-promoten wenn neues Element erscheint
     const _obs = new MutationObserver(() => {
-        if (document.body.lastElementChild !== container) {
-            document.body.appendChild(container);
+        try { container.hidePopover(); container.showPopover(); } catch(e) {
+            if (document.body.lastElementChild !== container) document.body.appendChild(container);
         }
     });
     _obs.observe(document.body, { childList: true });
@@ -1762,7 +1764,7 @@ document.getElementById('applyPageEditsBtn').addEventListener('click', () => {
                 const steps = JSON.parse(sessionStorage.getItem('_makroEditSteps') || '[]');
                 sessionStorage.removeItem('_makroEditSteps');
                 if (window._makroMarkerScrollHandler) { window.removeEventListener('scroll', window._makroMarkerScrollHandler); delete window._makroMarkerScrollHandler; }
-                document.querySelectorAll('#_makroMarkerContainer').forEach(c => { if(c._makroMutObs) c._makroMutObs.disconnect(); });
+                document.querySelectorAll('#_makroMarkerContainer').forEach(c => { if(c._makroMutObs) c._makroMutObs.disconnect(); try{c.hidePopover();}catch(e){} });
                 document.querySelectorAll('._makroEditMarker, #_makroEditPanel, #_makroEditStyle, #_makroMarkerContainer').forEach(el => el.remove());
                 return steps;
             }
@@ -1785,7 +1787,7 @@ document.getElementById('cancelPageEditsBtn').addEventListener('click', () => {
                 func: () => {
                     sessionStorage.removeItem('_makroEditSteps');
                     if (window._makroMarkerScrollHandler) { window.removeEventListener('scroll', window._makroMarkerScrollHandler); delete window._makroMarkerScrollHandler; }
-                    document.querySelectorAll('#_makroMarkerContainer').forEach(c => { if(c._makroMutObs) c._makroMutObs.disconnect(); });
+                    document.querySelectorAll('#_makroMarkerContainer').forEach(c => { if(c._makroMutObs) c._makroMutObs.disconnect(); try{c.hidePopover();}catch(e){} });
                     document.querySelectorAll('._makroEditMarker, #_makroEditPanel, #_makroEditStyle, #_makroMarkerContainer').forEach(el => el.remove());
                 }
             });
@@ -1801,10 +1803,23 @@ function injectOneRun({ stepsList, speedDelay }) {
     function showClickRipple(vx, vy) {
         const d = document.createElement('div');
         d.style.cssText = 'position:fixed;left:' + (vx-18) + 'px;top:' + (vy-18) + 'px;width:36px;height:36px;border-radius:50%;border:3px solid #ff8c00;pointer-events:none;z-index:2147483647;animation:_makroRipple 0.5s ease-out forwards;';
-        const s = document.createElement('style');
-        s.textContent = '@keyframes _makroRipple{0%{transform:scale(0.3);opacity:1}100%{transform:scale(1.5);opacity:0}}';
-        if (!document.getElementById('_makroRippleStyle')) { s.id='_makroRippleStyle'; document.head.appendChild(s); }
-        document.body.appendChild(d);
+        if (!document.getElementById('_makroRippleStyle')) {
+            const s = document.createElement('style');
+            s.id = '_makroRippleStyle';
+            s.textContent = '@keyframes _makroRipple{0%{transform:scale(0.3);opacity:1}100%{transform:scale(1.5);opacity:0}}';
+            document.head.appendChild(s);
+        }
+        // Im bestehenden Top-Layer-Container einbetten, sonst eigenen Popover erstellen
+        const host = document.getElementById('_makroMarkerContainer') || (() => {
+            const h = document.createElement('div');
+            h.setAttribute('popover', 'manual');
+            h.style.cssText = 'position:fixed;top:0;left:0;width:0;height:0;background:transparent;border:none;padding:0;margin:0;overflow:visible;pointer-events:none;';
+            document.body.appendChild(h);
+            try { h.showPopover(); } catch(e) {}
+            setTimeout(() => { try{h.hidePopover();}catch(e){} h.remove(); }, 700);
+            return h;
+        })();
+        host.appendChild(d);
         setTimeout(() => d.remove(), 600);
     }
     const showClickIndicator = (x, y) => {
