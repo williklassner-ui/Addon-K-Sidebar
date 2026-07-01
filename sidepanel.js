@@ -179,9 +179,9 @@ function populateGroupDropdowns() {
     promts.forEach(p => { if (p.group && p.group.trim() !== "") uniqueGroups.add(p.group); });
     notes.forEach(n => { if (n.group && n.group.trim() !== "") uniqueGroups.add(n.group); });
     Object.keys(groupMetadata).forEach(g => uniqueGroups.add(g));
-    
+
     let baseHtml = '<option value="">-- Keine Gruppe gewählt --</option>';
-    uniqueGroups.forEach(gName => {
+    Array.from(uniqueGroups).sort((a, b) => a.localeCompare(b, 'de')).forEach(gName => {
         baseHtml += `<option value="${gName}">${gName}</option>`;
     });
     baseHtml += '<option value="__NEW_GROUP__">[+ Neue Gruppe erstellen]</option>';
@@ -200,7 +200,9 @@ function sortGroupNames(names, orderArray) {
 function populateProviderDropdowns() {
     const effectiveIcons = getEffectiveProviderIcons();
     const defaultProviders = ['none', 'ChatGPT', 'Gemini', 'Claude', 'Copilot', 'Perplexity', 'DeepL'];
-    const allNames = [...defaultProviders, ...customProviders.map(cp => cp.name)];
+    const sortedNames = [...defaultProviders.filter(n => n !== 'none'), ...customProviders.map(cp => cp.name)]
+        .sort((a, b) => a.localeCompare(b, 'de'));
+    const allNames = ['none', ...sortedNames];
 
     const buildOptions = (includeDefault) => {
         let html = '';
@@ -439,10 +441,11 @@ function renderNotes() {
                 <div class="group-header" data-notegroup="${gName}" style="color: ${meta.color};">
                     <div class="group-title-wrapper">
                         <span class="drag-handle" title="Verschieben">⠿</span>
-                        <span>${meta.icon ? meta.icon + ' ' : ''}${gName}<span class="group-count-badge">${totalCount}</span></span>
+                        <span>${meta.icon} ${gName}</span>
                     </div>
                     <div class="group-right-wrapper">
-                        <button class="btn-icon" data-notegroupedit="${gName}" title="Gruppe bearbeiten" style="font-size:10px; padding:2px 5px; opacity:0.7;">✎</button>
+                        <span class="badge">${totalCount}</span>
+                        <button class="group-edit-btn" data-notegroupedit="${gName}" title="Gruppe bearbeiten">✎</button>
                         <span style="font-size:10px; padding-left:4px;">${isCollapsed ? '►' : '▼'}</span>
                     </div>
                 </div>
@@ -2372,6 +2375,7 @@ document.getElementById('promptList').addEventListener('click', (e) => {
             document.getElementById('editIndex').value = i;
             document.getElementById('titleInput').value = p.title || '';
             document.getElementById('textInput').value = p.text || '';
+            autoResizeTextInput();
             document.getElementById('promptColor').value = p.color || '#ff8c00';
             document.getElementById('shortcutInput').value = p.shortcut || '';
             populateProviderDropdowns();
@@ -2910,11 +2914,38 @@ function closeEditMode() {
     document.getElementById('editIndex').value = "";
     document.getElementById('titleInput').value = '';
     document.getElementById('textInput').value = '';
+    autoResizeTextInput();
     document.getElementById('shortcutInput').value = '';
     document.getElementById('groupInput').value = '';
     document.getElementById('groupInput').style.display = 'none';
     document.getElementById('groupSelectOptions').value = '';
 }
+
+// Prompt-Text-Feld: Höhe an Inhalt anpassen (leer = doppelte Standardhöhe)
+function autoResizeTextInput() {
+    const el = document.getElementById('textInput');
+    if (!el) return;
+    if (!el.value) {
+        el.style.height = '200px';
+    } else {
+        el.style.height = 'auto';
+        el.style.height = el.scrollHeight + 'px';
+    }
+}
+document.getElementById('textInput').addEventListener('input', autoResizeTextInput);
+
+// Shortcut per Tastendruck aufnehmen statt manuell eintippen
+document.getElementById('shortcutInput').addEventListener('keydown', (e) => {
+    e.preventDefault();
+    if (['Control', 'Alt', 'Shift', 'Meta'].includes(e.key)) return;
+    const parts = [];
+    if (e.ctrlKey) parts.push('Ctrl');
+    if (e.altKey) parts.push('Alt');
+    if (e.shiftKey) parts.push('Shift');
+    if (e.metaKey) parts.push('Meta');
+    parts.push(e.key.length === 1 ? e.key.toUpperCase() : e.key);
+    e.target.value = parts.join('+');
+});
 
 document.getElementById('saveBtn').addEventListener('click', () => {
     const i = document.getElementById('editIndex').value;
@@ -2983,6 +3014,7 @@ document.getElementById('addToggleBtn').addEventListener('click', () => {
     document.getElementById('inputGroup').style.display = 'flex';
     populateGroupDropdowns();
     renderRecentColors();
+    autoResizeTextInput();
 });
 
 document.getElementById('themeToggle').addEventListener('click', () => {
@@ -3112,37 +3144,53 @@ document.getElementById('saveCurrentSessionBtn').addEventListener('click', () =>
     });
 });
 
-// Kontextmenü-Trigger für Rechtsklick auf Prompts und Gruppen
+// Kontextmenü-Trigger für Rechtsklick auf Prompts, Notizen und Gruppen
 document.addEventListener('contextmenu', (e) => {
     const promptCard = e.target.closest('.prompt-card');
+    const noteCard = e.target.closest('.note-card');
     const groupHeader = e.target.closest('.group-header[data-group]');
+    const noteGroupHeader = e.target.closest('.group-header[data-notegroup]');
 
-    if (promptCard || groupHeader) {
+    if (promptCard || noteCard || groupHeader || noteGroupHeader) {
         e.preventDefault();
         document.getElementById('tabContextMenu').style.display = 'none';
+        document.getElementById('promptContextMenu').style.display = 'none';
+        document.getElementById('noteContextMenu').style.display = 'none';
+        document.getElementById('groupContextMenu').style.display = 'none';
+
+        const positionMenu = (menu) => {
+            let x = e.clientX, y = e.clientY;
+            if (x + 170 > window.innerWidth) x = window.innerWidth - 175;
+            if (y + 100 > window.innerHeight) y = window.innerHeight - 105;
+            menu.style.left = x + 'px';
+            menu.style.top = y + 'px';
+            menu.style.display = 'block';
+        };
 
         if (promptCard) {
             const actionEl = promptCard.querySelector('[data-index]');
             const idx = actionEl ? parseInt(actionEl.dataset.index) : -1;
             const menu = document.getElementById('promptContextMenu');
-            let x = e.clientX, y = e.clientY;
-            if (x + 170 > window.innerWidth) x = window.innerWidth - 175;
-            if (y + 60 > window.innerHeight) y = window.innerHeight - 65;
-            menu.style.left = x + 'px';
-            menu.style.top = y + 'px';
-            menu.style.display = 'block';
+            positionMenu(menu);
             menu.dataset.index = idx;
-            document.getElementById('groupContextMenu').style.display = 'none';
+        } else if (noteCard) {
+            const actionEl = noteCard.querySelector('[data-index]');
+            const idx = actionEl ? parseInt(actionEl.dataset.index) : -1;
+            const menu = document.getElementById('noteContextMenu');
+            positionMenu(menu);
+            menu.dataset.index = idx;
         } else if (groupHeader) {
             const menu = document.getElementById('groupContextMenu');
-            let x = e.clientX, y = e.clientY;
-            if (x + 170 > window.innerWidth) x = window.innerWidth - 175;
-            if (y + 60 > window.innerHeight) y = window.innerHeight - 65;
-            menu.style.left = x + 'px';
-            menu.style.top = y + 'px';
-            menu.style.display = 'block';
+            positionMenu(menu);
             menu.dataset.group = groupHeader.dataset.group;
-            document.getElementById('promptContextMenu').style.display = 'none';
+            menu.dataset.type = 'prompt';
+            document.getElementById('ctxDuplicateGroup').style.display = 'block';
+        } else if (noteGroupHeader) {
+            const menu = document.getElementById('groupContextMenu');
+            positionMenu(menu);
+            menu.dataset.group = noteGroupHeader.dataset.notegroup;
+            menu.dataset.type = 'note';
+            document.getElementById('ctxDuplicateGroup').style.display = 'none';
         }
         return;
     }
@@ -3163,7 +3211,7 @@ document.getElementById('ctxDuplicateGroup').addEventListener('click', () => {
     const menu = document.getElementById('groupContextMenu');
     const gName = menu.dataset.group;
     menu.style.display = 'none';
-    if (!gName) return;
+    if (!gName || menu.dataset.type === 'note') return;
     let newName = gName + ' (Kopie)';
     let counter = 2;
     while (promts.some(p => p.group === newName) || groupMetadata[newName]) {
@@ -3181,6 +3229,108 @@ document.getElementById('ctxDuplicateGroup').addEventListener('click', () => {
     promts.splice(lastIdx + 1, 0, ...copies);
     groupOrder.push(newName);
     chrome.storage.sync.set({ promts, groupMetadata, groupOrder }, render);
+});
+
+document.getElementById('ctxRenamePrompt').addEventListener('click', () => {
+    const menu = document.getElementById('promptContextMenu');
+    const idx = parseInt(menu.dataset.index);
+    menu.style.display = 'none';
+    if (isNaN(idx) || !promts[idx]) return;
+    const newTitle = prompt('Neuer Titel:', promts[idx].title || '');
+    if (newTitle === null) return;
+    const trimmed = newTitle.trim();
+    if (!trimmed) return;
+    promts[idx].title = trimmed;
+    chrome.storage.sync.set({ promts }, render);
+});
+
+document.getElementById('ctxDeletePrompt').addEventListener('click', () => {
+    const menu = document.getElementById('promptContextMenu');
+    const idx = parseInt(menu.dataset.index);
+    menu.style.display = 'none';
+    if (isNaN(idx) || !promts[idx]) return;
+    const removed = promts.splice(idx, 1)[0];
+    deletedPromts.push(removed);
+    chrome.storage.sync.set({ promts, deletedPromts }, render);
+});
+
+document.getElementById('ctxRenameNote').addEventListener('click', () => {
+    const menu = document.getElementById('noteContextMenu');
+    const idx = parseInt(menu.dataset.index);
+    menu.style.display = 'none';
+    if (isNaN(idx) || !notes[idx]) return;
+    const newTitle = prompt('Neuer Titel:', notes[idx].title || '');
+    if (newTitle === null) return;
+    const trimmed = newTitle.trim();
+    if (!trimmed) return;
+    notes[idx].title = trimmed;
+    chrome.storage.sync.set({ notes }, renderNotes);
+});
+
+document.getElementById('ctxDeleteNote').addEventListener('click', () => {
+    const menu = document.getElementById('noteContextMenu');
+    const idx = parseInt(menu.dataset.index);
+    menu.style.display = 'none';
+    if (isNaN(idx) || !notes[idx]) return;
+    notes.splice(idx, 1);
+    chrome.storage.sync.set({ notes }, renderNotes);
+});
+
+document.getElementById('ctxRenameGroup').addEventListener('click', () => {
+    const menu = document.getElementById('groupContextMenu');
+    const gName = menu.dataset.group;
+    const type = menu.dataset.type || 'prompt';
+    menu.style.display = 'none';
+    if (!gName) return;
+    const newName = prompt('Neuer Gruppenname:', gName);
+    if (newName === null) return;
+    const trimmed = newName.trim();
+    if (!trimmed || trimmed === gName) return;
+    if (groupMetadata[gName]) {
+        groupMetadata[trimmed] = groupMetadata[gName];
+        delete groupMetadata[gName];
+    }
+    if (type === 'note') {
+        notes.forEach(n => { if (n.group === gName) n.group = trimmed; });
+        const oi = noteGroupOrder.indexOf(gName);
+        if (oi !== -1) noteGroupOrder[oi] = trimmed;
+        chrome.storage.sync.set({ notes, groupMetadata, noteGroupOrder }, renderNotes);
+    } else {
+        promts.forEach(p => { if (p.group === gName) p.group = trimmed; });
+        const oi = groupOrder.indexOf(gName);
+        if (oi !== -1) groupOrder[oi] = trimmed;
+        chrome.storage.sync.set({ promts, groupMetadata, groupOrder }, render);
+    }
+});
+
+document.getElementById('ctxDeleteGroup').addEventListener('click', () => {
+    const menu = document.getElementById('groupContextMenu');
+    const gName = menu.dataset.group;
+    const type = menu.dataset.type || 'prompt';
+    menu.style.display = 'none';
+    if (!gName) return;
+    if (!confirm(`Gruppe "${gName}" wirklich löschen?`)) return;
+    const alsoDeleteItems = confirm(`Auch alle Inhalte der Gruppe "${gName}" löschen?\nOK = Inhalte löschen, Abbrechen = Inhalte bleiben (ohne Gruppe) erhalten.`);
+    delete groupMetadata[gName];
+    if (type === 'note') {
+        if (alsoDeleteItems) {
+            notes = notes.filter(n => n.group !== gName);
+        } else {
+            notes.forEach(n => { if (n.group === gName) n.group = ''; });
+        }
+        noteGroupOrder = noteGroupOrder.filter(g => g !== gName);
+        chrome.storage.sync.set({ notes, groupMetadata, noteGroupOrder }, renderNotes);
+    } else {
+        if (alsoDeleteItems) {
+            const removedPrompts = promts.filter(p => p.group === gName);
+            deletedPromts.push(...removedPrompts);
+            promts = promts.filter(p => p.group !== gName);
+        } else {
+            promts.forEach(p => { if (p.group === gName) p.group = ''; });
+        }
+        groupOrder = groupOrder.filter(g => g !== gName);
+        chrome.storage.sync.set({ promts, deletedPromts, groupMetadata, groupOrder }, render);
+    }
 });
 
 // Kontextmenü-Trigger für Rechtsklick auf Reiter
@@ -3259,6 +3409,7 @@ document.getElementById('moveTabRightBtn').addEventListener('click', () => {
 
 document.addEventListener('click', () => {
     document.getElementById('promptContextMenu').style.display = 'none';
+    document.getElementById('noteContextMenu').style.display = 'none';
     document.getElementById('groupContextMenu').style.display = 'none';
 });
 

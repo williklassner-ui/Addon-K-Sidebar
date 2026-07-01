@@ -118,6 +118,8 @@ body { font-family: system-ui, -apple-system, sans-serif; margin: 0; display: fl
 .notes-grid-list { display: flex; flex-direction: column; gap: 6px; }
 
 .prompt-card, .trash-card, .note-card, .makro-card { background: var(--card-bg); padding: 8px 12px; border-radius: 6px; border: 1px solid #2d2d2d; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+body[data-theme="dark"] .group-content .prompt-card,
+body[data-theme="dark"] .group-content .note-card { background: #2b2b2b; }
 .card-header { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
 
 .prompt-info, .note-info, .makro-info { display: flex; align-items: center; gap: 10px; cursor: pointer; flex: 1; }

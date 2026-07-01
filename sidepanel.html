@@ -107,7 +107,7 @@
 
     <div class="field-block">
       <label class="field-label">Prompt Text</label>
-      <textarea id="textInput" placeholder="Prompt Text eingeben..."></textarea>
+      <textarea id="textInput" placeholder="Prompt Text eingeben..." style="height:200px; overflow:hidden;"></textarea>
     </div>
 
     <div class="field-block">
@@ -124,11 +124,11 @@
 
     <div class="field-block">
       <label class="field-label">Shortcut</label>
-      <input type="text" id="shortcutInput" placeholder="Shortcut (z.B. Alt+1)">
+      <input type="text" id="shortcutInput" placeholder="Klicken und Tasten drücken..." readonly style="cursor:pointer;">
     </div>
 
     <div class="field-block">
-      <label class="field-label">KI-Anbieter</label>
+      <label class="field-label">Icon für KI wählen</label>
       <select id="aiProvider"></select>
     </div>
 
@@ -564,10 +564,19 @@
 
   <div id="promptContextMenu" class="context-menu" style="display:none; position:fixed; z-index:99999; width:160px;">
     <button id="ctxDuplicatePrompt" class="btn-icon-elegant" style="width:100%; text-align:left; padding:7px 10px; font-size:12px;">⧉ Duplizieren</button>
+    <button id="ctxRenamePrompt" class="btn-icon-elegant" style="width:100%; text-align:left; padding:7px 10px; font-size:12px;">✎ Umbenennen</button>
+    <button id="ctxDeletePrompt" class="btn-icon-elegant" style="width:100%; text-align:left; padding:7px 10px; font-size:12px; color:#cf6679;">🗑 Löschen</button>
+  </div>
+
+  <div id="noteContextMenu" class="context-menu" style="display:none; position:fixed; z-index:99999; width:160px;">
+    <button id="ctxRenameNote" class="btn-icon-elegant" style="width:100%; text-align:left; padding:7px 10px; font-size:12px;">✎ Umbenennen</button>
+    <button id="ctxDeleteNote" class="btn-icon-elegant" style="width:100%; text-align:left; padding:7px 10px; font-size:12px; color:#cf6679;">🗑 Löschen</button>
   </div>
 
   <div id="groupContextMenu" class="context-menu" style="display:none; position:fixed; z-index:99999; width:160px;">
     <button id="ctxDuplicateGroup" class="btn-icon-elegant" style="width:100%; text-align:left; padding:7px 10px; font-size:12px;">⧉ Gruppe duplizieren</button>
+    <button id="ctxRenameGroup" class="btn-icon-elegant" style="width:100%; text-align:left; padding:7px 10px; font-size:12px;">✎ Gruppe umbenennen</button>
+    <button id="ctxDeleteGroup" class="btn-icon-elegant" style="width:100%; text-align:left; padding:7px 10px; font-size:12px; color:#cf6679;">🗑 Gruppe löschen</button>
   </div>
 
   <div id="makroRepeatAskDialog" style="display:none;">
