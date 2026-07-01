@@ -11,6 +11,9 @@ let collapsedSessions = {};
 let savedSessions = [];
 let groupMetadata = {};
 let tabColors = {};
+let tabIcons = {};
+let tabIconOnly = {};
+let tabLabels = {};
 let customProviders = [];
 let groupOrder = [];
 let noteGroupOrder = [];
@@ -95,6 +98,9 @@ function loadData() {
         groupMetadata: {},
         savedSessions: [],
         tabColors: {},
+        tabIcons: {},
+        tabIconOnly: {},
+        tabLabels: {},
         tabOrder: ['prompts', 'sessions', 'notes', 'makros', 'bookmarks'],
         customProviders: [],
         groupOrder: [],
@@ -110,6 +116,9 @@ function loadData() {
         groupMetadata = res.groupMetadata || {};
         savedSessions = res.savedSessions || [];
         tabColors = res.tabColors || {};
+        tabIcons = res.tabIcons || {};
+        tabIconOnly = res.tabIconOnly || {};
+        tabLabels = res.tabLabels || {};
         tabOrder = res.tabOrder || ['prompts', 'sessions', 'notes', 'makros', 'bookmarks'];
         customProviders = res.customProviders || [];
         groupOrder = res.groupOrder || [];
@@ -153,7 +162,11 @@ function renderTabsNavigation() {
     const activeTabKey = activeBtn ? activeBtn.dataset.tab : 'prompts';
 
     navContainer.innerHTML = tabOrder.map(key => {
-        return `<button id="nav${key.charAt(0).toUpperCase() + key.slice(1)}" class="tab-btn ${activeTabKey === key ? 'active' : ''}" data-tab="${key}">${tabNames[key] || key}</button>`;
+        const label = tabLabels[key] || tabNames[key] || key;
+        const icon = tabIcons[key] || '';
+        const iconOnly = !!tabIconOnly[key];
+        const displayText = (iconOnly && icon) ? icon : (icon ? icon + ' ' + label : label);
+        return `<button id="nav${key.charAt(0).toUpperCase() + key.slice(1)}" class="tab-btn ${activeTabKey === key ? 'active' : ''}" data-tab="${key}" title="${label}">${displayText}</button>`;
     }).join('');
 }
 
@@ -585,24 +598,21 @@ function renderBookmarks() {
 }
 
 function getBookmarkCardHtml(b, i) {
-    const tileColor = b.color || '#ff8c00';
-
-    const cardEl = document.createElement('div');
-    cardEl.className = 'bookmark-card';
-    cardEl.style.cssText = `border-left: 3px solid ${tileColor}; background: rgba(0,0,0,0.15);`;
-    cardEl.innerHTML = `
+    return `
+        <div class="bookmark-card" style="border-left: 3px solid ${b.color || '#ff8c00'}">
             <div class="card-header">
-                <div class="note-info" data-bookmark-action="open" data-index="${i}" title="In neuem Tab öffnen">
-                    <span class="note-title" style="font-weight:bold; color:${tileColor}; cursor:pointer;">🔖 ${b.title || 'Unbenanntes Lesezeichen'}</span>
+                <div class="prompt-info" data-bookmark-action="open" data-index="${i}" title="In neuem Tab öffnen">
+                    <span class="prompt-title">🔖 ${b.title || 'Unbenanntes Lesezeichen'}</span>
                 </div>
                 <div class="card-actions">
+                    <button class="btn-icon" data-bookmark-action="toggle" data-index="${i}" title="Vorschau">👁</button>
                     <button class="btn-icon" data-bookmark-action="edit" data-index="${i}" title="Bearbeiten">✎</button>
                     <button class="btn-icon" data-bookmark-action="delete" data-index="${i}" title="Löschen">✕</button>
                 </div>
             </div>
-            <div class="content-box" style="display:block; margin-top:4px; padding:4px 8px; background:rgba(0,0,0,0.3); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:11px; opacity:0.7;">${b.url || ''}</div>
+            <div id="bookmark-content-${i}" class="content-box">${b.url || ''}</div>
+        </div>
     `;
-    return cardEl.outerHTML;
 }
 
 function renderMakros() {
@@ -2632,6 +2642,10 @@ function handleBookmarksViewClicks(e) {
             chrome.tabs.create({ url });
         }
     }
+    else if (action === 'toggle') {
+        const el = document.getElementById(`bookmark-content-${i}`);
+        if (el) el.style.display = el.style.display === 'block' ? 'none' : 'block';
+    }
     else if (action === 'delete') {
         bookmarks.splice(i, 1);
         chrome.storage.sync.set({ bookmarks }, renderBookmarks);
@@ -2755,7 +2769,7 @@ document.getElementById('addBookmarkToggleBtn').addEventListener('click', () => 
 document.getElementById('searchBookmarksInput').addEventListener('input', (e) => {
     const query = e.target.value.toLowerCase();
     document.querySelectorAll('.bookmark-card').forEach(card => {
-        const title = card.querySelector('.note-title').innerText.toLowerCase();
+        const title = card.querySelector('.prompt-title').innerText.toLowerCase();
         const url = card.querySelector('.content-box').innerText.toLowerCase();
         card.style.display = (title.includes(query) || url.includes(query)) ? 'block' : 'none';
     });
@@ -3671,19 +3685,22 @@ document.addEventListener('contextmenu', (e) => {
         document.getElementById('groupContextMenu').style.display = 'none';
         const menu = document.getElementById('tabContextMenu');
         const key = btn.dataset.tab;
-        
+
         let x = e.clientX;
         let y = e.clientY;
-        
-        if (x + 150 > window.innerWidth) x = window.innerWidth - 160;
-        if (y + 130 > window.innerHeight) y = window.innerHeight - 140;
-        
+
+        if (x + 200 > window.innerWidth) x = window.innerWidth - 205;
+        if (y + 260 > window.innerHeight) y = window.innerHeight - 265;
+
         menu.style.left = x + 'px';
         menu.style.top = y + 'px';
         menu.style.display = 'block';
         menu.dataset.activeKey = key;
-        
+
         document.getElementById('tabColorPicker').value = tabColors[key] || '#ff8c00';
+        document.getElementById('tabRenameInput').value = tabLabels[key] || tabNames[key] || key;
+        document.getElementById('tabIconInput').value = tabIcons[key] || '';
+        document.getElementById('tabIconOnlyInput').checked = !!tabIconOnly[key];
     }
 });
 
@@ -3704,6 +3721,54 @@ document.getElementById('resetTabColorBtn').addEventListener('click', () => {
         applyTabColors();
         document.getElementById('tabContextMenu').style.display = 'none';
     }
+});
+
+document.getElementById('tabRenameApplyBtn').addEventListener('click', () => {
+    const key = document.getElementById('tabContextMenu').dataset.activeKey;
+    if (!key) return;
+    const newLabel = document.getElementById('tabRenameInput').value.trim();
+    if (!newLabel || newLabel === (tabNames[key] || key)) {
+        delete tabLabels[key];
+    } else {
+        tabLabels[key] = newLabel;
+    }
+    chrome.storage.sync.set({ tabLabels }, () => {
+        renderTabsNavigation();
+        applyTabColors();
+        document.getElementById('tabContextMenu').style.display = 'none';
+    });
+});
+
+document.getElementById('tabIconInput').addEventListener('input', (e) => {
+    const key = document.getElementById('tabContextMenu').dataset.activeKey;
+    if (!key) return;
+    const icon = e.target.value.trim();
+    if (icon) tabIcons[key] = icon; else delete tabIcons[key];
+    chrome.storage.sync.set({ tabIcons }, () => {
+        renderTabsNavigation();
+        applyTabColors();
+    });
+});
+
+document.getElementById('tabIconClearBtn').addEventListener('click', () => {
+    const key = document.getElementById('tabContextMenu').dataset.activeKey;
+    if (!key) return;
+    delete tabIcons[key];
+    document.getElementById('tabIconInput').value = '';
+    chrome.storage.sync.set({ tabIcons }, () => {
+        renderTabsNavigation();
+        applyTabColors();
+    });
+});
+
+document.getElementById('tabIconOnlyInput').addEventListener('change', (e) => {
+    const key = document.getElementById('tabContextMenu').dataset.activeKey;
+    if (!key) return;
+    if (e.target.checked) tabIconOnly[key] = true; else delete tabIconOnly[key];
+    chrome.storage.sync.set({ tabIconOnly }, () => {
+        renderTabsNavigation();
+        applyTabColors();
+    });
 });
 
 document.getElementById('moveTabLeftBtn').addEventListener('click', () => {

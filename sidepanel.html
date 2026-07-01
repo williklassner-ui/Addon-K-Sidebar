@@ -93,10 +93,32 @@
     </div>
   </div>
 
-  <div id="tabContextMenu" class="context-menu" style="display:none; position:fixed; z-index:99999; width: 140px;">
+  <div id="tabContextMenu" class="context-menu" style="display:none; position:fixed; z-index:99999; width: 190px;">
     <label style="font-size:11px; display:block; margin-bottom:5px; font-weight:bold;">Reiter-Farbe:</label>
     <input type="color" id="tabColorPicker" style="width:100%; height:30px; cursor:pointer; padding:0;">
     <button id="resetTabColorBtn" class="danger-btn" style="margin-top:6px; font-size:11px; width:100%; padding:4px; border-radius:4px !important;">Zurücksetzen</button>
+
+    <div style="border-top: 1px solid var(--input-border); margin-top: 8px; padding-top: 6px;">
+      <label style="font-size:11px; display:block; margin-bottom:4px; font-weight:bold;">Name:</label>
+      <div style="display:flex; gap:4px;">
+        <input type="text" id="tabRenameInput" style="flex:1; font-size:11px; padding:4px;">
+        <button id="tabRenameApplyBtn" class="btn-icon" style="font-size:11px; padding:4px 6px;" title="Übernehmen">✓</button>
+      </div>
+    </div>
+
+    <div style="border-top: 1px solid var(--input-border); margin-top: 8px; padding-top: 6px;">
+      <label style="font-size:11px; display:block; margin-bottom:4px; font-weight:bold;">Icon:</label>
+      <div style="display:flex; gap:4px; align-items:center;">
+        <input type="text" id="tabIconInput" maxlength="4" style="width:40px; font-size:16px; text-align:center; padding:4px;">
+        <button id="tabIconClearBtn" class="btn-icon" style="font-size:11px; padding:4px 6px; flex:1;" title="Icon entfernen">✕ Entfernen</button>
+      </div>
+      <label style="font-size:12px; display:flex; align-items:center; gap:6px; margin-top:8px; cursor:pointer;">
+        <input type="checkbox" id="tabIconOnlyInput" class="toggle-switch-input">
+        <span class="toggle-switch-track"></span>
+        Nur Icon anzeigen
+      </label>
+    </div>
+
     <div style="border-top: 1px solid var(--input-border); margin-top: 8px; padding-top: 6px; display: flex; gap: 4px;">
       <button id="moveTabLeftBtn" class="btn-icon-elegant" style="flex:1; padding:4px; font-size:11px;" title="Nach links verschieben">◀</button>
       <button id="moveTabRightBtn" class="btn-icon-elegant" style="flex:1; padding:4px; font-size:11px;" title="Nach rechts verschieben">▶</button>
