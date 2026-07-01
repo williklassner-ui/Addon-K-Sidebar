@@ -609,12 +609,25 @@ function renderBookmarks() {
     bList.innerHTML = html;
 }
 
+function faviconUrl(pageUrl) {
+    try {
+        const u = new URL(chrome.runtime.getURL('/_favicon/'));
+        u.searchParams.set('pageUrl', pageUrl);
+        u.searchParams.set('size', '32');
+        return u.toString();
+    } catch (e) {
+        return '';
+    }
+}
+
 function getBookmarkCardHtml(b, i) {
+    const favicon = b.url ? faviconUrl(b.url) : '';
     return `
         <div class="bookmark-card" style="border-left: 3px solid ${b.color || '#ff8c00'}">
             <div class="card-header">
                 <div class="prompt-info" data-bookmark-action="open" data-index="${i}" title="In neuem Tab öffnen">
-                    <span class="prompt-title">🔖 ${b.title || 'Unbenanntes Lesezeichen'}</span>
+                    <span class="bookmark-favicon-wrap" style="display:inline-flex; width:16px; height:16px; align-items:center; justify-content:center; flex-shrink:0;">${favicon ? `<img class="bookmark-favicon" src="${favicon}" data-fallback="🔖" style="width:14px; height:14px; object-fit:contain;">` : '🔖'}</span>
+                    <span class="prompt-title">${b.title || 'Unbenanntes Lesezeichen'}</span>
                 </div>
                 <div class="card-actions">
                     <button class="btn-icon" data-bookmark-action="toggle" data-index="${i}" title="Vorschau">👁</button>
@@ -2688,6 +2701,15 @@ function handleBookmarksViewClicks(e) {
 }
 document.getElementById('bookmarksList').addEventListener('click', handleBookmarksViewClicks);
 
+// Favicon-Fallback: bei Ladefehler durch Emoji ersetzen (error-Events bubblen nicht -> capture:true)
+document.getElementById('bookmarksList').addEventListener('error', (e) => {
+    const img = e.target;
+    if (img.classList && img.classList.contains('bookmark-favicon')) {
+        const wrap = img.parentElement;
+        if (wrap) wrap.textContent = img.dataset.fallback || '🔖';
+    }
+}, true);
+
 // Lesezeichen-Gruppen bearbeiten: Icon/Farbe via Popup
 document.getElementById('bookmarksList').addEventListener('click', (e) => {
     const editBtn = e.target.closest('[data-bookmarkgroupedit]');
@@ -2772,10 +2794,18 @@ document.getElementById('saveBookmarkBtn').addEventListener('click', () => {
 
 document.getElementById('addBookmarkToggleBtn').addEventListener('click', () => {
     document.getElementById('editBookmarkIndex').value = "";
+    document.getElementById('bookmarkTitleInput').value = '';
+    document.getElementById('bookmarkUrlInput').value = '';
     document.getElementById('mainContainer').style.display = 'none';
     document.getElementById('bookmarkInputGroup').style.display = 'flex';
     populateGroupDropdowns();
     renderRecentColors();
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        if (tabs[0] && tabs[0].url) {
+            document.getElementById('bookmarkTitleInput').value = tabs[0].title || '';
+            document.getElementById('bookmarkUrlInput').value = tabs[0].url || '';
+        }
+    });
 });
 
 document.getElementById('searchBookmarksInput').addEventListener('input', (e) => {
@@ -2785,6 +2815,59 @@ document.getElementById('searchBookmarksInput').addEventListener('input', (e) =>
         const url = card.querySelector('.content-box').innerText.toLowerCase();
         card.style.display = (title.includes(query) || url.includes(query)) ? 'block' : 'none';
     });
+});
+
+// Lesezeichen per Drag & Drop importieren (einzelne Links, mehrere Links oder ganze Ordner aus der Lesezeichenleiste)
+const bookmarksListEl = document.getElementById('bookmarksList');
+bookmarksListEl.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    bookmarksListEl.classList.add('bookmarks-dropzone-active');
+});
+bookmarksListEl.addEventListener('dragleave', (e) => {
+    if (!bookmarksListEl.contains(e.relatedTarget)) {
+        bookmarksListEl.classList.remove('bookmarks-dropzone-active');
+    }
+});
+bookmarksListEl.addEventListener('drop', (e) => {
+    e.preventDefault();
+    bookmarksListEl.classList.remove('bookmarks-dropzone-active');
+
+    const links = [];
+    const seenUrls = new Set();
+    const addLink = (url, title) => {
+        if (!url) return;
+        url = url.trim();
+        if (!url || seenUrls.has(url)) return;
+        seenUrls.add(url);
+        links.push({ title: (title || '').trim() || url, url });
+    };
+
+    const uriList = e.dataTransfer.getData('text/uri-list');
+    if (uriList) {
+        uriList.split(/\r?\n/).forEach(line => {
+            if (line && !line.startsWith('#')) addLink(line, '');
+        });
+    }
+
+    const html = e.dataTransfer.getData('text/html');
+    if (html) {
+        try {
+            const doc = new DOMParser().parseFromString(html, 'text/html');
+            doc.querySelectorAll('a[href]').forEach(a => addLink(a.getAttribute('href'), a.textContent));
+        } catch (err) {}
+    }
+
+    if (links.length === 0) {
+        const plain = e.dataTransfer.getData('text/plain');
+        if (plain) addLink(plain, '');
+    }
+
+    if (links.length === 0) return;
+
+    links.forEach(l => {
+        bookmarks.push({ title: l.title, url: l.url, color: '#ff8c00', group: '' });
+    });
+    chrome.storage.sync.set({ bookmarks }, renderBookmarks);
 });
 
 // Clipboard-Copy via Event-Delegation (Listener muss auf dem DOM-Element sein, nicht auf outerHTML)
