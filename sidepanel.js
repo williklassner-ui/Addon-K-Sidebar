@@ -1,18 +1,21 @@
 let promts = [];
-let notes = []; 
+let notes = [];
 let makros = [];
+let bookmarks = [];
 let deletedPromts = [];
 let recentColors = [];
 let collapsedGroups = {};
 let collapsedNoteGroups = {};
-let collapsedSessions = {}; 
+let collapsedBookmarkGroups = {};
+let collapsedSessions = {};
 let savedSessions = [];
 let groupMetadata = {};
 let tabColors = {};
 let customProviders = [];
 let groupOrder = [];
 let noteGroupOrder = [];
-let tabOrder = ['prompts', 'sessions', 'notes', 'makros'];
+let bookmarkGroupOrder = [];
+let tabOrder = ['prompts', 'sessions', 'notes', 'makros', 'bookmarks'];
 let isRecording = false;
 let stepPlaybackState = null;
 let recordingTabId = null;
@@ -45,7 +48,8 @@ const tabNames = {
     'prompts': 'Promts',
     'sessions': 'Sessions',
     'notes': 'Notizen',
-    'makros': 'Makros'
+    'makros': 'Makros',
+    'bookmarks': 'Lesezeichen'
 };
 
 const providerIcons = {
@@ -55,6 +59,17 @@ const providerIcons = {
     'Copilot': '✵',
     'Perplexity': '◈',
     'DeepL': '⚲',
+    'Grok': '𝕏',
+    'Humata': '📄',
+    'Grammarly': '✓',
+    'DeepSeek': '🐳',
+    'DataLab': '📊',
+    'Google Antigravity': '🪐',
+    'Cursor': '▲',
+    'GitHub Copilot': '🐙',
+    'Nano Banana': '🍌',
+    'ChatGPT-Image-2.0': '🖼️',
+    'NotebookLM': '📓',
     'none': ''
 };
 
@@ -74,29 +89,38 @@ function loadData() {
         promts: [],
         notes: [],
         makros: [],
+        bookmarks: [],
         deletedPromts: [],
         recentColors: [],
         groupMetadata: {},
         savedSessions: [],
         tabColors: {},
-        tabOrder: ['prompts', 'sessions', 'notes', 'makros'],
+        tabOrder: ['prompts', 'sessions', 'notes', 'makros', 'bookmarks'],
         customProviders: [],
         groupOrder: [],
-        noteGroupOrder: []
+        noteGroupOrder: [],
+        bookmarkGroupOrder: []
     }, (res) => {
         promts = res.promts || [];
         notes = res.notes || [];
         makros = res.makros || [];
+        bookmarks = res.bookmarks || [];
         deletedPromts = res.deletedPromts || [];
         recentColors = res.recentColors || [];
         groupMetadata = res.groupMetadata || {};
         savedSessions = res.savedSessions || [];
         tabColors = res.tabColors || {};
-        tabOrder = res.tabOrder || ['prompts', 'sessions', 'notes', 'makros'];
+        tabOrder = res.tabOrder || ['prompts', 'sessions', 'notes', 'makros', 'bookmarks'];
         customProviders = res.customProviders || [];
         groupOrder = res.groupOrder || [];
         noteGroupOrder = res.noteGroupOrder || [];
-        
+        bookmarkGroupOrder = res.bookmarkGroupOrder || [];
+
+        if (!tabOrder.includes('bookmarks')) {
+            tabOrder.push('bookmarks');
+            chrome.storage.sync.set({ tabOrder });
+        }
+
         savedSessions.forEach((_, idx) => {
             if (collapsedSessions[idx] === undefined) {
                 collapsedSessions[idx] = true;
@@ -108,6 +132,7 @@ function loadData() {
         render();
         renderNotes();
         renderMakros();
+        renderBookmarks();
         renderTrash();
         renderRecentColors();
         renderSessions();
@@ -116,6 +141,7 @@ function loadData() {
         checkSyncStatus();
         initGroupDragDrop(document.getElementById('promptList'), false);
         initGroupDragDrop(document.getElementById('notesList'), true);
+        initGroupDragDrop(document.getElementById('bookmarksList'), 'bookmark');
     });
 }
 
@@ -173,11 +199,13 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
 function populateGroupDropdowns() {
     const pSelect = document.getElementById('groupSelectOptions');
     const nSelect = document.getElementById('noteGroupSelectOptions');
+    const bSelect = document.getElementById('bookmarkGroupSelectOptions');
     if (!pSelect || !nSelect) return;
-    
+
     const uniqueGroups = new Set();
     promts.forEach(p => { if (p.group && p.group.trim() !== "") uniqueGroups.add(p.group); });
     notes.forEach(n => { if (n.group && n.group.trim() !== "") uniqueGroups.add(n.group); });
+    bookmarks.forEach(b => { if (b.group && b.group.trim() !== "") uniqueGroups.add(b.group); });
     Object.keys(groupMetadata).forEach(g => uniqueGroups.add(g));
 
     let baseHtml = '<option value="">Keine</option>';
@@ -185,9 +213,10 @@ function populateGroupDropdowns() {
         baseHtml += `<option value="${gName}">${gName}</option>`;
     });
     baseHtml += '<option value="__NEW_GROUP__">[+ Neue Gruppe erstellen]</option>';
-    
+
     pSelect.innerHTML = baseHtml;
     nSelect.innerHTML = baseHtml;
+    if (bSelect) bSelect.innerHTML = baseHtml;
 }
 
 function sortGroupNames(names, orderArray) {
@@ -199,7 +228,7 @@ function sortGroupNames(names, orderArray) {
 
 function populateProviderDropdowns() {
     const effectiveIcons = getEffectiveProviderIcons();
-    const defaultProviders = ['none', 'ChatGPT', 'Gemini', 'Claude', 'Copilot', 'Perplexity', 'DeepL'];
+    const defaultProviders = ['none', 'ChatGPT', 'Gemini', 'Claude', 'Copilot', 'Perplexity', 'DeepL', 'Grok', 'Humata', 'Grammarly', 'DeepSeek', 'DataLab', 'Google Antigravity', 'Cursor', 'GitHub Copilot', 'Nano Banana', 'ChatGPT-Image-2.0', 'NotebookLM'];
     const sortedNames = [...defaultProviders.filter(n => n !== 'none'), ...customProviders.map(cp => cp.name)]
         .sort((a, b) => a.localeCompare(b, 'de'));
     const allNames = ['none', ...sortedNames];
@@ -296,7 +325,10 @@ function initGroupDragDrop(containerEl, isNotes) {
         newOrder.splice(fromIdx, 1);
         newOrder.splice(toIdx, 0, dragSrcName);
 
-        if (isNotes) {
+        if (isNotes === 'bookmark') {
+            bookmarkGroupOrder = newOrder;
+            chrome.storage.sync.set({ bookmarkGroupOrder }, renderBookmarks);
+        } else if (isNotes) {
             noteGroupOrder = newOrder;
             chrome.storage.sync.set({ noteGroupOrder }, renderNotes);
         } else {
@@ -323,6 +355,7 @@ function handleDropdownChange(selectId, inputId) {
 }
 handleDropdownChange('groupSelectOptions', 'groupInput');
 handleDropdownChange('noteGroupSelectOptions', 'noteGroupInput');
+handleDropdownChange('bookmarkGroupSelectOptions', 'bookmarkGroupInput');
 
 function render() {
     const pList = document.getElementById('promptList');
@@ -500,6 +533,78 @@ function getNoteCardHtml(n, i) {
     return noteCardEl.outerHTML;
 }
 
+function renderBookmarks() {
+    const bList = document.getElementById('bookmarksList');
+    if (!bList) return;
+
+    const groups = {};
+    const unassigned = [];
+
+    bookmarks.forEach((b, i) => {
+        if (b.group && b.group.trim() !== "") {
+            if (!groups[b.group]) groups[b.group] = [];
+            groups[b.group].push({ item: b, index: i });
+        } else {
+            unassigned.push({ item: b, index: i });
+        }
+    });
+
+    let html = "";
+    sortGroupNames(Object.keys(groups), bookmarkGroupOrder).forEach(gName => {
+        const isCollapsed = (gName in collapsedBookmarkGroups) ? collapsedBookmarkGroups[gName] : true;
+        const meta = groupMetadata[gName] || { color: '#ff8c00', icon: '🔖' };
+        let totalCount = groups[gName].length;
+
+        html += `
+            <div class="group-container" draggable="true" data-groupname="${gName}" style="border-top: 2px solid ${meta.color}">
+                <div class="group-header" data-bookmarkgroup="${gName}" style="color: ${meta.color};">
+                    <div class="group-title-wrapper">
+                        <span class="drag-handle" title="Verschieben">⠿</span>
+                        <span>${meta.icon} ${gName}</span>
+                    </div>
+                    <div class="group-right-wrapper">
+                        <span class="badge">${totalCount}</span>
+                        <button class="group-edit-btn" data-bookmarkgroupedit="${gName}" title="Gruppe bearbeiten">✎</button>
+                        <span style="font-size:10px; padding-left:4px;">${isCollapsed ? '►' : '▼'}</span>
+                    </div>
+                </div>
+                <div class="group-content" style="display: ${isCollapsed ? 'none' : 'flex'};">
+                    ${groups[gName].map(bObj => getBookmarkCardHtml(bObj.item, bObj.index)).join('')}
+                </div>
+            </div>
+        `;
+    });
+
+    if (unassigned.length > 0) {
+        html += unassigned.map(bObj => getBookmarkCardHtml(bObj.item, bObj.index)).join('');
+    } else if (html === "") {
+        html = '<p style="font-size:12px; opacity:0.5; margin:0;">Keine Lesezeichen vorhanden.</p>';
+    }
+
+    bList.innerHTML = html;
+}
+
+function getBookmarkCardHtml(b, i) {
+    const tileColor = b.color || '#ff8c00';
+
+    const cardEl = document.createElement('div');
+    cardEl.className = 'bookmark-card';
+    cardEl.style.cssText = `border-left: 3px solid ${tileColor}; background: rgba(0,0,0,0.15);`;
+    cardEl.innerHTML = `
+            <div class="card-header">
+                <div class="note-info" data-bookmark-action="open" data-index="${i}" title="In neuem Tab öffnen">
+                    <span class="note-title" style="font-weight:bold; color:${tileColor}; cursor:pointer;">🔖 ${b.title || 'Unbenanntes Lesezeichen'}</span>
+                </div>
+                <div class="card-actions">
+                    <button class="btn-icon" data-bookmark-action="edit" data-index="${i}" title="Bearbeiten">✎</button>
+                    <button class="btn-icon" data-bookmark-action="delete" data-index="${i}" title="Löschen">✕</button>
+                </div>
+            </div>
+            <div class="content-box" style="display:block; margin-top:4px; padding:4px 8px; background:rgba(0,0,0,0.3); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:11px; opacity:0.7;">${b.url || ''}</div>
+    `;
+    return cardEl.outerHTML;
+}
+
 function renderMakros() {
     const mList = document.getElementById('makrosList');
     if (!mList) return;
@@ -579,7 +684,7 @@ function renderTrash() {
 }
 
 function renderRecentColors() {
-    ['recentColorsPrompt', 'recentColorsGroup', 'recentColorsNote', 'recentColorsMakro'].forEach(id => {
+    ['recentColorsPrompt', 'recentColorsGroup', 'recentColorsNote', 'recentColorsMakro', 'recentColorsBookmark'].forEach(id => {
         const container = document.getElementById(id);
         if (!container) return;
         container.innerHTML = recentColors.map(c => `
@@ -2504,6 +2609,158 @@ document.getElementById('saveNoteGroupBtn').addEventListener('click', () => {
     });
 });
 
+function handleBookmarksViewClicks(e) {
+    const groupHeader = e.target.closest('.group-header');
+    if (groupHeader && groupHeader.dataset.bookmarkgroup) {
+        const gName = groupHeader.dataset.bookmarkgroup;
+        const cur = (gName in collapsedBookmarkGroups) ? collapsedBookmarkGroups[gName] : true;
+        collapsedBookmarkGroups[gName] = !cur;
+        renderBookmarks();
+        return;
+    }
+
+    const target = e.target.closest('[data-bookmark-action]');
+    if (!target) return;
+    const action = target.dataset.bookmarkAction;
+    const i = parseInt(target.dataset.index);
+
+    if (action === 'open') {
+        const b = bookmarks[i];
+        if (b && b.url) {
+            let url = b.url.trim();
+            if (!/^https?:\/\//i.test(url)) url = 'https://' + url;
+            chrome.tabs.create({ url });
+        }
+    }
+    else if (action === 'delete') {
+        bookmarks.splice(i, 1);
+        chrome.storage.sync.set({ bookmarks }, renderBookmarks);
+    }
+    else if (action === 'edit') {
+        const b = bookmarks[i];
+        if (b) {
+            document.getElementById('editBookmarkIndex').value = i;
+            document.getElementById('bookmarkTitleInput').value = b.title || '';
+            document.getElementById('bookmarkUrlInput').value = b.url || '';
+            document.getElementById('bookmarkColor').value = b.color || '#ff8c00';
+
+            populateGroupDropdowns();
+            const textInput = document.getElementById('bookmarkGroupInput');
+            if (b.group && b.group.trim() !== "") {
+                document.getElementById('bookmarkGroupSelectOptions').value = b.group;
+            } else {
+                document.getElementById('bookmarkGroupSelectOptions').value = '';
+            }
+            textInput.style.display = 'none';
+            textInput.value = '';
+
+            document.getElementById('mainContainer').style.display = 'none';
+            document.getElementById('bookmarkInputGroup').style.display = 'flex';
+            renderRecentColors();
+        }
+    }
+}
+document.getElementById('bookmarksList').addEventListener('click', handleBookmarksViewClicks);
+
+// Lesezeichen-Gruppen bearbeiten: Icon/Farbe via Popup
+document.getElementById('bookmarksList').addEventListener('click', (e) => {
+    const editBtn = e.target.closest('[data-bookmarkgroupedit]');
+    if (!editBtn) return;
+    e.stopPropagation();
+    const gName = editBtn.dataset.bookmarkgroupedit;
+    const meta = groupMetadata[gName] || { color: '#ff8c00', icon: '🔖' };
+    document.getElementById('editBookmarkGroupName').value = gName;
+    document.getElementById('bookmarkGroupIconInput').value = meta.icon || '🔖';
+    document.getElementById('bookmarkGroupColorInput').value = meta.color || '#ff8c00';
+    const popup = document.getElementById('bookmarkGroupEditPopup');
+    const rect = editBtn.getBoundingClientRect();
+    popup.style.display = 'block';
+    popup.style.top = (rect.bottom + 4) + 'px';
+    popup.style.left = Math.max(4, rect.left - 180) + 'px';
+});
+document.getElementById('bookmarkGroupIconPick').addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-icon]');
+    if (btn) document.getElementById('bookmarkGroupIconInput').value = btn.dataset.icon;
+});
+document.getElementById('cancelBookmarkGroupBtn').addEventListener('click', () => {
+    document.getElementById('bookmarkGroupEditPopup').style.display = 'none';
+});
+document.getElementById('saveBookmarkGroupBtn').addEventListener('click', () => {
+    const gName = document.getElementById('editBookmarkGroupName').value;
+    if (!gName) return;
+    groupMetadata[gName] = {
+        ...(groupMetadata[gName] || {}),
+        icon: document.getElementById('bookmarkGroupIconInput').value || '🔖',
+        color: document.getElementById('bookmarkGroupColorInput').value || '#ff8c00'
+    };
+    chrome.storage.sync.set({ groupMetadata }, () => {
+        document.getElementById('bookmarkGroupEditPopup').style.display = 'none';
+        renderBookmarks();
+    });
+});
+
+function closeBookmarkEditMode() {
+    document.getElementById('bookmarkInputGroup').style.display = 'none';
+    document.getElementById('mainContainer').style.display = 'block';
+    document.getElementById('editBookmarkIndex').value = "";
+    document.getElementById('bookmarkTitleInput').value = '';
+    document.getElementById('bookmarkUrlInput').value = '';
+    document.getElementById('bookmarkGroupInput').value = '';
+    document.getElementById('bookmarkGroupInput').style.display = 'none';
+    document.getElementById('bookmarkGroupSelectOptions').value = '';
+}
+
+document.getElementById('cancelBookmarkBtn').addEventListener('click', closeBookmarkEditMode);
+
+document.getElementById('saveBookmarkBtn').addEventListener('click', () => {
+    const i = document.getElementById('editBookmarkIndex').value;
+    const selectedColor = document.getElementById('bookmarkColor').value;
+
+    let finalGroup = '';
+    const dropdownValue = document.getElementById('bookmarkGroupSelectOptions').value;
+    if (dropdownValue === '__NEW_GROUP__') {
+        finalGroup = document.getElementById('bookmarkGroupInput').value.trim();
+    } else {
+        finalGroup = dropdownValue;
+    }
+
+    const newBookmark = {
+        title: document.getElementById('bookmarkTitleInput').value,
+        url: document.getElementById('bookmarkUrlInput').value.trim(),
+        color: selectedColor,
+        group: finalGroup
+    };
+
+    if (i !== "") {
+        bookmarks[parseInt(i)] = newBookmark;
+    } else {
+        bookmarks.push(newBookmark);
+    }
+
+    updateRecentColors(selectedColor);
+    chrome.storage.sync.set({ bookmarks }, () => {
+        closeBookmarkEditMode();
+        renderBookmarks();
+    });
+});
+
+document.getElementById('addBookmarkToggleBtn').addEventListener('click', () => {
+    document.getElementById('editBookmarkIndex').value = "";
+    document.getElementById('mainContainer').style.display = 'none';
+    document.getElementById('bookmarkInputGroup').style.display = 'flex';
+    populateGroupDropdowns();
+    renderRecentColors();
+});
+
+document.getElementById('searchBookmarksInput').addEventListener('input', (e) => {
+    const query = e.target.value.toLowerCase();
+    document.querySelectorAll('.bookmark-card').forEach(card => {
+        const title = card.querySelector('.note-title').innerText.toLowerCase();
+        const url = card.querySelector('.content-box').innerText.toLowerCase();
+        card.style.display = (title.includes(query) || url.includes(query)) ? 'block' : 'none';
+    });
+});
+
 // Clipboard-Copy via Event-Delegation (Listener muss auf dem DOM-Element sein, nicht auf outerHTML)
 document.getElementById('notesList').addEventListener('click', (e) => {
     const titleEl = e.target.closest('[data-note-copy-idx]');
@@ -2888,6 +3145,8 @@ document.addEventListener('click', (e) => {
         document.getElementById('noteColor').value = dot.dataset.color;
     } else if (document.getElementById('makroInputGroup').style.display === 'flex') {
         document.getElementById('makroColor').value = dot.dataset.color;
+    } else if (document.getElementById('bookmarkInputGroup').style.display === 'flex') {
+        document.getElementById('bookmarkColor').value = dot.dataset.color;
     }
 });
 
@@ -3148,18 +3407,21 @@ document.getElementById('saveCurrentSessionBtn').addEventListener('click', () =>
     });
 });
 
-// Kontextmenü-Trigger für Rechtsklick auf Prompts, Notizen und Gruppen
+// Kontextmenü-Trigger für Rechtsklick auf Prompts, Notizen, Lesezeichen und Gruppen
 document.addEventListener('contextmenu', (e) => {
     const promptCard = e.target.closest('.prompt-card');
     const noteCard = e.target.closest('.note-card');
+    const bookmarkCard = e.target.closest('.bookmark-card');
     const groupHeader = e.target.closest('.group-header[data-group]');
     const noteGroupHeader = e.target.closest('.group-header[data-notegroup]');
+    const bookmarkGroupHeader = e.target.closest('.group-header[data-bookmarkgroup]');
 
-    if (promptCard || noteCard || groupHeader || noteGroupHeader) {
+    if (promptCard || noteCard || bookmarkCard || groupHeader || noteGroupHeader || bookmarkGroupHeader) {
         e.preventDefault();
         document.getElementById('tabContextMenu').style.display = 'none';
         document.getElementById('promptContextMenu').style.display = 'none';
         document.getElementById('noteContextMenu').style.display = 'none';
+        document.getElementById('bookmarkContextMenu').style.display = 'none';
         document.getElementById('groupContextMenu').style.display = 'none';
 
         const positionMenu = (menu) => {
@@ -3183,6 +3445,12 @@ document.addEventListener('contextmenu', (e) => {
             const menu = document.getElementById('noteContextMenu');
             positionMenu(menu);
             menu.dataset.index = idx;
+        } else if (bookmarkCard) {
+            const actionEl = bookmarkCard.querySelector('[data-index]');
+            const idx = actionEl ? parseInt(actionEl.dataset.index) : -1;
+            const menu = document.getElementById('bookmarkContextMenu');
+            positionMenu(menu);
+            menu.dataset.index = idx;
         } else if (groupHeader) {
             const menu = document.getElementById('groupContextMenu');
             positionMenu(menu);
@@ -3194,6 +3462,12 @@ document.addEventListener('contextmenu', (e) => {
             positionMenu(menu);
             menu.dataset.group = noteGroupHeader.dataset.notegroup;
             menu.dataset.type = 'note';
+            document.getElementById('ctxDuplicateGroup').style.display = 'none';
+        } else if (bookmarkGroupHeader) {
+            const menu = document.getElementById('groupContextMenu');
+            positionMenu(menu);
+            menu.dataset.group = bookmarkGroupHeader.dataset.bookmarkgroup;
+            menu.dataset.type = 'bookmark';
             document.getElementById('ctxDuplicateGroup').style.display = 'none';
         }
         return;
@@ -3280,6 +3554,28 @@ document.getElementById('ctxDeleteNote').addEventListener('click', () => {
     chrome.storage.sync.set({ notes }, renderNotes);
 });
 
+document.getElementById('ctxRenameBookmark').addEventListener('click', () => {
+    const menu = document.getElementById('bookmarkContextMenu');
+    const idx = parseInt(menu.dataset.index);
+    menu.style.display = 'none';
+    if (isNaN(idx) || !bookmarks[idx]) return;
+    const newTitle = prompt('Neuer Titel:', bookmarks[idx].title || '');
+    if (newTitle === null) return;
+    const trimmed = newTitle.trim();
+    if (!trimmed) return;
+    bookmarks[idx].title = trimmed;
+    chrome.storage.sync.set({ bookmarks }, renderBookmarks);
+});
+
+document.getElementById('ctxDeleteBookmark').addEventListener('click', () => {
+    const menu = document.getElementById('bookmarkContextMenu');
+    const idx = parseInt(menu.dataset.index);
+    menu.style.display = 'none';
+    if (isNaN(idx) || !bookmarks[idx]) return;
+    bookmarks.splice(idx, 1);
+    chrome.storage.sync.set({ bookmarks }, renderBookmarks);
+});
+
 document.getElementById('ctxRenameGroup').addEventListener('click', () => {
     const menu = document.getElementById('groupContextMenu');
     const gName = menu.dataset.group;
@@ -3299,6 +3595,11 @@ document.getElementById('ctxRenameGroup').addEventListener('click', () => {
         const oi = noteGroupOrder.indexOf(gName);
         if (oi !== -1) noteGroupOrder[oi] = trimmed;
         chrome.storage.sync.set({ notes, groupMetadata, noteGroupOrder }, renderNotes);
+    } else if (type === 'bookmark') {
+        bookmarks.forEach(b => { if (b.group === gName) b.group = trimmed; });
+        const oi = bookmarkGroupOrder.indexOf(gName);
+        if (oi !== -1) bookmarkGroupOrder[oi] = trimmed;
+        chrome.storage.sync.set({ bookmarks, groupMetadata, bookmarkGroupOrder }, renderBookmarks);
     } else {
         promts.forEach(p => { if (p.group === gName) p.group = trimmed; });
         const oi = groupOrder.indexOf(gName);
@@ -3333,6 +3634,14 @@ function finishGroupDelete(alsoDeleteItems) {
         }
         noteGroupOrder = noteGroupOrder.filter(g => g !== gName);
         chrome.storage.sync.set({ notes, groupMetadata, noteGroupOrder }, renderNotes);
+    } else if (type === 'bookmark') {
+        if (alsoDeleteItems) {
+            bookmarks = bookmarks.filter(b => b.group !== gName);
+        } else {
+            bookmarks.forEach(b => { if (b.group === gName) b.group = ''; });
+        }
+        bookmarkGroupOrder = bookmarkGroupOrder.filter(g => g !== gName);
+        chrome.storage.sync.set({ bookmarks, groupMetadata, bookmarkGroupOrder }, renderBookmarks);
     } else {
         if (alsoDeleteItems) {
             const removedPrompts = promts.filter(p => p.group === gName);
@@ -3430,6 +3739,7 @@ document.getElementById('moveTabRightBtn').addEventListener('click', () => {
 document.addEventListener('click', () => {
     document.getElementById('promptContextMenu').style.display = 'none';
     document.getElementById('noteContextMenu').style.display = 'none';
+    document.getElementById('bookmarkContextMenu').style.display = 'none';
     document.getElementById('groupContextMenu').style.display = 'none';
 });
 

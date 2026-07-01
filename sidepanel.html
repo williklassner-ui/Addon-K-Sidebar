@@ -76,11 +76,20 @@
       <div id="makrosList"></div>
     </div>
 
+    <div id="bookmarksView" class="tab-view" style="display:none;">
+      <div class="header">
+        <input type="text" id="searchBookmarksInput" placeholder="⌕ Lesezeichen durchsuchen...">
+        <button id="addBookmarkToggleBtn" class="btn-icon" title="Lesezeichen hinzufügen">＋</button>
+      </div>
+      <div id="bookmarksList"></div>
+    </div>
+
     <div class="tabs-nav" id="tabsNavContainer">
       <button id="navPrompts" class="tab-btn active" data-tab="prompts">Promts</button>
       <button id="navSessions" class="tab-btn" data-tab="sessions">Sessions</button>
       <button id="navNotes" class="tab-btn" data-tab="notes">Notizen</button>
       <button id="navMakros" class="tab-btn" data-tab="makros">Makros</button>
+      <button id="navBookmarks" class="tab-btn" data-tab="bookmarks">Lesezeichen</button>
     </div>
   </div>
 
@@ -220,6 +229,75 @@
       <button id="cancelNoteBtn" class="danger-btn icon-btn-large" title="Abbrechen" style="background: #cf6679; flex:1;">✕</button>
       <button id="saveNoteBtn" class="primary-btn icon-btn-large" title="Speichern" style="flex:1;">💾</button>
     </div>
+  </div>
+
+  <div id="bookmarkInputGroup" style="display:none;">
+    <div class="input-header">
+      <h3>🔖 Lesezeichen bearbeiten</h3>
+    </div>
+    <input type="hidden" id="editBookmarkIndex" value="">
+
+    <div class="field-block">
+      <label class="field-label">Titel</label>
+      <input type="text" id="bookmarkTitleInput" placeholder="Titel eingeben...">
+    </div>
+
+    <div class="field-block">
+      <label class="field-label">URL</label>
+      <input type="text" id="bookmarkUrlInput" placeholder="https://...">
+    </div>
+
+    <div class="field-block">
+      <label class="field-label">Farbe</label>
+      <div class="input-row">
+        <input type="color" id="bookmarkColor" value="#ff8c00">
+      </div>
+    </div>
+
+    <div class="field-block">
+      <label class="field-label">Zuletzt verwendete Farben</label>
+      <div id="recentColorsBookmark" class="recent-colors-box"></div>
+    </div>
+
+    <div class="field-block">
+      <label class="field-label">Zugehörige Gruppe</label>
+      <div class="input-row-vertical">
+        <select id="bookmarkGroupSelectOptions" style="width:100%;"></select>
+        <input type="text" id="bookmarkGroupInput" placeholder="Namen für neue Gruppe eingeben..." style="display:none; width:100%; margin-top:5px;">
+      </div>
+    </div>
+
+    <div class="editor-footer-buttons">
+      <button id="cancelBookmarkBtn" class="danger-btn icon-btn-large" title="Abbrechen" style="background: #cf6679; flex:1;">✕</button>
+      <button id="saveBookmarkBtn" class="primary-btn icon-btn-large" title="Speichern" style="flex:1;">💾</button>
+    </div>
+  </div>
+
+  <div id="bookmarkGroupEditPopup" style="display:none; position:fixed; z-index:99999; background:var(--card-bg,#1e1e1e); border:1px solid #555; border-radius:8px; padding:12px 14px; min-width:220px; box-shadow:0 4px 16px rgba(0,0,0,0.5);">
+    <div style="font-weight:600; font-size:13px; margin-bottom:10px; display:flex; align-items:center; justify-content:space-between;">
+      <span>Gruppe bearbeiten</span>
+      <button id="cancelBookmarkGroupBtn" class="btn-icon" style="font-size:12px; padding:2px 6px;">✕</button>
+    </div>
+    <input type="hidden" id="editBookmarkGroupName">
+    <div class="field-block" style="margin-bottom:8px;">
+      <label class="field-label" style="font-size:11px;">Icon</label>
+      <div style="display:flex; gap:4px; align-items:center; flex-wrap:wrap; margin-top:4px;">
+        <input type="text" id="bookmarkGroupIconInput" maxlength="4" style="width:46px; font-size:18px; text-align:center; padding:4px; border:1px solid var(--input-border,#555); border-radius:4px; background:var(--input-bg,#2a2a2a); color:var(--text,#fff);">
+        <div id="bookmarkGroupIconPick" style="display:flex; gap:4px; flex-wrap:wrap;">
+          <button class="bookmark-group-icon-pick btn-icon-elegant" data-icon="🔖">🔖</button>
+          <button class="bookmark-group-icon-pick btn-icon-elegant" data-icon="📁">📁</button>
+          <button class="bookmark-group-icon-pick btn-icon-elegant" data-icon="⭐">⭐</button>
+          <button class="bookmark-group-icon-pick btn-icon-elegant" data-icon="🌐">🌐</button>
+          <button class="bookmark-group-icon-pick btn-icon-elegant" data-icon="📚">📚</button>
+          <button class="bookmark-group-icon-pick btn-icon-elegant" data-icon="🛠️">🛠️</button>
+        </div>
+      </div>
+    </div>
+    <div class="field-block" style="margin-bottom:10px;">
+      <label class="field-label" style="font-size:11px;">Farbe</label>
+      <input type="color" id="bookmarkGroupColorInput" value="#ff8c00" style="margin-top:4px; width:50px; height:28px; border:none; cursor:pointer;">
+    </div>
+    <button id="saveBookmarkGroupBtn" class="primary-btn" style="width:100%; padding:8px;">💾 Speichern</button>
   </div>
 
   <div id="makroInputGroup" style="display:none;">
@@ -587,6 +665,11 @@
   <div id="noteContextMenu" class="context-menu" style="display:none; position:fixed; z-index:99999; width:160px;">
     <button id="ctxRenameNote" class="btn-icon-elegant" style="width:100%; text-align:left; padding:7px 10px; font-size:12px;">✎ Umbenennen</button>
     <button id="ctxDeleteNote" class="btn-icon-elegant" style="width:100%; text-align:left; padding:7px 10px; font-size:12px; color:#cf6679;">🗑 Löschen</button>
+  </div>
+
+  <div id="bookmarkContextMenu" class="context-menu" style="display:none; position:fixed; z-index:99999; width:160px;">
+    <button id="ctxRenameBookmark" class="btn-icon-elegant" style="width:100%; text-align:left; padding:7px 10px; font-size:12px;">✎ Umbenennen</button>
+    <button id="ctxDeleteBookmark" class="btn-icon-elegant" style="width:100%; text-align:left; padding:7px 10px; font-size:12px; color:#cf6679;">🗑 Löschen</button>
   </div>
 
   <div id="groupContextMenu" class="context-menu" style="display:none; position:fixed; z-index:99999; width:160px;">
