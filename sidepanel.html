@@ -7,7 +7,10 @@
 <body data-theme="dark">
   <div class="top-controls">
     <button id="trashToggleBtn" class="btn-icon-elegant top-btn" title="Papierkorb öffnen">🗑️</button>
-    <button id="backupToggleBtn" class="btn-icon-elegant top-btn" title="Backup & Sync Manager">🛡️ Backup & Sync</button>
+    <div style="display:flex; flex-direction:column; align-items:center; gap:1px;">
+      <button id="backupToggleBtn" class="btn-icon-elegant top-btn" title="Backup & Sync Manager">🛡️ Backup & Sync</button>
+      <span id="addonVersionLabel" style="font-size:9px; opacity:0.4; line-height:1;"></span>
+    </div>
     <button id="themeToggle" class="theme-btn">◑</button>
   </div>
 

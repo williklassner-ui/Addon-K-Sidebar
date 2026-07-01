@@ -66,6 +66,9 @@ function getEffectiveProviderIcons() {
 
 let currentEditorTodos = [];
 
+const _versionLabel = document.getElementById('addonVersionLabel');
+if (_versionLabel) _versionLabel.textContent = 'v' + chrome.runtime.getManifest().version;
+
 function loadData() {
     chrome.storage.sync.get({
         promts: [],
@@ -337,7 +340,7 @@ function render() {
 
     let html = "";
     sortGroupNames(Object.keys(groups), groupOrder).forEach(gName => {
-        const isCollapsed = collapsedGroups[gName] || false;
+        const isCollapsed = (gName in collapsedGroups) ? collapsedGroups[gName] : true;
         const meta = groupMetadata[gName] || { color: '#ff8c00', icon: '📁' };
         let totalCount = groups[gName] ? groups[gName].length : 0;
 
@@ -427,7 +430,7 @@ function renderNotes() {
 
     let html = "";
     sortGroupNames(Object.keys(groups), noteGroupOrder).forEach(gName => {
-        const isCollapsed = collapsedNoteGroups[gName] || false;
+        const isCollapsed = (gName in collapsedNoteGroups) ? collapsedNoteGroups[gName] : true;
         const meta = groupMetadata[gName] || { color: '#ff8c00', icon: '📁' };
         let totalCount = groups[gName].length;
 
@@ -2344,7 +2347,8 @@ document.getElementById('promptList').addEventListener('click', (e) => {
     const groupHeader = e.target.closest('.group-header');
     if (groupHeader && groupHeader.dataset.group) {
         const gName = groupHeader.dataset.group;
-        collapsedGroups[gName] = !collapsedGroups[gName];
+        const cur = (gName in collapsedGroups) ? collapsedGroups[gName] : true;
+        collapsedGroups[gName] = !cur;
         render();
         return;
     }
@@ -2399,7 +2403,8 @@ function handleNotesViewClicks(e) {
     const groupHeader = e.target.closest('.group-header');
     if (groupHeader && groupHeader.dataset.notegroup) {
         const gName = groupHeader.dataset.notegroup;
-        collapsedNoteGroups[gName] = !collapsedNoteGroups[gName];
+        const cur = (gName in collapsedNoteGroups) ? collapsedNoteGroups[gName] : true;
+        collapsedNoteGroups[gName] = !cur;
         renderNotes();
         return;
     }
