@@ -112,6 +112,40 @@
         <input type="text" id="tabIconInput" maxlength="4" style="width:40px; font-size:16px; text-align:center; padding:4px;">
         <button id="tabIconClearBtn" class="btn-icon" style="font-size:11px; padding:4px 6px; flex:1;" title="Icon entfernen">✕ Entfernen</button>
       </div>
+      <div id="tabIconQuickPick" style="display:flex; gap:4px; flex-wrap:wrap; padding:6px 0; max-height:110px; overflow-y:auto;">
+        <button class="tab-icon-pick btn-icon-elegant" data-icon="📝">📝</button>
+        <button class="tab-icon-pick btn-icon-elegant" data-icon="💬">💬</button>
+        <button class="tab-icon-pick btn-icon-elegant" data-icon="📁">📁</button>
+        <button class="tab-icon-pick btn-icon-elegant" data-icon="⭐">⭐</button>
+        <button class="tab-icon-pick btn-icon-elegant" data-icon="🔖">🔖</button>
+        <button class="tab-icon-pick btn-icon-elegant" data-icon="💡">💡</button>
+        <button class="tab-icon-pick btn-icon-elegant" data-icon="🔍">🔍</button>
+        <button class="tab-icon-pick btn-icon-elegant" data-icon="✅">✅</button>
+        <button class="tab-icon-pick btn-icon-elegant" data-icon="❗">❗</button>
+        <button class="tab-icon-pick btn-icon-elegant" data-icon="🗒️">🗒️</button>
+        <button class="tab-icon-pick btn-icon-elegant" data-icon="🚀">🚀</button>
+        <button class="tab-icon-pick btn-icon-elegant" data-icon="🎨">🎨</button>
+        <button class="tab-icon-pick btn-icon-elegant" data-icon="🧠">🧠</button>
+        <button class="tab-icon-pick btn-icon-elegant" data-icon="🛠️">🛠️</button>
+        <button class="tab-icon-pick btn-icon-elegant" data-icon="📌">📌</button>
+        <button class="tab-icon-pick btn-icon-elegant" data-icon="📊">📊</button>
+        <button class="tab-icon-pick btn-icon-elegant" data-icon="📚">📚</button>
+        <button class="tab-icon-pick btn-icon-elegant" data-icon="🌐">🌐</button>
+        <button class="tab-icon-pick btn-icon-elegant" data-icon="🔗">🔗</button>
+        <button class="tab-icon-pick btn-icon-elegant" data-icon="🎯">🎯</button>
+        <button class="tab-icon-pick btn-icon-elegant" data-icon="📅">📅</button>
+        <button class="tab-icon-pick btn-icon-elegant" data-icon="💰">💰</button>
+        <button class="tab-icon-pick btn-icon-elegant" data-icon="🔒">🔒</button>
+        <button class="tab-icon-pick btn-icon-elegant" data-icon="🎵">🎵</button>
+        <button class="tab-icon-pick btn-icon-elegant" data-icon="🎮">🎮</button>
+        <button class="tab-icon-pick btn-icon-elegant" data-icon="📷">📷</button>
+        <button class="tab-icon-pick btn-icon-elegant" data-icon="🏠">🏠</button>
+        <button class="tab-icon-pick btn-icon-elegant" data-icon="⚙️">⚙️</button>
+        <button class="tab-icon-pick btn-icon-elegant" data-icon="🔥">🔥</button>
+        <button class="tab-icon-pick btn-icon-elegant" data-icon="💎">💎</button>
+      </div>
+      <button id="tabIconUploadBtn" class="btn-icon-elegant" style="width:100%; font-size:11px; padding:5px; margin-top:4px;">🖼️ Eigenes PNG hochladen</button>
+      <input type="file" id="tabIconFileInput" accept="image/png" style="display:none;">
       <label style="font-size:12px; display:flex; align-items:center; gap:6px; margin-top:8px; cursor:pointer;">
         <input type="checkbox" id="tabIconOnlyInput" class="toggle-switch-input">
         <span class="toggle-switch-track"></span>
@@ -284,8 +318,8 @@
     <div class="field-block">
       <label class="field-label">Zugehörige Gruppe</label>
       <div class="input-row-vertical">
-        <select id="bookmarkGroupSelectOptions" style="width:100%;"></select>
-        <input type="text" id="bookmarkGroupInput" placeholder="Namen für neue Gruppe eingeben..." style="display:none; width:100%; margin-top:5px;">
+        <select id="bookmarkGroupSelectOptions" style="width:100%; box-sizing:border-box;"></select>
+        <input type="text" id="bookmarkGroupInput" placeholder="Namen für neue Gruppe eingeben..." style="display:none; width:100%; box-sizing:border-box; margin-top:5px;">
       </div>
     </div>
 

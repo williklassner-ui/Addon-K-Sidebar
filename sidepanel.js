@@ -14,6 +14,7 @@ let tabColors = {};
 let tabIcons = {};
 let tabIconOnly = {};
 let tabLabels = {};
+let tabCustomIcons = {};
 let customProviders = [];
 let groupOrder = [];
 let noteGroupOrder = [];
@@ -151,6 +152,12 @@ function loadData() {
         initGroupDragDrop(document.getElementById('promptList'), false);
         initGroupDragDrop(document.getElementById('notesList'), true);
         initGroupDragDrop(document.getElementById('bookmarksList'), 'bookmark');
+
+        chrome.storage.local.get({ tabCustomIcons: {} }, (localRes) => {
+            tabCustomIcons = localRes.tabCustomIcons || {};
+            renderTabsNavigation();
+            applyTabColors();
+        });
     });
 }
 
@@ -163,9 +170,14 @@ function renderTabsNavigation() {
 
     navContainer.innerHTML = tabOrder.map(key => {
         const label = tabLabels[key] || tabNames[key] || key;
-        const icon = tabIcons[key] || '';
+        const customIcon = tabCustomIcons[key] || '';
+        const emojiIcon = tabIcons[key] || '';
         const iconOnly = !!tabIconOnly[key];
-        const displayText = (iconOnly && icon) ? icon : (icon ? icon + ' ' + label : label);
+        const iconHtml = customIcon
+            ? `<img src="${customIcon}" style="height:14px; width:14px; object-fit:contain; vertical-align:middle;">`
+            : (emojiIcon || '');
+        const hasIcon = !!(customIcon || emojiIcon);
+        const displayText = (iconOnly && hasIcon) ? iconHtml : (hasIcon ? iconHtml + ' ' + label : label);
         return `<button id="nav${key.charAt(0).toUpperCase() + key.slice(1)}" class="tab-btn ${activeTabKey === key ? 'active' : ''}" data-tab="${key}" title="${label}">${displayText}</button>`;
     }).join('');
 }
@@ -3329,19 +3341,22 @@ document.getElementById('closeBackupBtn').addEventListener('click', () => {
 document.getElementById('btnExecuteBackupExport').addEventListener('click', () => {
     if(confirm("Möchtest du jetzt ein vollständiges Backup erstellen und den Speicherort festlegen?")) {
         chrome.storage.sync.get(null, (syncData) => {
-            const totalBackup = {
-                K_SIDEBAR_BACKUP_VERSION: "1.0.16",
-                timestamp: Date.now(),
-                syncStorage: syncData
-            };
-            const blob = new Blob([JSON.stringify(totalBackup, null, 2)], { type: "application/json" });
-            const url = URL.createObjectURL(blob);
-            chrome.downloads.download({
-                url: url,
-                filename: `k_sidebar_full_backup_${new Date().toISOString().slice(0,10)}.json`,
-                saveAs: true
-            }, () => {
-                URL.revokeObjectURL(url);
+            chrome.storage.local.get({ tabCustomIcons: {} }, (localData) => {
+                const totalBackup = {
+                    K_SIDEBAR_BACKUP_VERSION: "1.0.16",
+                    timestamp: Date.now(),
+                    syncStorage: syncData,
+                    localStorage: { tabCustomIcons: localData.tabCustomIcons || {} }
+                };
+                const blob = new Blob([JSON.stringify(totalBackup, null, 2)], { type: "application/json" });
+                const url = URL.createObjectURL(blob);
+                chrome.downloads.download({
+                    url: url,
+                    filename: `k_sidebar_full_backup_${new Date().toISOString().slice(0,10)}.json`,
+                    saveAs: true
+                }, () => {
+                    URL.revokeObjectURL(url);
+                });
             });
         });
     }
@@ -3361,11 +3376,14 @@ document.getElementById('backupFileInput').addEventListener('change', (e) => {
             if (backup && backup.syncStorage) {
                 if (confirm("Achtung! Das Einspielen überschreibt alle aktuellen Daten. Fortfahren?")) {
                     const syncToSet = backup.syncStorage || {};
+                    const localToSet = (backup.localStorage && backup.localStorage.tabCustomIcons) ? backup.localStorage : { tabCustomIcons: {} };
                     chrome.storage.sync.clear(() => {
                         chrome.storage.sync.set(syncToSet, () => {
-                            alert("System-Backup erfolgreich eingespielt!");
-                            document.getElementById('backupOverlay').style.display = 'none';
-                            document.getElementById('mainContainer').style.display = 'block';
+                            chrome.storage.local.set(localToSet, () => {
+                                alert("System-Backup erfolgreich eingespielt!");
+                                document.getElementById('backupOverlay').style.display = 'none';
+                                document.getElementById('mainContainer').style.display = 'block';
+                            });
                         });
                     });
                 }
@@ -3686,21 +3704,28 @@ document.addEventListener('contextmenu', (e) => {
         const menu = document.getElementById('tabContextMenu');
         const key = btn.dataset.tab;
 
-        let x = e.clientX;
-        let y = e.clientY;
-
-        if (x + 200 > window.innerWidth) x = window.innerWidth - 205;
-        if (y + 260 > window.innerHeight) y = window.innerHeight - 265;
-
-        menu.style.left = x + 'px';
-        menu.style.top = y + 'px';
-        menu.style.display = 'block';
         menu.dataset.activeKey = key;
-
         document.getElementById('tabColorPicker').value = tabColors[key] || '#ff8c00';
         document.getElementById('tabRenameInput').value = tabLabels[key] || tabNames[key] || key;
         document.getElementById('tabIconInput').value = tabIcons[key] || '';
         document.getElementById('tabIconOnlyInput').checked = !!tabIconOnly[key];
+
+        // Menü zunächst unsichtbar positionieren, um die tatsächliche Größe zu messen,
+        // damit es garantiert im sichtbaren Bereich bleibt (unabhängig vom Inhalt)
+        menu.style.visibility = 'hidden';
+        menu.style.left = '0px';
+        menu.style.top = '0px';
+        menu.style.display = 'block';
+        requestAnimationFrame(() => {
+            const rect = menu.getBoundingClientRect();
+            let x = Math.min(e.clientX, window.innerWidth - rect.width - 5);
+            let y = Math.min(e.clientY, window.innerHeight - rect.height - 5);
+            x = Math.max(5, x);
+            y = Math.max(5, y);
+            menu.style.left = x + 'px';
+            menu.style.top = y + 'px';
+            menu.style.visibility = 'visible';
+        });
     }
 });
 
@@ -3744,20 +3769,67 @@ document.getElementById('tabIconInput').addEventListener('input', (e) => {
     if (!key) return;
     const icon = e.target.value.trim();
     if (icon) tabIcons[key] = icon; else delete tabIcons[key];
+    delete tabCustomIcons[key];
     chrome.storage.sync.set({ tabIcons }, () => {
-        renderTabsNavigation();
-        applyTabColors();
+        chrome.storage.local.set({ tabCustomIcons }, () => {
+            renderTabsNavigation();
+            applyTabColors();
+        });
     });
+});
+
+document.getElementById('tabIconQuickPick').addEventListener('click', (e) => {
+    const btn = e.target.closest('.tab-icon-pick');
+    if (!btn) return;
+    const key = document.getElementById('tabContextMenu').dataset.activeKey;
+    if (!key) return;
+    tabIcons[key] = btn.dataset.icon;
+    delete tabCustomIcons[key];
+    document.getElementById('tabIconInput').value = btn.dataset.icon;
+    chrome.storage.sync.set({ tabIcons }, () => {
+        chrome.storage.local.set({ tabCustomIcons }, () => {
+            renderTabsNavigation();
+            applyTabColors();
+        });
+    });
+});
+
+document.getElementById('tabIconUploadBtn').addEventListener('click', () => {
+    document.getElementById('tabIconFileInput').click();
+});
+
+document.getElementById('tabIconFileInput').addEventListener('change', (e) => {
+    const file = e.target.files[0];
+    e.target.value = '';
+    if (!file) return;
+    const key = document.getElementById('tabContextMenu').dataset.activeKey;
+    if (!key) return;
+    const reader = new FileReader();
+    reader.onload = (event) => {
+        tabCustomIcons[key] = event.target.result;
+        delete tabIcons[key];
+        document.getElementById('tabIconInput').value = '';
+        chrome.storage.local.set({ tabCustomIcons }, () => {
+            chrome.storage.sync.set({ tabIcons }, () => {
+                renderTabsNavigation();
+                applyTabColors();
+            });
+        });
+    };
+    reader.readAsDataURL(file);
 });
 
 document.getElementById('tabIconClearBtn').addEventListener('click', () => {
     const key = document.getElementById('tabContextMenu').dataset.activeKey;
     if (!key) return;
     delete tabIcons[key];
+    delete tabCustomIcons[key];
     document.getElementById('tabIconInput').value = '';
     chrome.storage.sync.set({ tabIcons }, () => {
-        renderTabsNavigation();
-        applyTabColors();
+        chrome.storage.local.set({ tabCustomIcons }, () => {
+            renderTabsNavigation();
+            applyTabColors();
+        });
     });
 });
 
