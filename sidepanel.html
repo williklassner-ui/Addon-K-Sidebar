@@ -52,7 +52,7 @@
     <div id="makrosView" class="tab-view" style="display:none;">
       <div class="header">
         <input type="text" id="searchMakrosInput" placeholder="⌕ Makros durchsuchen...">
-        <button id="recordMakroBtn" class="record-btn" title="Makro live im aktiven Tab aufnehmen"><span class="record-dot"></span> Aufnahme</button>
+        <button id="recordMakroBtn" class="record-btn" title="Makro live im aktiven Tab aufnehmen"><span class="record-dot"></span> REC</button>
       </div>
       <div id="makroPlaybackBar" style="display:none; flex-direction:column; padding:8px 10px; border-bottom:1px solid #444; background:rgba(255,140,0,0.1); gap:6px; margin-bottom:2px;">
         <div style="display:flex; align-items:center; gap:8px;">
@@ -753,8 +753,9 @@
     <button id="ctxDeleteNote" class="btn-icon-elegant" style="width:100%; text-align:left; padding:7px 10px; font-size:12px; color:#cf6679;">🗑 Löschen</button>
   </div>
 
-  <div id="bookmarkContextMenu" class="context-menu" style="display:none; position:fixed; z-index:99999; width:160px;">
-    <button id="ctxRenameBookmark" class="btn-icon-elegant" style="width:100%; text-align:left; padding:7px 10px; font-size:12px;">✎ Umbenennen</button>
+  <div id="bookmarkContextMenu" class="context-menu" style="display:none; position:fixed; z-index:99999; width:190px;">
+    <button id="ctxAddCurrentPageBookmark" class="btn-icon-elegant" style="width:100%; text-align:left; padding:7px 10px; font-size:12px;">➕ Aktuelle Seite hinzufügen</button>
+    <button id="ctxEditBookmark" class="btn-icon-elegant" style="width:100%; text-align:left; padding:7px 10px; font-size:12px;">✎ Bearbeiten</button>
     <button id="ctxDeleteBookmark" class="btn-icon-elegant" style="width:100%; text-align:left; padding:7px 10px; font-size:12px; color:#cf6679;">🗑 Löschen</button>
   </div>
 

@@ -10,6 +10,7 @@ let collapsedBookmarkGroups = {};
 let collapsedSessions = {};
 let savedSessions = [];
 let groupMetadata = {};
+let bookmarkGroupMetadata = {};
 let tabColors = {};
 let tabIcons = {};
 let tabIconOnly = {};
@@ -97,6 +98,7 @@ function loadData() {
         deletedPromts: [],
         recentColors: [],
         groupMetadata: {},
+        bookmarkGroupMetadata: {},
         savedSessions: [],
         tabColors: {},
         tabIcons: {},
@@ -115,6 +117,7 @@ function loadData() {
         deletedPromts = res.deletedPromts || [];
         recentColors = res.recentColors || [];
         groupMetadata = res.groupMetadata || {};
+        bookmarkGroupMetadata = res.bookmarkGroupMetadata || {};
         savedSessions = res.savedSessions || [];
         tabColors = res.tabColors || {};
         tabIcons = res.tabIcons || {};
@@ -130,6 +133,16 @@ function loadData() {
             tabOrder.push('bookmarks');
             chrome.storage.sync.set({ tabOrder });
         }
+
+        // Migration: bestehende Lesezeichen-Gruppen (früher in gemeinsamer groupMetadata) nach bookmarkGroupMetadata übernehmen
+        let bgmMigrated = false;
+        bookmarks.forEach(b => {
+            if (b.group && b.group.trim() !== "" && !bookmarkGroupMetadata[b.group] && groupMetadata[b.group]) {
+                bookmarkGroupMetadata[b.group] = Object.assign({}, groupMetadata[b.group]);
+                bgmMigrated = true;
+            }
+        });
+        if (bgmMigrated) chrome.storage.sync.set({ bookmarkGroupMetadata });
 
         savedSessions.forEach((_, idx) => {
             if (collapsedSessions[idx] === undefined) {
@@ -186,7 +199,7 @@ function applyTabColors() {
     document.querySelectorAll('.tab-btn').forEach(btn => {
         const tabKey = btn.dataset.tab;
         if (tabColors[tabKey]) {
-            btn.style.setProperty('background-color', tabColors[tabKey] + '33', 'important');
+            btn.style.setProperty('background-color', tabColors[tabKey], 'important');
             btn.style.setProperty('border-top', `3px solid ${tabColors[tabKey]}`, 'important');
         } else {
             btn.style.removeProperty('background-color');
@@ -230,18 +243,27 @@ function populateGroupDropdowns() {
     const uniqueGroups = new Set();
     promts.forEach(p => { if (p.group && p.group.trim() !== "") uniqueGroups.add(p.group); });
     notes.forEach(n => { if (n.group && n.group.trim() !== "") uniqueGroups.add(n.group); });
-    bookmarks.forEach(b => { if (b.group && b.group.trim() !== "") uniqueGroups.add(b.group); });
     Object.keys(groupMetadata).forEach(g => uniqueGroups.add(g));
 
-    let baseHtml = '<option value="">Keine</option>';
-    Array.from(uniqueGroups).sort((a, b) => a.localeCompare(b, 'de')).forEach(gName => {
-        baseHtml += `<option value="${gName}">${gName}</option>`;
-    });
-    baseHtml += '<option value="__NEW_GROUP__">[+ Neue Gruppe erstellen]</option>';
+    const buildOptions = (names) => {
+        let html = '<option value="">Keine</option>';
+        names.sort((a, b) => a.localeCompare(b, 'de')).forEach(gName => {
+            html += `<option value="${gName}">${gName}</option>`;
+        });
+        html += '<option value="__NEW_GROUP__">[+ Neue Gruppe erstellen]</option>';
+        return html;
+    };
 
+    const baseHtml = buildOptions(Array.from(uniqueGroups));
     pSelect.innerHTML = baseHtml;
     nSelect.innerHTML = baseHtml;
-    if (bSelect) bSelect.innerHTML = baseHtml;
+
+    if (bSelect) {
+        const uniqueBookmarkGroups = new Set();
+        bookmarks.forEach(b => { if (b.group && b.group.trim() !== "") uniqueBookmarkGroups.add(b.group); });
+        Object.keys(bookmarkGroupMetadata).forEach(g => uniqueBookmarkGroups.add(g));
+        bSelect.innerHTML = buildOptions(Array.from(uniqueBookmarkGroups));
+    }
 }
 
 function sortGroupNames(names, orderArray) {
@@ -577,7 +599,7 @@ function renderBookmarks() {
     let html = "";
     sortGroupNames(Object.keys(groups), bookmarkGroupOrder).forEach(gName => {
         const isCollapsed = (gName in collapsedBookmarkGroups) ? collapsedBookmarkGroups[gName] : true;
-        const meta = groupMetadata[gName] || { color: '#ff8c00', icon: '🔖' };
+        const meta = bookmarkGroupMetadata[gName] || { color: '#ff8c00', icon: '🔖' };
         let totalCount = groups[gName].length;
 
         html += `
@@ -1320,7 +1342,7 @@ document.getElementById('recordMakroBtn').addEventListener('click', () => {
         if (!tabs[0]) return;
         isRecording = false;
         const btn = document.getElementById('recordMakroBtn');
-        btn.innerHTML = '<span class="record-dot"></span> Aufnahme';
+        btn.innerHTML = '<span class="record-dot"></span> REC';
         btn.classList.remove('recording');
         document.getElementById('recordingWaitBar').style.display = 'none';
 
@@ -2644,6 +2666,45 @@ document.getElementById('saveNoteGroupBtn').addEventListener('click', () => {
     });
 });
 
+function openBookmarkEditor(i) {
+    const b = bookmarks[i];
+    if (!b) return;
+    document.getElementById('editBookmarkIndex').value = i;
+    document.getElementById('bookmarkTitleInput').value = b.title || '';
+    document.getElementById('bookmarkUrlInput').value = b.url || '';
+    document.getElementById('bookmarkColor').value = b.color || '#ff8c00';
+
+    populateGroupDropdowns();
+    const textInput = document.getElementById('bookmarkGroupInput');
+    if (b.group && b.group.trim() !== "") {
+        document.getElementById('bookmarkGroupSelectOptions').value = b.group;
+    } else {
+        document.getElementById('bookmarkGroupSelectOptions').value = '';
+    }
+    textInput.style.display = 'none';
+    textInput.value = '';
+
+    document.getElementById('mainContainer').style.display = 'none';
+    document.getElementById('bookmarkInputGroup').style.display = 'flex';
+    renderRecentColors();
+}
+
+function openBookmarkEditorForCurrentPage() {
+    document.getElementById('editBookmarkIndex').value = "";
+    document.getElementById('bookmarkTitleInput').value = '';
+    document.getElementById('bookmarkUrlInput').value = '';
+    document.getElementById('mainContainer').style.display = 'none';
+    document.getElementById('bookmarkInputGroup').style.display = 'flex';
+    populateGroupDropdowns();
+    renderRecentColors();
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        if (tabs[0] && tabs[0].url) {
+            document.getElementById('bookmarkTitleInput').value = tabs[0].title || '';
+            document.getElementById('bookmarkUrlInput').value = tabs[0].url || '';
+        }
+    });
+}
+
 function handleBookmarksViewClicks(e) {
     const groupHeader = e.target.closest('.group-header');
     if (groupHeader && groupHeader.dataset.bookmarkgroup) {
@@ -2676,27 +2737,7 @@ function handleBookmarksViewClicks(e) {
         chrome.storage.sync.set({ bookmarks }, renderBookmarks);
     }
     else if (action === 'edit') {
-        const b = bookmarks[i];
-        if (b) {
-            document.getElementById('editBookmarkIndex').value = i;
-            document.getElementById('bookmarkTitleInput').value = b.title || '';
-            document.getElementById('bookmarkUrlInput').value = b.url || '';
-            document.getElementById('bookmarkColor').value = b.color || '#ff8c00';
-
-            populateGroupDropdowns();
-            const textInput = document.getElementById('bookmarkGroupInput');
-            if (b.group && b.group.trim() !== "") {
-                document.getElementById('bookmarkGroupSelectOptions').value = b.group;
-            } else {
-                document.getElementById('bookmarkGroupSelectOptions').value = '';
-            }
-            textInput.style.display = 'none';
-            textInput.value = '';
-
-            document.getElementById('mainContainer').style.display = 'none';
-            document.getElementById('bookmarkInputGroup').style.display = 'flex';
-            renderRecentColors();
-        }
+        openBookmarkEditor(i);
     }
 }
 document.getElementById('bookmarksList').addEventListener('click', handleBookmarksViewClicks);
@@ -2716,7 +2757,7 @@ document.getElementById('bookmarksList').addEventListener('click', (e) => {
     if (!editBtn) return;
     e.stopPropagation();
     const gName = editBtn.dataset.bookmarkgroupedit;
-    const meta = groupMetadata[gName] || { color: '#ff8c00', icon: '🔖' };
+    const meta = bookmarkGroupMetadata[gName] || { color: '#ff8c00', icon: '🔖' };
     document.getElementById('editBookmarkGroupName').value = gName;
     document.getElementById('bookmarkGroupIconInput').value = meta.icon || '🔖';
     document.getElementById('bookmarkGroupColorInput').value = meta.color || '#ff8c00';
@@ -2736,12 +2777,12 @@ document.getElementById('cancelBookmarkGroupBtn').addEventListener('click', () =
 document.getElementById('saveBookmarkGroupBtn').addEventListener('click', () => {
     const gName = document.getElementById('editBookmarkGroupName').value;
     if (!gName) return;
-    groupMetadata[gName] = {
-        ...(groupMetadata[gName] || {}),
+    bookmarkGroupMetadata[gName] = {
+        ...(bookmarkGroupMetadata[gName] || {}),
         icon: document.getElementById('bookmarkGroupIconInput').value || '🔖',
         color: document.getElementById('bookmarkGroupColorInput').value || '#ff8c00'
     };
-    chrome.storage.sync.set({ groupMetadata }, () => {
+    chrome.storage.sync.set({ bookmarkGroupMetadata }, () => {
         document.getElementById('bookmarkGroupEditPopup').style.display = 'none';
         renderBookmarks();
     });
@@ -2792,21 +2833,7 @@ document.getElementById('saveBookmarkBtn').addEventListener('click', () => {
     });
 });
 
-document.getElementById('addBookmarkToggleBtn').addEventListener('click', () => {
-    document.getElementById('editBookmarkIndex').value = "";
-    document.getElementById('bookmarkTitleInput').value = '';
-    document.getElementById('bookmarkUrlInput').value = '';
-    document.getElementById('mainContainer').style.display = 'none';
-    document.getElementById('bookmarkInputGroup').style.display = 'flex';
-    populateGroupDropdowns();
-    renderRecentColors();
-    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-        if (tabs[0] && tabs[0].url) {
-            document.getElementById('bookmarkTitleInput').value = tabs[0].title || '';
-            document.getElementById('bookmarkUrlInput').value = tabs[0].url || '';
-        }
-    });
-});
+document.getElementById('addBookmarkToggleBtn').addEventListener('click', openBookmarkEditorForCurrentPage);
 
 document.getElementById('searchBookmarksInput').addEventListener('input', (e) => {
     const query = e.target.value.toLowerCase();
@@ -2834,40 +2861,57 @@ bookmarksListEl.addEventListener('drop', (e) => {
 
     const links = [];
     const seenUrls = new Set();
-    const addLink = (url, title) => {
+    const addLink = (group, url, title) => {
         if (!url) return;
         url = url.trim();
         if (!url || seenUrls.has(url)) return;
         seenUrls.add(url);
-        links.push({ title: (title || '').trim() || url, url });
+        links.push({ group: group || '', title: (title || '').trim() || url, url });
     };
 
-    const uriList = e.dataTransfer.getData('text/uri-list');
-    if (uriList) {
-        uriList.split(/\r?\n/).forEach(line => {
-            if (line && !line.startsWith('#')) addLink(line, '');
-        });
-    }
-
+    // Chrome-Lesezeichen-HTML (Netscape-Bookmark-Format): <h3>Ordnername</h3> gefolgt von <a>-Links.
+    // Verlinkte <h3>/<a>-Elemente in Dokumentreihenfolge durchlaufen: jeder Link gehört zum zuletzt
+    // gesehenen <h3> (= seinem unmittelbaren Ordner), so werden auch verschachtelte Ordner korrekt zugeordnet.
     const html = e.dataTransfer.getData('text/html');
     if (html) {
         try {
             const doc = new DOMParser().parseFromString(html, 'text/html');
-            doc.querySelectorAll('a[href]').forEach(a => addLink(a.getAttribute('href'), a.textContent));
+            let currentGroup = '';
+            doc.querySelectorAll('h3, a[href]').forEach(el => {
+                if (el.tagName === 'H3') {
+                    currentGroup = (el.textContent || '').trim();
+                } else {
+                    addLink(currentGroup, el.getAttribute('href'), el.textContent);
+                }
+            });
         } catch (err) {}
     }
 
     if (links.length === 0) {
+        const uriList = e.dataTransfer.getData('text/uri-list');
+        if (uriList) {
+            uriList.split(/\r?\n/).forEach(line => {
+                if (line && !line.startsWith('#')) addLink('', line, '');
+            });
+        }
+    }
+
+    if (links.length === 0) {
         const plain = e.dataTransfer.getData('text/plain');
-        if (plain) addLink(plain, '');
+        if (plain) addLink('', plain, '');
     }
 
     if (links.length === 0) return;
 
+    const newGroupNames = new Set();
     links.forEach(l => {
-        bookmarks.push({ title: l.title, url: l.url, color: '#ff8c00', group: '' });
+        if (l.group && !bookmarkGroupMetadata[l.group]) newGroupNames.add(l.group);
+        bookmarks.push({ title: l.title, url: l.url, color: '#ff8c00', group: l.group });
     });
-    chrome.storage.sync.set({ bookmarks }, renderBookmarks);
+    newGroupNames.forEach(gName => {
+        bookmarkGroupMetadata[gName] = { color: '#ff8c00', icon: '🔖' };
+    });
+    chrome.storage.sync.set({ bookmarks, bookmarkGroupMetadata }, renderBookmarks);
 });
 
 // Clipboard-Copy via Event-Delegation (Listener muss auf dem DOM-Element sein, nicht auf outerHTML)
@@ -3669,17 +3713,17 @@ document.getElementById('ctxDeleteNote').addEventListener('click', () => {
     chrome.storage.sync.set({ notes }, renderNotes);
 });
 
-document.getElementById('ctxRenameBookmark').addEventListener('click', () => {
+document.getElementById('ctxAddCurrentPageBookmark').addEventListener('click', () => {
+    document.getElementById('bookmarkContextMenu').style.display = 'none';
+    openBookmarkEditorForCurrentPage();
+});
+
+document.getElementById('ctxEditBookmark').addEventListener('click', () => {
     const menu = document.getElementById('bookmarkContextMenu');
     const idx = parseInt(menu.dataset.index);
     menu.style.display = 'none';
     if (isNaN(idx) || !bookmarks[idx]) return;
-    const newTitle = prompt('Neuer Titel:', bookmarks[idx].title || '');
-    if (newTitle === null) return;
-    const trimmed = newTitle.trim();
-    if (!trimmed) return;
-    bookmarks[idx].title = trimmed;
-    chrome.storage.sync.set({ bookmarks }, renderBookmarks);
+    openBookmarkEditor(idx);
 });
 
 document.getElementById('ctxDeleteBookmark').addEventListener('click', () => {
@@ -3701,6 +3745,17 @@ document.getElementById('ctxRenameGroup').addEventListener('click', () => {
     if (newName === null) return;
     const trimmed = newName.trim();
     if (!trimmed || trimmed === gName) return;
+    if (type === 'bookmark') {
+        if (bookmarkGroupMetadata[gName]) {
+            bookmarkGroupMetadata[trimmed] = bookmarkGroupMetadata[gName];
+            delete bookmarkGroupMetadata[gName];
+        }
+        bookmarks.forEach(b => { if (b.group === gName) b.group = trimmed; });
+        const oi = bookmarkGroupOrder.indexOf(gName);
+        if (oi !== -1) bookmarkGroupOrder[oi] = trimmed;
+        chrome.storage.sync.set({ bookmarks, bookmarkGroupMetadata, bookmarkGroupOrder }, renderBookmarks);
+        return;
+    }
     if (groupMetadata[gName]) {
         groupMetadata[trimmed] = groupMetadata[gName];
         delete groupMetadata[gName];
@@ -3710,11 +3765,6 @@ document.getElementById('ctxRenameGroup').addEventListener('click', () => {
         const oi = noteGroupOrder.indexOf(gName);
         if (oi !== -1) noteGroupOrder[oi] = trimmed;
         chrome.storage.sync.set({ notes, groupMetadata, noteGroupOrder }, renderNotes);
-    } else if (type === 'bookmark') {
-        bookmarks.forEach(b => { if (b.group === gName) b.group = trimmed; });
-        const oi = bookmarkGroupOrder.indexOf(gName);
-        if (oi !== -1) bookmarkGroupOrder[oi] = trimmed;
-        chrome.storage.sync.set({ bookmarks, groupMetadata, bookmarkGroupOrder }, renderBookmarks);
     } else {
         promts.forEach(p => { if (p.group === gName) p.group = trimmed; });
         const oi = groupOrder.indexOf(gName);
@@ -3740,6 +3790,17 @@ function finishGroupDelete(alsoDeleteItems) {
     window._pendingDeleteGroup = null;
     if (!pending) return;
     const { gName, type } = pending;
+    if (type === 'bookmark') {
+        delete bookmarkGroupMetadata[gName];
+        if (alsoDeleteItems) {
+            bookmarks = bookmarks.filter(b => b.group !== gName);
+        } else {
+            bookmarks.forEach(b => { if (b.group === gName) b.group = ''; });
+        }
+        bookmarkGroupOrder = bookmarkGroupOrder.filter(g => g !== gName);
+        chrome.storage.sync.set({ bookmarks, bookmarkGroupMetadata, bookmarkGroupOrder }, renderBookmarks);
+        return;
+    }
     delete groupMetadata[gName];
     if (type === 'note') {
         if (alsoDeleteItems) {
@@ -3749,14 +3810,6 @@ function finishGroupDelete(alsoDeleteItems) {
         }
         noteGroupOrder = noteGroupOrder.filter(g => g !== gName);
         chrome.storage.sync.set({ notes, groupMetadata, noteGroupOrder }, renderNotes);
-    } else if (type === 'bookmark') {
-        if (alsoDeleteItems) {
-            bookmarks = bookmarks.filter(b => b.group !== gName);
-        } else {
-            bookmarks.forEach(b => { if (b.group === gName) b.group = ''; });
-        }
-        bookmarkGroupOrder = bookmarkGroupOrder.filter(g => g !== gName);
-        chrome.storage.sync.set({ bookmarks, groupMetadata, bookmarkGroupOrder }, renderBookmarks);
     } else {
         if (alsoDeleteItems) {
             const removedPrompts = promts.filter(p => p.group === gName);
