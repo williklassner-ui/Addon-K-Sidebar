@@ -124,7 +124,10 @@
 
     <div class="field-block">
       <label class="field-label">Shortcut</label>
-      <input type="text" id="shortcutInput" placeholder="Klicken und Tasten drücken..." readonly style="cursor:pointer;">
+      <div class="input-row" style="align-items:center; gap:6px;">
+        <input type="text" id="shortcutInput" placeholder="Klicken und Tasten drücken..." readonly style="cursor:pointer; flex:1;">
+        <button type="button" id="clearShortcutBtn" class="btn-icon" title="Shortcut entfernen">✕</button>
+      </div>
     </div>
 
     <div class="field-block">
@@ -473,6 +476,19 @@
         <button id="restoreNewWindowBtn" class="primary-btn">🪟 Neues Fenster öffnen</button>
         <button id="restoreCurrentWindowBtn" class="btn-icon-elegant" style="padding:10px; font-size:13px;">📑 Im aktuellen Fenster öffnen</button>
         <button id="restoreCancelBtn" class="danger-btn" style="margin-top:4px;">✕ Abbrechen</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="groupDeletePopup" style="display:none;">
+    <div class="popup-backdrop"></div>
+    <div class="popup-box">
+      <h3>🗑️ Gruppe löschen</h3>
+      <p id="groupDeletePopupInfo" style="font-size:13px; opacity:0.8; margin:8px 0 16px;"></p>
+      <div style="display:flex; flex-direction:column; gap:8px;">
+        <button id="groupDeleteKeepItemsBtn" class="btn-icon-elegant" style="padding:10px; font-size:13px;">📤 Nur Gruppe löschen (Inhalte bleiben)</button>
+        <button id="groupDeleteAllBtn" class="danger-btn">🗑️ Gruppe & Inhalte löschen</button>
+        <button id="groupDeleteCancelBtn" class="btn-icon-elegant" style="margin-top:4px;">✕ Abbrechen</button>
       </div>
     </div>
   </div>

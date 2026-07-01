@@ -180,7 +180,7 @@ function populateGroupDropdowns() {
     notes.forEach(n => { if (n.group && n.group.trim() !== "") uniqueGroups.add(n.group); });
     Object.keys(groupMetadata).forEach(g => uniqueGroups.add(g));
 
-    let baseHtml = '<option value="">-- Keine Gruppe gewählt --</option>';
+    let baseHtml = '<option value="">Keine</option>';
     Array.from(uniqueGroups).sort((a, b) => a.localeCompare(b, 'de')).forEach(gName => {
         baseHtml += `<option value="${gName}">${gName}</option>`;
     });
@@ -209,7 +209,7 @@ function populateProviderDropdowns() {
         if (includeDefault) html += '<option value="default">Gruppen-Anbieter (Standard)</option>';
         allNames.forEach(name => {
             if (name === 'none') {
-                html += '<option value="none">Kein Anbieter</option>';
+                html += '<option value="none">Keins</option>';
             } else {
                 const ico = effectiveIcons[name] || '';
                 html += `<option value="${name}">${ico ? ico + ' ' : ''}${name}</option>`;
@@ -384,7 +384,7 @@ function getCardHtml(p, i) {
         <div class="prompt-card" style="border-left: 3px solid ${p.color || '#ff8c00'}">
             <div class="card-header">
                 <div class="prompt-info" data-action="copy-insert" data-index="${i}">
-                    ${showIcon ? `<span class="provider-icon" title="${p.provider === 'none' ? 'Kein Anbieter' : (p.provider || 'Anbieter')}">${icon}</span>` : ''}
+                    ${showIcon ? `<span class="provider-icon" title="${p.provider === 'none' ? 'Keins' : (p.provider || 'Anbieter')}">${icon}</span>` : ''}
                     <span class="prompt-title">${p.title || 'Unbenannt'}</span>
                 </div>
                 <div class="card-actions">
@@ -2947,6 +2947,10 @@ document.getElementById('shortcutInput').addEventListener('keydown', (e) => {
     e.target.value = parts.join('+');
 });
 
+document.getElementById('clearShortcutBtn').addEventListener('click', () => {
+    document.getElementById('shortcutInput').value = '';
+});
+
 document.getElementById('saveBtn').addEventListener('click', () => {
     const i = document.getElementById('editIndex').value;
     const selectedColor = document.getElementById('promptColor').value;
@@ -3309,8 +3313,17 @@ document.getElementById('ctxDeleteGroup').addEventListener('click', () => {
     const type = menu.dataset.type || 'prompt';
     menu.style.display = 'none';
     if (!gName) return;
-    if (!confirm(`Gruppe "${gName}" wirklich löschen?`)) return;
-    const alsoDeleteItems = confirm(`Auch alle Inhalte der Gruppe "${gName}" löschen?\nOK = Inhalte löschen, Abbrechen = Inhalte bleiben (ohne Gruppe) erhalten.`);
+    window._pendingDeleteGroup = { gName, type };
+    document.getElementById('groupDeletePopupInfo').textContent = `Gruppe "${gName}" wirklich löschen?`;
+    document.getElementById('groupDeletePopup').style.display = 'flex';
+});
+
+function finishGroupDelete(alsoDeleteItems) {
+    const pending = window._pendingDeleteGroup;
+    document.getElementById('groupDeletePopup').style.display = 'none';
+    window._pendingDeleteGroup = null;
+    if (!pending) return;
+    const { gName, type } = pending;
     delete groupMetadata[gName];
     if (type === 'note') {
         if (alsoDeleteItems) {
@@ -3331,6 +3344,13 @@ document.getElementById('ctxDeleteGroup').addEventListener('click', () => {
         groupOrder = groupOrder.filter(g => g !== gName);
         chrome.storage.sync.set({ promts, deletedPromts, groupMetadata, groupOrder }, render);
     }
+}
+
+document.getElementById('groupDeleteAllBtn').addEventListener('click', () => finishGroupDelete(true));
+document.getElementById('groupDeleteKeepItemsBtn').addEventListener('click', () => finishGroupDelete(false));
+document.getElementById('groupDeleteCancelBtn').addEventListener('click', () => {
+    document.getElementById('groupDeletePopup').style.display = 'none';
+    window._pendingDeleteGroup = null;
 });
 
 // Kontextmenü-Trigger für Rechtsklick auf Reiter
