@@ -1077,6 +1077,18 @@ function injectRecorder(tabId) {
             window._makroRecordingActive = true;
             window._makroRecordingMethod = method;
 
+            // Schritte werden über chrome.storage.session statt per chrome.runtime.sendMessage
+            // übertragen: reine Schreibzugriffe mit eigenem Schlüssel (kein Read-Modify-Write,
+            // also race-frei) werden vom Browser-Prozess auch dann noch zugestellt, wenn der
+            // auslösende Klick sofort zu einer Navigation/Unload führt - sendMessage kann in
+            // diesem Fall die Nachricht verlieren, bevor sie beim Sidepanel ankommt.
+            window._makroSendStep = (step) => {
+                try {
+                    const key = '_makroStep_' + Date.now() + '_' + Math.random().toString(36).slice(2);
+                    chrome.storage.session.set({ [key]: step });
+                } catch(e) {}
+            };
+
             const style = document.createElement('style');
             style.id = '_makroStyle';
             style.textContent = `
@@ -1130,7 +1142,7 @@ function injectRecorder(tabId) {
                     const rect = target.getBoundingClientRect();
                     const px = Math.round(rect.left + rect.width / 2 + window.scrollX);
                     const py = Math.round(rect.top + rect.height / 2 + window.scrollY);
-                    chrome.runtime.sendMessage({ _makroRecStep: { type: 'click', target: path, _px: px, _py: py } });
+                    window._makroSendStep({ type: 'click', target: path, _px: px, _py: py });
                     e.target.classList.remove('_makro-hover');
                     target.classList.add('_makro-recorded');
                     setTimeout(() => target.classList.remove('_makro-recorded'), 800);
@@ -1140,7 +1152,7 @@ function injectRecorder(tabId) {
             window._makroChangeHandler = (e) => {
                 try {
                     const path = getPath(e.target);
-                    chrome.runtime.sendMessage({ _makroRecStep: { type: 'type', target: path, value: e.target.value || e.target.innerText } });
+                    window._makroSendStep({ type: 'type', target: path, value: e.target.value || e.target.innerText });
                     e.target.classList.add('_makro-recorded');
                     setTimeout(() => e.target.classList.remove('_makro-recorded'), 800);
                 } catch (err) {}
@@ -1173,7 +1185,7 @@ function injectRecorder(tabId) {
                             const rect = target.getBoundingClientRect();
                             const px = Math.round(rect.left + rect.width / 2 + window.scrollX);
                             const py = Math.round(rect.top + rect.height / 2 + window.scrollY);
-                            chrome.runtime.sendMessage({ _makroRecStep: { type: 'click', selector: path, _px: px, _py: py } });
+                            window._makroSendStep({ type: 'click', selector: path, _px: px, _py: py });
                             e.target.classList.remove('_makro-hover');
                             target.classList.add('_makro-recorded');
                             setTimeout(() => target.classList.remove('_makro-recorded'), 800);
@@ -1191,7 +1203,7 @@ function injectRecorder(tabId) {
                         const rect = t.getBoundingClientRect();
                         const px = Math.round(rect.left + rect.width / 2 + window.scrollX);
                         const py = Math.round(rect.top + rect.height / 2 + window.scrollY);
-                        chrome.runtime.sendMessage({ _makroRecStep: { type: 'doubleclick', selector: path, _px: px, _py: py } });
+                        window._makroSendStep({ type: 'doubleclick', selector: path, _px: px, _py: py });
                     } catch(err) {}
                 };
                 // M1: rightclick
@@ -1202,7 +1214,7 @@ function injectRecorder(tabId) {
                         const rect = e.target.getBoundingClientRect();
                         const px = Math.round(rect.left + rect.width / 2 + window.scrollX);
                         const py = Math.round(rect.top + rect.height / 2 + window.scrollY);
-                        chrome.runtime.sendMessage({ _makroRecStep: { type: 'rightclick', selector: path, _px: px, _py: py } });
+                        window._makroSendStep({ type: 'rightclick', selector: path, _px: px, _py: py });
                     } catch(err) {}
                 };
                 // M1: scroll (debounced)
@@ -1214,7 +1226,7 @@ function injectRecorder(tabId) {
                         const dx = Math.abs(window.scrollX - _lastScrollX);
                         const dy = Math.abs(window.scrollY - _lastScrollY);
                         if (dx > 50 || dy > 50) {
-                            chrome.runtime.sendMessage({ _makroRecStep: { type: 'scroll', x: Math.round(window.scrollX), y: Math.round(window.scrollY) } });
+                            window._makroSendStep({ type: 'scroll', x: Math.round(window.scrollX), y: Math.round(window.scrollY) });
                             _lastScrollX = window.scrollX; _lastScrollY = window.scrollY;
                         }
                     }, 500);
@@ -1226,7 +1238,7 @@ function injectRecorder(tabId) {
                     if (e.target.tagName !== 'SELECT') return;
                     try {
                         const path = getPath(e.target);
-                        chrome.runtime.sendMessage({ _makroRecStep: { type: 'select', selector: path, value: e.target.value } });
+                        window._makroSendStep({ type: 'select', selector: path, value: e.target.value });
                         e.target.classList.add('_makro-recorded');
                         setTimeout(() => e.target.classList.remove('_makro-recorded'), 800);
                         e.stopPropagation(); // prevent generic change handler from also firing
@@ -1247,7 +1259,7 @@ function injectRecorder(tabId) {
                     if (e.ctrlKey) modifiers.push('ctrl');
                     if (e.shiftKey) modifiers.push('shift');
                     if (e.altKey) modifiers.push('alt');
-                    chrome.runtime.sendMessage({ _makroRecStep: { type: 'keypress', key: e.key, modifiers } });
+                    window._makroSendStep({ type: 'keypress', key: e.key, modifiers });
                 } catch(err) {}
             };
             document.addEventListener('keydown', window._makroKeyHandler, { capture: true });
@@ -1273,11 +1285,11 @@ function injectRecorder(tabId) {
                         const now = Date.now();
                         _m4Points.push({ x: px, y: py, t: now - _m4StartT });
                         if (_m4Points.length > 1) {
-                            chrome.runtime.sendMessage({ _makroRecStep: { type: 'mousemovepath', points: _m4Points.slice() } });
+                            window._makroSendStep({ type: 'mousemovepath', points: _m4Points.slice() });
                         }
                         _m4Points = [];
                         _m4StartT = Date.now();
-                        chrome.runtime.sendMessage({ _makroRecStep: { type: 'click', selector: '', _px: px, _py: py } });
+                        window._makroSendStep({ type: 'click', selector: '', _px: px, _py: py });
                         e.target.classList.add('_makro-recorded');
                         setTimeout(() => e.target.classList.remove('_makro-recorded'), 800);
                     } catch(err) {}
@@ -1290,11 +1302,21 @@ function injectRecorder(tabId) {
     });
 }
 
-// Schritte aus dem injizierten Recorder puffern
+// Schritte aus dem injizierten Recorder puffern: window._makroSendStep (im Recorder) schreibt
+// jeden Schritt unter einem eigenen Schlüssel in chrome.storage.session; hier abholen und
+// wieder entfernen, sobald er im recordingBuffer gelandet ist.
+chrome.storage.onChanged.addListener((changes, areaName) => {
+    if (areaName !== 'session' || !isRecording) return;
+    const consumedKeys = [];
+    Object.keys(changes).forEach(key => {
+        if (!key.startsWith('_makroStep_')) return;
+        if (changes[key].newValue !== undefined) recordingBuffer.push(changes[key].newValue);
+        consumedKeys.push(key);
+    });
+    if (consumedKeys.length) chrome.storage.session.remove(consumedKeys);
+});
+
 chrome.runtime.onMessage.addListener((msg) => {
-    if (msg._makroRecStep && isRecording) {
-        recordingBuffer.push(msg._makroRecStep);
-    }
     if (msg._makroStepPosUpdate) {
         // Nur die Felder des aktuell angezeigten Schritts aktualisieren
         const upd = msg._makroStepPosUpdate;
@@ -1440,19 +1462,28 @@ document.getElementById('recordMakroBtn').addEventListener('click', () => {
     // Stoppen
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
         if (!tabs[0]) return;
-        isRecording = false;
-        const btn = document.getElementById('recordMakroBtn');
-        btn.innerHTML = '<span class="record-dot"></span> REC';
-        btn.classList.remove('recording');
-        document.getElementById('recordingWaitBar').style.display = 'none';
 
-        // M4: Recorder auch in allen anderen während der Aufnahme besuchten Tabs entfernen
-        // (best-effort, da einzelne Tabs zwischenzeitlich geschlossen worden sein können).
-        Object.keys(recordingTabIndexMap).map(Number).filter(id => id !== tabs[0].id).forEach(otherTabId => {
-            chrome.scripting.executeScript({ target: { tabId: otherTabId }, func: cleanupMakroRecorderListeners }).catch(() => {});
-        });
+        // Letzte, noch nicht abgeholte Schritte aus chrome.storage.session nachziehen, bevor
+        // isRecording auf false gesetzt wird (sonst würde der storage.onChanged-Listener sie
+        // ignorieren, weil er isRecording prüft).
+        chrome.storage.session.get(null, (all) => {
+            const pendingKeys = Object.keys(all || {}).filter(k => k.startsWith('_makroStep_')).sort();
+            pendingKeys.forEach(k => recordingBuffer.push(all[k]));
+            if (pendingKeys.length) chrome.storage.session.remove(pendingKeys);
 
-        chrome.scripting.executeScript({
+            isRecording = false;
+            const btn = document.getElementById('recordMakroBtn');
+            btn.innerHTML = '<span class="record-dot"></span> REC';
+            btn.classList.remove('recording');
+            document.getElementById('recordingWaitBar').style.display = 'none';
+
+            // M4: Recorder auch in allen anderen während der Aufnahme besuchten Tabs entfernen
+            // (best-effort, da einzelne Tabs zwischenzeitlich geschlossen worden sein können).
+            Object.keys(recordingTabIndexMap).map(Number).filter(id => id !== tabs[0].id).forEach(otherTabId => {
+                chrome.scripting.executeScript({ target: { tabId: otherTabId }, func: cleanupMakroRecorderListeners }).catch(() => {});
+            });
+
+            chrome.scripting.executeScript({
                 target: { tabId: tabs[0].id },
                 func: cleanupMakroRecorderListeners
             }, () => {
@@ -1480,10 +1511,12 @@ document.getElementById('recordMakroBtn').addEventListener('click', () => {
                     alert("Es wurden keine Klicks oder Eingaben während der Aufnahme registriert.");
                 }
             });
+        });
     });
 });
 
 function cleanupMakroRecorderListeners() {
+    delete window._makroSendStep;
     if (window._makroClickHandler) document.removeEventListener('click', window._makroClickHandler, { capture: true });
     if (window._makroChangeHandler) document.removeEventListener('change', window._makroChangeHandler, { capture: true });
     if (window._makroHoverHandler) document.removeEventListener('mouseover', window._makroHoverHandler, { capture: true });
@@ -2159,6 +2192,22 @@ function injectOneRun({ stepsList, speedDelay }) {
         catch(e) { document.documentElement.appendChild(dot); }
         setTimeout(() => { dot.remove(); st.remove(); }, 600);
     };
+    const showKeyIndicator = (label) => {
+        const cur = document.getElementById('_makroCursor');
+        const x = cur ? parseFloat(cur.style.left) || 40 : 40;
+        const y = cur ? parseFloat(cur.style.top) || 40 : 40;
+        const pill = document.createElement('div');
+        pill.textContent = '⌨ ' + label;
+        pill.style.cssText = `position:fixed;left:${x}px;top:${y - 28}px;transform:translate(-50%,0);background:#ff8c00;color:#111;font:600 11px system-ui,sans-serif;padding:3px 8px;border-radius:12px;pointer-events:none;z-index:2147483647;white-space:nowrap;box-shadow:0 2px 6px rgba(0,0,0,0.35);animation:_mkKeyFade 0.9s ease forwards;`;
+        if (!document.getElementById('_makroKeyStyle')) {
+            const st = document.createElement('style');
+            st.id = '_makroKeyStyle';
+            st.textContent = `@keyframes _mkKeyFade{0%{opacity:0;transform:translate(-50%,4px)}15%{opacity:1;transform:translate(-50%,0)}75%{opacity:1}100%{opacity:0;transform:translate(-50%,-6px)}}`;
+            document.head.appendChild(st);
+        }
+        document.body.appendChild(pill);
+        setTimeout(() => pill.remove(), 900);
+    };
     const findTopClickable = (vx, vy) => {
         const els = document.elementsFromPoint(vx, vy);
         const top = els.find(e => {
@@ -2265,6 +2314,8 @@ function injectOneRun({ stepsList, speedDelay }) {
             if (step.selector) { const el = document.querySelector(step.selector); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' }); }
             else { window.scrollTo({ top: step.y || 0, left: step.x || 0, behavior: 'smooth' }); }
         } else if (step.type === 'keypress') {
+            const label = (step.modifiers||[]).concat(step.key || '').join('+');
+            showKeyIndicator(label);
             document.dispatchEvent(new KeyboardEvent('keydown', { key: step.key, bubbles: true, composed: true, ctrlKey: (step.modifiers||[]).includes('ctrl'), shiftKey: (step.modifiers||[]).includes('shift'), altKey: (step.modifiers||[]).includes('alt') }));
         } else if (step.type === 'select') {
             const el = step.selector ? document.querySelector(step.selector) : null;
@@ -2950,6 +3001,10 @@ document.getElementById('bookmarkGroupIconPick').addEventListener('click', (e) =
 document.getElementById('cancelBookmarkGroupBtn').addEventListener('click', () => {
     document.getElementById('bookmarkGroupEditPopup').style.display = 'none';
 });
+document.getElementById('sortBookmarkGroupBtn').addEventListener('click', () => {
+    const gName = document.getElementById('editBookmarkGroupName').value;
+    if (gName) sortBookmarksInScope(gName);
+});
 document.getElementById('saveBookmarkGroupBtn').addEventListener('click', () => {
     const gName = document.getElementById('editBookmarkGroupName').value;
     if (!gName) return;
@@ -3010,6 +3065,65 @@ document.getElementById('saveBookmarkBtn').addEventListener('click', () => {
 });
 
 document.getElementById('addBookmarkToggleBtn').addEventListener('click', openBookmarkEditorForCurrentPage);
+
+// Ordner-Import über die chrome.bookmarks-API (zuverlässiger Weg neben Drag & Drop, das für
+// Ordner keine verwertbaren Drag-Daten liefert - siehe importBookmarkFolderBtn-Handler unten).
+function renderBookmarkFolderPicker(nodes, depth) {
+    let html = '';
+    (nodes || []).forEach(node => {
+        if (node.children) {
+            const childCount = node.children.filter(c => c.url).length;
+            html += `<button class="btn-icon-elegant bookmark-folder-item" data-folder-id="${node.id}" style="width:100%; text-align:left; margin-left:${depth * 14}px; margin-bottom:4px;">📁 ${node.title || 'Ordner'} <span style="opacity:0.5; font-size:11px;">(${childCount})</span></button>`;
+            html += renderBookmarkFolderPicker(node.children, depth + 1);
+        }
+    });
+    return html;
+}
+
+document.getElementById('importBookmarkFolderBtn').addEventListener('click', () => {
+    chrome.bookmarks.getTree((tree) => {
+        document.getElementById('bookmarkFolderPickerList').innerHTML = renderBookmarkFolderPicker(tree, 0) || '<p style="font-size:12px; opacity:0.5;">Keine Ordner gefunden.</p>';
+        document.getElementById('mainContainer').style.display = 'none';
+        document.getElementById('bookmarkFolderPickerOverlay').style.display = 'flex';
+    });
+});
+
+document.getElementById('closeBookmarkFolderPickerBtn').addEventListener('click', () => {
+    document.getElementById('bookmarkFolderPickerOverlay').style.display = 'none';
+    document.getElementById('mainContainer').style.display = 'block';
+});
+
+document.getElementById('bookmarkFolderPickerList').addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-folder-id]');
+    if (!btn) return;
+    const folderId = btn.dataset.folderId;
+    const folderName = btn.textContent.replace(/\(\d+\)$/, '').replace('📁', '').trim();
+    chrome.bookmarks.getChildren(folderId, (children) => {
+        const links = (children || []).filter(c => c.url);
+        if (links.length === 0) { alert('Dieser Ordner enthält keine Lesezeichen.'); return; }
+        const groupName = folderName || 'Importierter Ordner';
+        links.forEach(c => bookmarks.push({ title: c.title || c.url, url: c.url, color: '#ff8c00', group: groupName }));
+        if (!bookmarkGroupMetadata[groupName]) bookmarkGroupMetadata[groupName] = { color: '#ff8c00', icon: '📁' };
+        chrome.storage.sync.set({ bookmarks, bookmarkGroupMetadata }, () => {
+            renderBookmarks();
+            document.getElementById('bookmarkFolderPickerOverlay').style.display = 'none';
+            document.getElementById('mainContainer').style.display = 'block';
+        });
+    });
+});
+
+// Lesezeichen sortieren: entweder alle ohne Gruppe (Header-Button) oder alle innerhalb einer
+// bestimmten Gruppe (Button im Gruppen-Bearbeiten-Popup, siehe saveBookmarkGroupBtn-Bereich).
+function sortBookmarksInScope(groupName) {
+    const scoped = [];
+    bookmarks.forEach((b, i) => { if ((b.group || '') === (groupName || '')) scoped.push({ b, i }); });
+    if (scoped.length < 2) return;
+    const sortedItems = scoped.map(s => s.b).slice().sort((a, b) => (a.title || '').localeCompare(b.title || '', undefined, { sensitivity: 'base' }));
+    scoped.forEach((s, idx) => { bookmarks[s.i] = sortedItems[idx]; });
+    chrome.storage.sync.set({ bookmarks }, renderBookmarks);
+}
+
+document.getElementById('sortBookmarksBtn').addEventListener('click', () => sortBookmarksInScope(''));
 
 document.getElementById('searchBookmarksInput').addEventListener('input', (e) => {
     const query = e.target.value.toLowerCase();

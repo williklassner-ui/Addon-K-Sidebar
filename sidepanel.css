@@ -83,7 +83,7 @@ body { font-family: system-ui, -apple-system, sans-serif; margin: 0; display: fl
 
 #searchInput, #searchNotesInput, #searchMakrosInput, #searchBookmarksInput { flex: 1; padding: 10px; background-color: var(--input-bg); border: 1px solid var(--input-border); color: var(--text-color); border-radius: 6px; }
 
-#inputGroup, #noteInputGroup, #makroInputGroup, #bookmarkInputGroup, #groupEditorGroup, #trashOverlay, #backupOverlay { display: flex; flex-direction: column; gap: 14px; padding: 20px; background: var(--bg-color); position: absolute; top: 0; left: 0; right: 0; bottom: 0; z-index: 2000; overflow-y: auto; box-sizing: border-box; }
+#inputGroup, #noteInputGroup, #makroInputGroup, #bookmarkInputGroup, #groupEditorGroup, #trashOverlay, #backupOverlay, #bookmarkFolderPickerOverlay { display: flex; flex-direction: column; gap: 14px; padding: 20px; background: var(--bg-color); position: absolute; top: 0; left: 0; right: 0; bottom: 0; z-index: 2000; overflow-y: auto; box-sizing: border-box; }
 #stepPlaybackPanel, #makroPreRunPanel, #recordMethodDialog { display: flex; flex-direction: column; gap: 14px; padding: 20px; background: var(--bg-color); position: fixed; top: 0; left: 0; right: 0; bottom: 0; z-index: 9500; overflow-y: auto; }
 .method-toggle { display: flex; flex-direction: column; gap: 8px; }
 .method-btn { display: flex; flex-direction: column; align-items: flex-start; text-align: left; padding: 8px 10px; font-size: 12px; background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.12); border-radius: 6px; color: var(--text-color); cursor: pointer; transition: all 0.15s; }
@@ -130,11 +130,11 @@ body[data-theme="dark"] .group-content .bookmark-card { background: #2b2b2b; }
 #bookmarksView.bookmarks-dropzone-active { outline: 2px dashed var(--accent, #ff8c00); outline-offset: -2px; border-radius: 6px; }
 .card-header { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
 
-.prompt-info, .note-info, .makro-info { display: flex; align-items: center; gap: 10px; cursor: pointer; flex: 1; }
+.prompt-info, .note-info, .makro-info { display: flex; align-items: center; gap: 10px; cursor: pointer; flex: 1; min-width: 0; }
 .provider-icon { font-size: 1em; color: var(--accent); opacity: 0.9; }
-.prompt-title, .note-title, .makro-title { font-weight: 500; font-size: 13px; color: var(--text-color); }
+.prompt-title, .note-title, .makro-title { font-weight: 500; font-size: 13px; color: var(--text-color); white-space: normal; word-break: break-word; }
 
-.card-actions { display: flex; gap: 2px; }
+.card-actions { display: flex; gap: 2px; flex-shrink: 0; }
 .content-box { display: none; margin-top: 8px; padding: 10px; background: rgba(0,0,0,0.25); border-radius: 6px; border-left: 2px solid var(--accent); white-space: pre-wrap; font-size: 13px; line-height: 1.4; }
 
 .note-todo-list-render { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; font-size: 12px; padding-left: 4px; }
