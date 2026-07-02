@@ -342,6 +342,7 @@ function initGroupDragDrop(containerEl, isNotes) {
     });
 
     containerEl.addEventListener('dragover', (e) => {
+        if (!dragSrcName) return; // kein interner Gruppen-Drag aktiv -> externen Import-Listener nicht stören
         e.preventDefault();
         e.dataTransfer.dropEffect = 'move';
         const gc = e.target.closest('.group-container[draggable]');
@@ -1221,6 +1222,22 @@ function injectRecorder(tabId) {
                 };
                 document.addEventListener('mousemove', window._makroMoveHandler, { capture: true, passive: true });
                 document.addEventListener('click', window._makroClickHandler, { capture: true });
+
+                // M4: Tastatureingaben (Tab, Enter, etc.) ebenfalls aufzeichnen
+                window._makroKeyHandler = (e) => {
+                    try {
+                        const special = ['Enter','Tab','Escape','Backspace','Delete','ArrowUp','ArrowDown','ArrowLeft','ArrowRight'];
+                        const isCombo = e.ctrlKey || e.altKey || e.metaKey;
+                        const isFKey = e.key && e.key.match(/^F\d+$/);
+                        if (!special.includes(e.key) && !isCombo && !isFKey) return;
+                        const modifiers = [];
+                        if (e.ctrlKey) modifiers.push('ctrl');
+                        if (e.shiftKey) modifiers.push('shift');
+                        if (e.altKey) modifiers.push('alt');
+                        chrome.runtime.sendMessage({ _makroRecStep: { type: 'keypress', key: e.key, modifiers } });
+                    } catch(err) {}
+                };
+                document.addEventListener('keydown', window._makroKeyHandler, { capture: true });
             }
         },
         args: [recordingMethod]
@@ -2090,20 +2107,32 @@ function injectOneRun({ stepsList, speedDelay }) {
         cur.style.left = vx + 'px';
         cur.style.top = vy + 'px';
     }
+    // Nur scrollen, wenn das Ziel tatsächlich außerhalb des sichtbaren Bereichs liegt, und
+    // dabei CSS scroll-behavior:smooth kurzzeitig ausschalten, damit der direkt danach
+    // ausgelesene window.scrollY-Wert bereits aktuell ist (sonst landen Klicks daneben).
+    function ensureVisible(py) {
+        if (!py || py <= 0) return;
+        const margin = 40;
+        if (py >= window.scrollY + margin && py <= window.scrollY + window.innerHeight - margin) return;
+        const prevBehavior = document.documentElement.style.scrollBehavior;
+        document.documentElement.style.scrollBehavior = 'auto';
+        window.scrollTo({ top: py - window.innerHeight / 2, behavior: 'instant' });
+        document.documentElement.style.scrollBehavior = prevBehavior;
+    }
     const findEl = (step) => {
         const sel = step.selector || step.target;
         if (sel) { try { const found = document.querySelector(sel); if (found) return found; } catch(e) {} }
         if (step._px !== undefined) {
+            ensureVisible(step._py);
             const vx = (step._px || 0) - window.scrollX;
             const vy = (step._py || 0) - window.scrollY;
-            if (step._py > 0) window.scrollTo({ top: step._py - window.innerHeight / 2, behavior: 'instant' });
             return findTopClickable(vx, vy);
         }
         return null;
     };
     const executeAction = (step, attempt) => {
         if (step.type === 'click' && step._px !== undefined) {
-            if (step._py > 0) window.scrollTo({ top: step._py - window.innerHeight / 2, behavior: 'instant' });
+            ensureVisible(step._py);
             const vx = (step._px || 0) - window.scrollX;
             const vy = (step._py || 0) - window.scrollY;
             moveCursorTo(vx, vy);
@@ -2122,9 +2151,9 @@ function injectOneRun({ stepsList, speedDelay }) {
             let el = null;
             try { el = document.querySelector(step.target); } catch (e) {}
             if (!el && step._px !== undefined) {
+                ensureVisible(step._py);
                 const vx = (step._px || 0) - window.scrollX;
                 const vy = (step._py || 0) - window.scrollY;
-                window.scrollTo({ top: step._py - window.innerHeight / 2, behavior: 'instant' });
                 el = findTopClickable(vx, vy);
             }
             if (!el) { if (attempt < 3) setTimeout(() => executeAction(step, attempt + 1), 300); return; }
@@ -2182,6 +2211,10 @@ function injectOneRun({ stepsList, speedDelay }) {
                     const vx = pt.x - window.scrollX;
                     const vy = pt.y - window.scrollY;
                     moveCursorTo(vx, vy);
+                    // Echtes mousemove-Event dispatchen, damit hover-abhängige Seiten-Logik
+                    // (Dropdowns, Slider, Canvas etc.) wie bei der Aufnahme reagiert.
+                    const target = document.elementFromPoint(vx, vy) || document.body;
+                    target.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, cancelable: true, composed: true, clientX: vx, clientY: vy }));
                 }, base + (pt.t || 0));
             });
             cumOffset += stepDelay + (pts.length > 0 ? pts[pts.length - 1].t || 0 : 0);
