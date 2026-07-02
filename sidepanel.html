@@ -7,7 +7,10 @@
 <body data-theme="dark">
   <div class="top-controls">
     <button id="trashToggleBtn" class="btn-icon-elegant top-btn" title="Papierkorb öffnen">🗑️</button>
-    <button id="backupToggleBtn" class="btn-icon-elegant top-btn" title="Backup & Sync Manager">🛡️ Backup & Sync</button>
+    <div style="display:flex; flex-direction:column; align-items:center; gap:1px;">
+      <button id="backupToggleBtn" class="btn-icon-elegant top-btn" title="Backup & Sync Manager">🛡️ Backup & Sync</button>
+      <span id="addonVersionLabel" style="font-size:9px; opacity:0.4; line-height:1;"></span>
+    </div>
     <button id="themeToggle" class="theme-btn">◑</button>
   </div>
 
@@ -24,7 +27,7 @@
       <div class="session-actions-top">
         <button id="saveCurrentSessionBtn" class="primary-btn" style="width:100%;">💾 geöffnete Session sichern</button>
       </div>
-      
+
       <div class="session-split">
         <div class="session-section">
           <div id="sessionList"></div>
@@ -49,9 +52,36 @@
     <div id="makrosView" class="tab-view" style="display:none;">
       <div class="header">
         <input type="text" id="searchMakrosInput" placeholder="⌕ Makros durchsuchen...">
-        <button id="recordMakroBtn" class="record-btn" title="Makro live im aktiven Tab aufnehmen"><span class="record-dot"></span> Aufnahme</button>
+        <button id="recordMakroBtn" class="record-btn" title="Makro live im aktiven Tab aufnehmen"><span class="record-dot"></span> REC</button>
+      </div>
+      <div id="makroPlaybackBar" style="display:none; flex-direction:column; padding:8px 10px; border-bottom:1px solid #444; background:rgba(255,140,0,0.1); gap:6px; margin-bottom:2px;">
+        <div style="display:flex; align-items:center; gap:8px;">
+          <span id="makroPlaybackTitle" style="font-size:12px; flex:1; font-weight:600; opacity:0.9; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">Makro</span>
+          <button id="makroPlaybackPauseBtn" class="btn-icon" style="font-size:13px; padding:4px 10px;">⏸</button>
+          <button id="makroPlaybackStopBtn" class="btn-icon" style="font-size:13px; padding:4px 10px;">⏹</button>
+        </div>
+        <div style="display:flex; align-items:center; gap:8px;">
+          <div id="makroPlaybackProgressBar" style="flex:1; height:5px; background:rgba(255,255,255,0.1); border-radius:3px; overflow:hidden;">
+            <div id="makroPlaybackProgressFill" style="height:100%; background:var(--accent,#ff8c00); width:0%; transition:width 0.3s;"></div>
+          </div>
+          <span id="makroPlaybackCounter" style="font-size:11px; opacity:0.7; white-space:nowrap;">1 / 1</span>
+        </div>
+      </div>
+      <div id="recordingWaitBar" style="display:none; align-items:center; gap:8px; padding:6px 0; border-bottom:1px solid #333; margin-bottom:6px;">
+        <input type="number" id="insertWaitDuration" value="1000" min="100" max="60000" step="100" style="width:70px; font-size:12px;">
+        <span style="font-size:11px; opacity:0.6;">ms</span>
+        <button id="insertWaitBtn" class="btn-icon" style="font-size:10px;">⏱ Pause einfügen</button>
+        <button id="insertReloadBtn" class="btn-icon" style="font-size:10px;">🔄 Seiten-Reload-Schritt</button>
       </div>
       <div id="makrosList"></div>
+    </div>
+
+    <div id="bookmarksView" class="tab-view" style="display:none;">
+      <div class="header">
+        <input type="text" id="searchBookmarksInput" placeholder="⌕ Lesezeichen durchsuchen...">
+        <button id="addBookmarkToggleBtn" class="btn-icon" title="Lesezeichen hinzufügen">＋</button>
+      </div>
+      <div id="bookmarksList"></div>
     </div>
 
     <div class="tabs-nav" id="tabsNavContainer">
@@ -59,13 +89,100 @@
       <button id="navSessions" class="tab-btn" data-tab="sessions">Sessions</button>
       <button id="navNotes" class="tab-btn" data-tab="notes">Notizen</button>
       <button id="navMakros" class="tab-btn" data-tab="makros">Makros</button>
+      <button id="navBookmarks" class="tab-btn" data-tab="bookmarks">Lesezeichen</button>
     </div>
   </div>
-    
-  <div id="tabContextMenu" class="context-menu" style="display:none; position:fixed; z-index:99999; width: 140px;">
+
+  <div id="tabContextMenu" class="context-menu" style="display:none; position:fixed; z-index:99999; width: 260px;">
     <label style="font-size:11px; display:block; margin-bottom:5px; font-weight:bold;">Reiter-Farbe:</label>
     <input type="color" id="tabColorPicker" style="width:100%; height:30px; cursor:pointer; padding:0;">
     <button id="resetTabColorBtn" class="danger-btn" style="margin-top:6px; font-size:11px; width:100%; padding:4px; border-radius:4px !important;">Zurücksetzen</button>
+
+    <div style="border-top: 1px solid var(--input-border); margin-top: 8px; padding-top: 6px;">
+      <label style="font-size:11px; display:block; margin-bottom:4px; font-weight:bold;">Name:</label>
+      <div style="display:flex; gap:4px;">
+        <input type="text" id="tabRenameInput" style="flex:1; font-size:11px; padding:4px;">
+        <button id="tabRenameApplyBtn" class="btn-icon" style="font-size:11px; padding:4px 6px;" title="Übernehmen">✓</button>
+      </div>
+    </div>
+
+    <div style="border-top: 1px solid var(--input-border); margin-top: 8px; padding-top: 6px;">
+      <label style="font-size:11px; display:block; margin-bottom:4px; font-weight:bold;">Icon:</label>
+      <div style="display:flex; gap:4px; align-items:center;">
+        <input type="text" id="tabIconInput" maxlength="4" style="width:40px; font-size:16px; text-align:center; padding:4px;">
+        <button id="tabIconClearBtn" class="btn-icon" style="font-size:11px; padding:4px 6px; flex:1;" title="Icon entfernen">✕ Entfernen</button>
+      </div>
+      <div id="tabIconQuickPick" style="display:flex; gap:4px; flex-wrap:wrap; padding:6px 0;">
+        <button class="tab-icon-pick btn-icon-elegant" data-icon="📝">📝</button>
+        <button class="tab-icon-pick btn-icon-elegant" data-icon="💬">💬</button>
+        <button class="tab-icon-pick btn-icon-elegant" data-icon="📁">📁</button>
+        <button class="tab-icon-pick btn-icon-elegant" data-icon="⭐">⭐</button>
+        <button class="tab-icon-pick btn-icon-elegant" data-icon="🔖">🔖</button>
+        <button class="tab-icon-pick btn-icon-elegant" data-icon="💡">💡</button>
+        <button class="tab-icon-pick btn-icon-elegant" data-icon="🔍">🔍</button>
+        <button class="tab-icon-pick btn-icon-elegant" data-icon="✅">✅</button>
+        <button class="tab-icon-pick btn-icon-elegant" data-icon="❗">❗</button>
+        <button class="tab-icon-pick btn-icon-elegant" data-icon="🗒️">🗒️</button>
+        <button class="tab-icon-pick btn-icon-elegant" data-icon="🚀">🚀</button>
+        <button class="tab-icon-pick btn-icon-elegant" data-icon="🎨">🎨</button>
+        <button class="tab-icon-pick btn-icon-elegant" data-icon="🧠">🧠</button>
+        <button class="tab-icon-pick btn-icon-elegant" data-icon="🛠️">🛠️</button>
+        <button class="tab-icon-pick btn-icon-elegant" data-icon="📌">📌</button>
+        <button class="tab-icon-pick btn-icon-elegant" data-icon="📊">📊</button>
+        <button class="tab-icon-pick btn-icon-elegant" data-icon="📚">📚</button>
+        <button class="tab-icon-pick btn-icon-elegant" data-icon="🌐">🌐</button>
+        <button class="tab-icon-pick btn-icon-elegant" data-icon="🔗">🔗</button>
+        <button class="tab-icon-pick btn-icon-elegant" data-icon="🎯">🎯</button>
+        <button class="tab-icon-pick btn-icon-elegant" data-icon="📅">📅</button>
+        <button class="tab-icon-pick btn-icon-elegant" data-icon="💰">💰</button>
+        <button class="tab-icon-pick btn-icon-elegant" data-icon="🔒">🔒</button>
+        <button class="tab-icon-pick btn-icon-elegant" data-icon="🎵">🎵</button>
+        <button class="tab-icon-pick btn-icon-elegant" data-icon="🎮">🎮</button>
+        <button class="tab-icon-pick btn-icon-elegant" data-icon="📷">📷</button>
+        <button class="tab-icon-pick btn-icon-elegant" data-icon="🏠">🏠</button>
+        <button class="tab-icon-pick btn-icon-elegant" data-icon="⚙️">⚙️</button>
+        <button class="tab-icon-pick btn-icon-elegant" data-icon="🔥">🔥</button>
+        <button class="tab-icon-pick btn-icon-elegant" data-icon="💎">💎</button>
+        <button class="tab-icon-pick btn-icon-elegant" data-icon="🧩">🧩</button>
+        <button class="tab-icon-pick btn-icon-elegant" data-icon="🖥️">🖥️</button>
+        <button class="tab-icon-pick btn-icon-elegant" data-icon="📱">📱</button>
+        <button class="tab-icon-pick btn-icon-elegant" data-icon="⌚">⌚</button>
+        <button class="tab-icon-pick btn-icon-elegant" data-icon="🕹️">🕹️</button>
+        <button class="tab-icon-pick btn-icon-elegant" data-icon="🖇️">🖇️</button>
+        <button class="tab-icon-pick btn-icon-elegant" data-icon="📎">📎</button>
+        <button class="tab-icon-pick btn-icon-elegant" data-icon="🗂️">🗂️</button>
+        <button class="tab-icon-pick btn-icon-elegant" data-icon="🗃️">🗃️</button>
+        <button class="tab-icon-pick btn-icon-elegant" data-icon="📦">📦</button>
+        <button class="tab-icon-pick btn-icon-elegant" data-icon="📤">📤</button>
+        <button class="tab-icon-pick btn-icon-elegant" data-icon="📥">📥</button>
+        <button class="tab-icon-pick btn-icon-elegant" data-icon="✉️">✉️</button>
+        <button class="tab-icon-pick btn-icon-elegant" data-icon="📨">📨</button>
+        <button class="tab-icon-pick btn-icon-elegant" data-icon="🔔">🔔</button>
+        <button class="tab-icon-pick btn-icon-elegant" data-icon="🔕">🔕</button>
+        <button class="tab-icon-pick btn-icon-elegant" data-icon="🧭">🧭</button>
+        <button class="tab-icon-pick btn-icon-elegant" data-icon="🗺️">🗺️</button>
+        <button class="tab-icon-pick btn-icon-elegant" data-icon="🏆">🏆</button>
+        <button class="tab-icon-pick btn-icon-elegant" data-icon="🎓">🎓</button>
+        <button class="tab-icon-pick btn-icon-elegant" data-icon="🧪">🧪</button>
+        <button class="tab-icon-pick btn-icon-elegant" data-icon="🔬">🔬</button>
+        <button class="tab-icon-pick btn-icon-elegant" data-icon="🧬">🧬</button>
+        <button class="tab-icon-pick btn-icon-elegant" data-icon="🍀">🍀</button>
+        <button class="tab-icon-pick btn-icon-elegant" data-icon="🌈">🌈</button>
+        <button class="tab-icon-pick btn-icon-elegant" data-icon="☀️">☀️</button>
+        <button class="tab-icon-pick btn-icon-elegant" data-icon="🌙">🌙</button>
+        <button class="tab-icon-pick btn-icon-elegant" data-icon="🛒">🛒</button>
+        <button class="tab-icon-pick btn-icon-elegant" data-icon="🧾">🧾</button>
+        <button class="tab-icon-pick btn-icon-elegant" data-icon="🪙">🪙</button>
+      </div>
+      <button id="tabIconUploadBtn" class="btn-icon-elegant" style="width:100%; font-size:11px; padding:5px; margin-top:4px;">🖼️ Eigenes PNG hochladen</button>
+      <input type="file" id="tabIconFileInput" accept="image/png" style="display:none;">
+      <label style="font-size:12px; display:flex; align-items:center; gap:6px; margin-top:8px; cursor:pointer;">
+        <input type="checkbox" id="tabIconOnlyInput" class="toggle-switch-input">
+        <span class="toggle-switch-track"></span>
+        Nur Icon anzeigen
+      </label>
+    </div>
+
     <div style="border-top: 1px solid var(--input-border); margin-top: 8px; padding-top: 6px; display: flex; gap: 4px;">
       <button id="moveTabLeftBtn" class="btn-icon-elegant" style="flex:1; padding:4px; font-size:11px;" title="Nach links verschieben">◀</button>
       <button id="moveTabRightBtn" class="btn-icon-elegant" style="flex:1; padding:4px; font-size:11px;" title="Nach rechts verschieben">▶</button>
@@ -77,7 +194,7 @@
       <h3>✨ Prompt bearbeiten</h3>
     </div>
     <input type="hidden" id="editIndex" value="">
-    
+
     <div class="field-block">
       <label class="field-label">Titel</label>
       <input type="text" id="titleInput" placeholder="Titel eingeben...">
@@ -85,7 +202,7 @@
 
     <div class="field-block">
       <label class="field-label">Prompt Text</label>
-      <textarea id="textInput" placeholder="Prompt Text eingeben..."></textarea>
+      <textarea id="textInput" placeholder="Prompt Text eingeben..." style="height:200px; overflow:hidden;"></textarea>
     </div>
 
     <div class="field-block">
@@ -102,20 +219,15 @@
 
     <div class="field-block">
       <label class="field-label">Shortcut</label>
-      <input type="text" id="shortcutInput" placeholder="Shortcut (z.B. Alt+1)">
+      <div class="input-row" style="align-items:center; gap:6px;">
+        <input type="text" id="shortcutInput" placeholder="Klicken und Tasten drücken..." readonly style="cursor:pointer; flex:1;">
+        <button type="button" id="clearShortcutBtn" class="btn-icon" title="Shortcut entfernen">✕</button>
+      </div>
     </div>
 
     <div class="field-block">
-      <label class="field-label">KI-Anbieter</label>
-      <select id="aiProvider">
-        <option value="none">Kein Anbieter</option>
-        <option value="ChatGPT">✦ ChatGPT</option>
-        <option value="Gemini">✦ Gemini</option>
-        <option value="Claude">⚛ Claude</option>
-        <option value="Copilot">✵ Copilot</option>
-        <option value="Perplexity">◈ Perplexity</option>
-        <option value="DeepL">⚲ DeepL</option>
-      </select>
+      <label class="field-label">Icon für KI wählen</label>
+      <select id="aiProvider"></select>
     </div>
 
     <div class="field-block">
@@ -137,10 +249,29 @@
       <h3>📝 Notiz bearbeiten</h3>
     </div>
     <input type="hidden" id="editNoteIndex" value="">
-    
+
     <div class="field-block">
       <label class="field-label">Titel</label>
       <input type="text" id="noteTitleInput" placeholder="Titel eingeben...">
+    </div>
+
+    <div class="field-block">
+      <label class="field-label">Icon</label>
+      <div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center;">
+        <input type="text" id="noteIconInput" maxlength="4" placeholder="📝" style="width:50px; font-size:18px; text-align:center; padding:5px; border:1px solid var(--input-border); border-radius:4px; background:var(--input-bg); color:var(--text);">
+        <div id="noteIconQuickPick" style="display:flex; gap:4px; flex-wrap:wrap; padding:2px 0;">
+          <button class="note-icon-pick btn-icon-elegant" data-icon="📝">📝</button>
+          <button class="note-icon-pick btn-icon-elegant" data-icon="📌">📌</button>
+          <button class="note-icon-pick btn-icon-elegant" data-icon="⭐">⭐</button>
+          <button class="note-icon-pick btn-icon-elegant" data-icon="🔖">🔖</button>
+          <button class="note-icon-pick btn-icon-elegant" data-icon="💡">💡</button>
+          <button class="note-icon-pick btn-icon-elegant" data-icon="🔍">🔍</button>
+          <button class="note-icon-pick btn-icon-elegant" data-icon="✅">✅</button>
+          <button class="note-icon-pick btn-icon-elegant" data-icon="❗">❗</button>
+          <button class="note-icon-pick btn-icon-elegant" data-icon="💬">💬</button>
+          <button class="note-icon-pick btn-icon-elegant" data-icon="🗒️">🗒️</button>
+        </div>
+      </div>
     </div>
 
     <div class="field-block">
@@ -186,12 +317,81 @@
     </div>
   </div>
 
+  <div id="bookmarkInputGroup" style="display:none;">
+    <div class="input-header">
+      <h3>🔖 Lesezeichen bearbeiten</h3>
+    </div>
+    <input type="hidden" id="editBookmarkIndex" value="">
+
+    <div class="field-block">
+      <label class="field-label">Titel</label>
+      <input type="text" id="bookmarkTitleInput" placeholder="Titel eingeben...">
+    </div>
+
+    <div class="field-block">
+      <label class="field-label">URL</label>
+      <input type="text" id="bookmarkUrlInput" placeholder="https://...">
+    </div>
+
+    <div class="field-block">
+      <label class="field-label">Farbe</label>
+      <div class="input-row">
+        <input type="color" id="bookmarkColor" value="#ff8c00">
+      </div>
+    </div>
+
+    <div class="field-block">
+      <label class="field-label">Zuletzt verwendete Farben</label>
+      <div id="recentColorsBookmark" class="recent-colors-box"></div>
+    </div>
+
+    <div class="field-block">
+      <label class="field-label">Zugehörige Gruppe</label>
+      <div class="input-row-vertical">
+        <select id="bookmarkGroupSelectOptions" style="width:100%; box-sizing:border-box;"></select>
+        <input type="text" id="bookmarkGroupInput" placeholder="Namen für neue Gruppe eingeben..." style="display:none; width:100%; box-sizing:border-box; margin-top:5px;">
+      </div>
+    </div>
+
+    <div class="editor-footer-buttons">
+      <button id="cancelBookmarkBtn" class="danger-btn icon-btn-large" title="Abbrechen" style="background: #cf6679; flex:1;">✕</button>
+      <button id="saveBookmarkBtn" class="primary-btn icon-btn-large" title="Speichern" style="flex:1;">💾</button>
+    </div>
+  </div>
+
+  <div id="bookmarkGroupEditPopup" style="display:none; position:fixed; z-index:99999; background:var(--card-bg,#1e1e1e); border:1px solid #555; border-radius:8px; padding:12px 14px; min-width:220px; box-shadow:0 4px 16px rgba(0,0,0,0.5);">
+    <div style="font-weight:600; font-size:13px; margin-bottom:10px; display:flex; align-items:center; justify-content:space-between;">
+      <span>Gruppe bearbeiten</span>
+      <button id="cancelBookmarkGroupBtn" class="btn-icon" style="font-size:12px; padding:2px 6px;">✕</button>
+    </div>
+    <input type="hidden" id="editBookmarkGroupName">
+    <div class="field-block" style="margin-bottom:8px;">
+      <label class="field-label" style="font-size:11px;">Icon</label>
+      <div style="display:flex; gap:4px; align-items:center; flex-wrap:wrap; margin-top:4px;">
+        <input type="text" id="bookmarkGroupIconInput" maxlength="4" style="width:46px; font-size:18px; text-align:center; padding:4px; border:1px solid var(--input-border,#555); border-radius:4px; background:var(--input-bg,#2a2a2a); color:var(--text,#fff);">
+        <div id="bookmarkGroupIconPick" style="display:flex; gap:4px; flex-wrap:wrap;">
+          <button class="bookmark-group-icon-pick btn-icon-elegant" data-icon="🔖">🔖</button>
+          <button class="bookmark-group-icon-pick btn-icon-elegant" data-icon="📁">📁</button>
+          <button class="bookmark-group-icon-pick btn-icon-elegant" data-icon="⭐">⭐</button>
+          <button class="bookmark-group-icon-pick btn-icon-elegant" data-icon="🌐">🌐</button>
+          <button class="bookmark-group-icon-pick btn-icon-elegant" data-icon="📚">📚</button>
+          <button class="bookmark-group-icon-pick btn-icon-elegant" data-icon="🛠️">🛠️</button>
+        </div>
+      </div>
+    </div>
+    <div class="field-block" style="margin-bottom:10px;">
+      <label class="field-label" style="font-size:11px;">Farbe</label>
+      <input type="color" id="bookmarkGroupColorInput" value="#ff8c00" style="margin-top:4px; width:50px; height:28px; border:none; cursor:pointer;">
+    </div>
+    <button id="saveBookmarkGroupBtn" class="primary-btn" style="width:100%; padding:8px;">💾 Speichern</button>
+  </div>
+
   <div id="makroInputGroup" style="display:none;">
     <div class="input-header">
       <h3>🤖 Makro bearbeiten</h3>
     </div>
     <input type="hidden" id="editMakroIndex" value="">
-    
+
     <div class="field-block">
       <label class="field-label">Makro-Name</label>
       <input type="text" id="makroTitleInput" placeholder="Name für das Makro eingeben...">
@@ -231,10 +431,115 @@
       </div>
     </div>
 
+    <div class="field-block">
+      <label style="font-size:12px; display:flex; align-items:center; gap:6px; cursor:pointer;">
+        <input type="checkbox" id="makroAskRepeatInput" class="toggle-switch-input">
+        <span class="toggle-switch-track"></span>
+        Vor Abspielen nach Wiederholungen fragen
+      </label>
+    </div>
+
+    <div class="field-block">
+      <label class="field-label">Pause zwischen Wiederholungen</label>
+      <div class="input-row" style="align-items:center; gap:10px;">
+        <input type="number" id="makroRepeatDelayInput" min="0" max="600000" step="100" value="0" style="width:90px;">
+        <span style="font-size:12px; opacity:0.6;">ms</span>
+      </div>
+      <label style="font-size:12px; display:flex; align-items:center; gap:6px; cursor:pointer; margin-top:8px;">
+        <input type="checkbox" id="makroWaitReloadInput"> 🔄 Auf Seiten-Reload warten (zwischen Wiederholungen)
+      </label>
+    </div>
+
+    <div class="field-block">
+      <label class="field-label">Schrittpause</label>
+      <label style="font-size:12px; display:flex; align-items:center; gap:6px; cursor:pointer; margin-bottom:8px;">
+        <input type="checkbox" id="makroSpeedToggle" checked class="toggle-switch-input">
+        <span class="toggle-switch-track"></span>
+        Schrittpause aktiv (ms zwischen Schritten)
+      </label>
+      <div id="makroSpeedRow" class="input-row" style="align-items:center; gap:10px;">
+        <input type="number" id="makroSpeedInput" min="0" step="100" value="700" style="width:100px;">
+        <span style="font-size:12px; opacity:0.6;">ms</span>
+      </div>
+    </div>
+
+    <div class="field-block">
+      <label class="field-label">Wiedergabe-Position</label>
+      <label style="font-size:12px; display:flex; align-items:center; gap:6px; cursor:pointer; margin-bottom:6px;">
+        <input type="checkbox" id="makroScrollToStartInput" class="toggle-switch-input">
+        <span class="toggle-switch-track"></span>
+        Vor Ausführung zu erster Klickposition scrollen
+      </label>
+      <label style="font-size:12px; display:flex; align-items:center; gap:6px; cursor:pointer;">
+        <input type="checkbox" id="makroScrollToEndInput" class="toggle-switch-input">
+        <span class="toggle-switch-track"></span>
+        Nach Ausführung zu letzter Klickposition scrollen
+      </label>
+    </div>
+
+    <div class="field-block">
+      <label style="font-size:12px; display:flex; align-items:center; gap:6px; cursor:pointer;">
+        <input type="checkbox" id="makroLockScrollInput" class="toggle-switch-input">
+        <span class="toggle-switch-track"></span>
+        Scrollen während Abspielen unterbinden
+      </label>
+    </div>
+
+    <div class="field-block">
+      <label class="field-label">Aufnahme-Methode</label>
+      <div class="method-toggle">
+        <button class="method-btn" id="methodBtn1" data-method="1" title="Selektor-basiert: findet Elemente anhand CSS-Selektor">M1 – Selektor</button>
+        <button class="method-btn active" id="methodBtn2" data-method="2" title="Koordinaten-basiert: nutzt Pixel-Position">M2 – Koordinaten</button>
+        <button class="method-btn" id="methodBtn3" data-method="3" title="Hybrid: Selektor mit Koordinaten-Fallback (empfohlen)">M3 – Hybrid</button>
+        <button class="method-btn" id="methodBtn4" data-method="4" title="Mausbewegungen: zeichnet Mausbewegungen 1:1 auf">M4 – Maus</button>
+      </div>
+      <input type="hidden" id="makroMethodInput" value="2">
+      <small style="opacity:0.5; font-size:11px;">M1=Selektor, M2=Koordinaten, M3=Hybrid (empfohlen), M4=Mausbewegungen</small>
+    </div>
+
+    <div class="field-block">
+      <label class="field-label">Schritt einfügen</label>
+      <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
+        <button id="addWaitStepBtn" class="btn-icon-elegant">⏱ Pause</button>
+        <input type="number" id="addWaitStepDuration" value="1000" min="100" max="60000" step="100" style="width:70px; font-size:12px;">
+        <span style="font-size:11px; opacity:0.6;">ms</span>
+        <button id="addReloadStepBtn" class="btn-icon-elegant">🔄 Reload-Schritt einfügen</button>
+      </div>
+    </div>
+
     <div class="editor-footer-buttons">
       <button id="cancelMakroBtn" class="danger-btn icon-btn-large" title="Abbrechen" style="background: #cf6679; flex:1;">✕</button>
       <button id="saveMakroBtn" class="primary-btn icon-btn-large" title="Speichern" style="flex:1;">💾</button>
     </div>
+  </div>
+
+  <div id="noteGroupEditPopup" style="display:none; position:fixed; z-index:99999; background:var(--card-bg,#1e1e1e); border:1px solid #555; border-radius:8px; padding:12px 14px; min-width:220px; box-shadow:0 4px 16px rgba(0,0,0,0.5);">
+    <div style="font-weight:600; font-size:13px; margin-bottom:10px; display:flex; align-items:center; justify-content:space-between;">
+      <span>Gruppe bearbeiten</span>
+      <button id="cancelNoteGroupBtn" class="btn-icon" style="font-size:12px; padding:2px 6px;">✕</button>
+    </div>
+    <input type="hidden" id="editNoteGroupName">
+    <div class="field-block" style="margin-bottom:8px;">
+      <label class="field-label" style="font-size:11px;">Icon</label>
+      <div style="display:flex; gap:4px; align-items:center; flex-wrap:wrap; margin-top:4px;">
+        <input type="text" id="noteGroupIconInput" maxlength="4" style="width:46px; font-size:18px; text-align:center; padding:4px; border:1px solid var(--input-border,#555); border-radius:4px; background:var(--input-bg,#2a2a2a); color:var(--text,#fff);">
+        <div id="noteGroupIconPick" style="display:flex; gap:4px; flex-wrap:wrap;">
+          <button class="note-group-icon-pick btn-icon-elegant" data-icon="📁">📁</button>
+          <button class="note-group-icon-pick btn-icon-elegant" data-icon="📝">📝</button>
+          <button class="note-group-icon-pick btn-icon-elegant" data-icon="⭐">⭐</button>
+          <button class="note-group-icon-pick btn-icon-elegant" data-icon="🔖">🔖</button>
+          <button class="note-group-icon-pick btn-icon-elegant" data-icon="💡">💡</button>
+          <button class="note-group-icon-pick btn-icon-elegant" data-icon="🗒️">🗒️</button>
+          <button class="note-group-icon-pick btn-icon-elegant" data-icon="✅">✅</button>
+          <button class="note-group-icon-pick btn-icon-elegant" data-icon="❗">❗</button>
+        </div>
+      </div>
+    </div>
+    <div class="field-block" style="margin-bottom:10px;">
+      <label class="field-label" style="font-size:11px;">Farbe</label>
+      <input type="color" id="noteGroupColorInput" value="#ff8c00" style="margin-top:4px; width:50px; height:28px; border:none; cursor:pointer;">
+    </div>
+    <button id="saveNoteGroupBtn" class="primary-btn" style="width:100%; padding:8px;">💾 Speichern</button>
   </div>
 
   <div id="groupEditorGroup" style="display:none;">
@@ -243,7 +548,7 @@
       <button id="cancelGroupBtn" class="btn-icon">✕</button>
     </div>
     <input type="hidden" id="editGroupOldName" value="">
-    
+
     <div class="field-block">
       <label class="field-label">Gruppenname</label>
       <input type="text" id="groupTitleInput" placeholder="Gruppenname">
@@ -251,28 +556,34 @@
 
     <div class="field-block">
       <label class="field-label">Gruppen-Icon</label>
-      <select id="groupIconInput">
-        <option value="📁">📁 Ordner Standard</option>
-        <option value="🚀">🚀 Projekte / Schnell</option>
-        <option value="⚛">⚛ KI / Wissenschaft</option>
-        <option value="📝">📝 Texte / Entwürfe</option>
-        <option value="🛠️">🛠️ Tools / Utilities</option>
-        <option value="⭐">⭐ Favoriten</option>
-        <option value="🧠">🧠 Brainstorming</option>
-        <option value="🎨">🎨 Design / Medien</option>
-      </select>
+      <input type="text" id="groupIconInput" maxlength="4" placeholder="📁"
+             style="width:60px; font-size:20px; text-align:center; padding:6px;">
+      <div id="groupIconQuickPick" style="display:flex;gap:6px;flex-wrap:wrap;padding:4px 0;">
+        <button class="group-icon-pick btn-icon-elegant" data-icon="📁">📁</button>
+        <button class="group-icon-pick btn-icon-elegant" data-icon="🚀">🚀</button>
+        <button class="group-icon-pick btn-icon-elegant" data-icon="⚛">⚛</button>
+        <button class="group-icon-pick btn-icon-elegant" data-icon="📝">📝</button>
+        <button class="group-icon-pick btn-icon-elegant" data-icon="🛠️">🛠️</button>
+        <button class="group-icon-pick btn-icon-elegant" data-icon="⭐">⭐</button>
+        <button class="group-icon-pick btn-icon-elegant" data-icon="🧠">🧠</button>
+        <button class="group-icon-pick btn-icon-elegant" data-icon="🎨">🎨</button>
+      </div>
     </div>
 
     <div class="field-block">
       <label class="field-label">Gruppen-Anbieter Standard</label>
-      <select id="groupAiProvider">
-        <option value="default">Gruppen-Anbieter (Standard)</option>
-        <option value="ChatGPT">ChatGPT</option>
-        <option value="Gemini">Gemini</option>
-        <option value="Claude">Claude</option>
-        <option value="Copilot">Copilot</option>
-        <option value="Perplexity">Perplexity</option>
-      </select>
+      <select id="groupAiProvider"></select>
+    </div>
+
+    <div class="field-block">
+      <label class="field-label">Eigene KI-Anbieter</label>
+      <div id="customProviderList"></div>
+      <div class="input-row" style="margin-top:6px;gap:6px;">
+        <input type="text" id="customProviderIconInput" maxlength="4"
+               placeholder="⚬" style="width:48px;font-size:16px;text-align:center;padding:6px;">
+        <input type="text" id="customProviderNameInput" placeholder="Anbieter-Name" style="flex:1;">
+        <button id="addCustomProviderBtn" class="btn-icon" title="Hinzufügen">＋</button>
+      </div>
     </div>
 
     <div class="field-block">
@@ -333,6 +644,37 @@
     </div>
   </div>
 
+  <div id="groupDeletePopup" style="display:none;">
+    <div class="popup-backdrop"></div>
+    <div class="popup-box">
+      <h3>🗑️ Gruppe löschen</h3>
+      <p id="groupDeletePopupInfo" style="font-size:13px; opacity:0.8; margin:8px 0 16px;"></p>
+      <div style="display:flex; flex-direction:column; gap:8px;">
+        <button id="groupDeleteKeepItemsBtn" class="btn-icon-elegant" style="padding:10px; font-size:13px;">📤 Nur Gruppe löschen (Inhalte bleiben)</button>
+        <button id="groupDeleteAllBtn" class="danger-btn">🗑️ Gruppe & Inhalte löschen</button>
+        <button id="groupDeleteCancelBtn" class="btn-icon-elegant" style="margin-top:4px;">✕ Abbrechen</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="recordMethodDialog" style="display:none;">
+    <div class="input-header">
+      <span style="font-weight:600; font-size:14px;">🎙 Aufnahme starten</span>
+    </div>
+    <p style="font-size:12px; opacity:0.7; margin:0;">Wähle die Aufnahme-Methode:</p>
+    <div class="method-toggle" style="margin-top:8px;">
+      <button class="method-btn" id="dialogMethodBtn1" data-method="1" title="Selektor-basiert: mehr Schritt-Typen">M1 – Selektor</button>
+      <button class="method-btn active" id="dialogMethodBtn2" data-method="2" title="Koordinaten-basiert">M2 – Koordinaten</button>
+      <button class="method-btn" id="dialogMethodBtn3" data-method="3" title="Hybrid: Selektor + Koordinaten-Fallback">M3 – Hybrid</button>
+      <button class="method-btn" id="dialogMethodBtn4" data-method="4" title="Mausbewegungen 1:1 aufzeichnen">M4 – Maus</button>
+    </div>
+    <small style="opacity:0.5; font-size:11px; display:block; margin-top:4px;">M3 empfohlen: Selektor mit Koordinaten-Fallback. M4: zeichnet Mausbewegungen auf.</small>
+    <div class="editor-footer-buttons" style="margin-top:14px;">
+      <button id="cancelRecordDialogBtn" class="danger-btn" style="flex:1;">✕ Abbrechen</button>
+      <button id="startRecordBtn" class="primary-btn icon-btn-large" style="flex:1;"><span class="record-dot"></span> Aufnehmen</button>
+    </div>
+  </div>
+
   <div id="stepPlaybackPanel" style="display:none;">
     <div class="input-header">
       <h3 id="stepPlaybackTitle">Makro</h3>
@@ -347,16 +689,96 @@
         <input type="number" id="stepEditPx" style="width:80px;" placeholder="X">
         <input type="number" id="stepEditPy" style="width:80px;" placeholder="Y">
       </div>
+      <button id="showStepOnPageBtn" class="btn-icon" style="display:none; margin-top:6px;" title="Klickposition auf Seite anzeigen und verschieben">📍 Auf Seite zeigen</button>
     </div>
     <div id="stepEditType" style="display:none;" class="field-block">
       <label class="field-label">Text korrigieren</label>
       <input type="text" id="stepEditValue" placeholder="Wert...">
+    </div>
+    <div id="stepEditWait" style="display:none;" class="field-block">
+      <label class="field-label">Pausendauer (ms)</label>
+      <input type="number" id="stepEditWaitDuration" style="width:100px;" placeholder="ms" min="100">
+    </div>
+    <div id="stepEditWaitReload" style="display:none;" class="field-block">
+      <label class="field-label">Max. Wartezeit (ms)</label>
+      <input type="number" id="stepEditReloadTimeout" style="width:100px;" placeholder="ms" min="1000">
+    </div>
+    <div id="stepEditNavigate" style="display:none;" class="field-block">
+      <label class="field-label">URL</label>
+      <input type="text" id="stepEditUrl" placeholder="https://..." style="width:100%;">
+    </div>
+    <div id="stepEditScroll" style="display:none;" class="field-block">
+      <label class="field-label">Selektor oder X/Y</label>
+      <input type="text" id="stepEditScrollSelector" placeholder="CSS-Selektor (optional)" style="width:100%; margin-bottom:4px;">
+      <div class="input-row">
+        <input type="number" id="stepEditScrollX" style="width:80px;" placeholder="X">
+        <input type="number" id="stepEditScrollY" style="width:80px;" placeholder="Y">
+      </div>
+    </div>
+    <div id="stepEditKeypress" style="display:none;" class="field-block">
+      <label class="field-label">Taste</label>
+      <input type="text" id="stepEditKey" placeholder="Enter, Tab, Escape, a, ..." style="width:100%; margin-bottom:6px;">
+      <div style="display:flex; gap:10px; font-size:12px;">
+        <label><input type="checkbox" id="stepEditModCtrl"> Ctrl</label>
+        <label><input type="checkbox" id="stepEditModShift"> Shift</label>
+        <label><input type="checkbox" id="stepEditModAlt"> Alt</label>
+      </div>
+    </div>
+    <div id="stepEditSelect" style="display:none;" class="field-block">
+      <label class="field-label">Selektor</label>
+      <input type="text" id="stepEditSelectSelector" placeholder="CSS-Selektor" style="width:100%; margin-bottom:4px;">
+      <label class="field-label">Wert</label>
+      <input type="text" id="stepEditSelectValue" placeholder="Option-Wert">
+    </div>
+    <div id="stepEditSelectorOnly" style="display:none;" class="field-block">
+      <label class="field-label">Selektor</label>
+      <input type="text" id="stepEditSelector" placeholder="CSS-Selektor" style="width:100%;">
     </div>
     <button id="stepEditSaveBtn" class="btn-icon-elegant" style="width:100%; margin-top:4px;">💾 Schritt speichern</button>
 
     <div class="editor-footer-buttons" style="margin-top:12px;">
       <button id="stepPlaybackSkipBtn" class="btn-icon-elegant" style="flex:1;">⏭ Überspringen</button>
       <button id="stepPlaybackRunBtn" class="primary-btn" style="flex:1;">▶ Ausführen</button>
+    </div>
+  </div>
+
+  <div id="promptContextMenu" class="context-menu" style="display:none; position:fixed; z-index:99999; width:160px;">
+    <button id="ctxDuplicatePrompt" class="btn-icon-elegant" style="width:100%; text-align:left; padding:7px 10px; font-size:12px;">⧉ Duplizieren</button>
+    <button id="ctxRenamePrompt" class="btn-icon-elegant" style="width:100%; text-align:left; padding:7px 10px; font-size:12px;">✎ Umbenennen</button>
+    <button id="ctxDeletePrompt" class="btn-icon-elegant" style="width:100%; text-align:left; padding:7px 10px; font-size:12px; color:#cf6679;">🗑 Löschen</button>
+  </div>
+
+  <div id="noteContextMenu" class="context-menu" style="display:none; position:fixed; z-index:99999; width:160px;">
+    <button id="ctxRenameNote" class="btn-icon-elegant" style="width:100%; text-align:left; padding:7px 10px; font-size:12px;">✎ Umbenennen</button>
+    <button id="ctxDeleteNote" class="btn-icon-elegant" style="width:100%; text-align:left; padding:7px 10px; font-size:12px; color:#cf6679;">🗑 Löschen</button>
+  </div>
+
+  <div id="bookmarkContextMenu" class="context-menu" style="display:none; position:fixed; z-index:99999; width:190px;">
+    <button id="ctxAddCurrentPageBookmark" class="btn-icon-elegant" style="width:100%; text-align:left; padding:7px 10px; font-size:12px;">➕ Aktuelle Seite hinzufügen</button>
+    <button id="ctxEditBookmark" class="btn-icon-elegant" style="width:100%; text-align:left; padding:7px 10px; font-size:12px;">✎ Bearbeiten</button>
+    <button id="ctxDeleteBookmark" class="btn-icon-elegant" style="width:100%; text-align:left; padding:7px 10px; font-size:12px; color:#cf6679;">🗑 Löschen</button>
+  </div>
+
+  <div id="groupContextMenu" class="context-menu" style="display:none; position:fixed; z-index:99999; width:160px;">
+    <button id="ctxDuplicateGroup" class="btn-icon-elegant" style="width:100%; text-align:left; padding:7px 10px; font-size:12px;">⧉ Gruppe duplizieren</button>
+    <button id="ctxRenameGroup" class="btn-icon-elegant" style="width:100%; text-align:left; padding:7px 10px; font-size:12px;">✎ Gruppe umbenennen</button>
+    <button id="ctxDeleteGroup" class="btn-icon-elegant" style="width:100%; text-align:left; padding:7px 10px; font-size:12px; color:#cf6679;">🗑 Gruppe löschen</button>
+  </div>
+
+  <div id="makroRepeatAskDialog" style="display:none;">
+    <div class="input-header">
+      <span style="font-weight:600; font-size:14px;">▶ Makro abspielen</span>
+    </div>
+    <div class="field-block">
+      <label class="field-label">Wie oft ausführen?</label>
+      <div class="input-row" style="align-items:center; gap:8px;">
+        <input type="number" id="makroRepeatAskInput" min="1" max="9999" value="1" style="width:80px;">
+        <span style="font-size:12px; opacity:0.6;">× ausführen</span>
+      </div>
+    </div>
+    <div class="editor-footer-buttons" style="margin-top:14px;">
+      <button id="cancelRepeatAskBtn" class="danger-btn" style="flex:1;">✕ Abbrechen</button>
+      <button id="confirmRepeatAskBtn" class="primary-btn" style="flex:1;">▶ Abspielen</button>
     </div>
   </div>
 

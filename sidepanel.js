@@ -1,25 +1,60 @@
 let promts = [];
-let notes = []; 
+let notes = [];
 let makros = [];
+let bookmarks = [];
 let deletedPromts = [];
 let recentColors = [];
 let collapsedGroups = {};
 let collapsedNoteGroups = {};
-let collapsedSessions = {}; 
+let collapsedBookmarkGroups = {};
+let collapsedSessions = {};
 let savedSessions = [];
-let groupMetadata = {}; 
+let groupMetadata = {};
+let bookmarkGroupMetadata = {};
 let tabColors = {};
-let tabOrder = ['prompts', 'sessions', 'notes', 'makros'];
+let tabIcons = {};
+let tabIconOnly = {};
+let tabLabels = {};
+let tabCustomIcons = {};
+let customProviders = [];
+let groupOrder = [];
+let noteGroupOrder = [];
+let bookmarkGroupOrder = [];
+let tabOrder = ['prompts', 'sessions', 'notes', 'makros', 'bookmarks'];
 let isRecording = false;
 let stepPlaybackState = null;
 let recordingTabId = null;
 let recordingBuffer = [];
+let preRunMakroIdx = null;
+let recordingMethod = 2;
+let runningMakroState = null;
+
+function updatePlaybackBar() {
+    const bar = document.getElementById('makroPlaybackBar');
+    const counter = document.getElementById('makroPlaybackCounter');
+    const pauseBtn = document.getElementById('makroPlaybackPauseBtn');
+    const titleEl = document.getElementById('makroPlaybackTitle');
+    const fill = document.getElementById('makroPlaybackProgressFill');
+    if (!runningMakroState) {
+        bar.style.display = 'none';
+        return;
+    }
+    bar.style.display = 'flex';
+    const cur = (runningMakroState.current || 0) + 1;
+    const tot = runningMakroState.repeat || 1;
+    const paused = runningMakroState.paused;
+    counter.textContent = cur + ' / ' + tot;
+    pauseBtn.textContent = paused ? '▶' : '⏸';
+    if (titleEl) titleEl.textContent = (paused ? '⏸ ' : '⏵ ') + (runningMakroState.title || 'Makro');
+    if (fill) fill.style.width = Math.round(((cur - 1) / tot) * 100) + '%';
+}
 
 const tabNames = {
     'prompts': 'Promts',
     'sessions': 'Sessions',
     'notes': 'Notizen',
-    'makros': 'Makros'
+    'makros': 'Makros',
+    'bookmarks': 'Lesezeichen'
 };
 
 const providerIcons = {
@@ -29,33 +64,86 @@ const providerIcons = {
     'Copilot': '✵',
     'Perplexity': '◈',
     'DeepL': '⚲',
+    'Grok': '𝕏',
+    'Humata': '📄',
+    'Grammarly': '✓',
+    'DeepSeek': '🐳',
+    'DataLab': '📊',
+    'Google Antigravity': '🪐',
+    'Cursor': '▲',
+    'GitHub Copilot': '🐙',
+    'Nano Banana': '🍌',
+    'ChatGPT-Image-2.0': '🖼️',
+    'NotebookLM': '📓',
     'none': ''
 };
 
+function getEffectiveProviderIcons() {
+    const merged = Object.assign({}, providerIcons);
+    customProviders.forEach(cp => { merged[cp.name] = cp.icon; });
+    return merged;
+}
+
 let currentEditorTodos = [];
 
+const _versionLabel = document.getElementById('addonVersionLabel');
+if (_versionLabel) _versionLabel.textContent = 'v' + chrome.runtime.getManifest().version;
+
 function loadData() {
-    chrome.storage.sync.get({ 
-        promts: [], 
-        notes: [], 
+    chrome.storage.sync.get({
+        promts: [],
+        notes: [],
         makros: [],
-        deletedPromts: [], 
-        recentColors: [], 
+        bookmarks: [],
+        deletedPromts: [],
+        recentColors: [],
         groupMetadata: {},
+        bookmarkGroupMetadata: {},
         savedSessions: [],
         tabColors: {},
-        tabOrder: ['prompts', 'sessions', 'notes', 'makros']
+        tabIcons: {},
+        tabIconOnly: {},
+        tabLabels: {},
+        tabOrder: ['prompts', 'sessions', 'notes', 'makros', 'bookmarks'],
+        customProviders: [],
+        groupOrder: [],
+        noteGroupOrder: [],
+        bookmarkGroupOrder: []
     }, (res) => {
         promts = res.promts || [];
         notes = res.notes || [];
         makros = res.makros || [];
+        bookmarks = res.bookmarks || [];
         deletedPromts = res.deletedPromts || [];
         recentColors = res.recentColors || [];
         groupMetadata = res.groupMetadata || {};
+        bookmarkGroupMetadata = res.bookmarkGroupMetadata || {};
         savedSessions = res.savedSessions || [];
         tabColors = res.tabColors || {};
-        tabOrder = res.tabOrder || ['prompts', 'sessions', 'notes', 'makros'];
-        
+        tabIcons = res.tabIcons || {};
+        tabIconOnly = res.tabIconOnly || {};
+        tabLabels = res.tabLabels || {};
+        tabOrder = res.tabOrder || ['prompts', 'sessions', 'notes', 'makros', 'bookmarks'];
+        customProviders = res.customProviders || [];
+        groupOrder = res.groupOrder || [];
+        noteGroupOrder = res.noteGroupOrder || [];
+        bookmarkGroupOrder = res.bookmarkGroupOrder || [];
+
+        if (!tabOrder.includes('bookmarks')) {
+            tabOrder.push('bookmarks');
+            chrome.storage.sync.set({ tabOrder });
+        }
+
+        // Migration: bestehende Lesezeichen-Gruppen (früher in gemeinsamer groupMetadata) nach bookmarkGroupMetadata übernehmen
+        let bgmMigrated = false;
+        bookmarks.forEach(b => {
+            if (b.group && b.group.trim() !== "" && !bookmarkGroupMetadata[b.group] && groupMetadata[b.group]) {
+                bookmarkGroupMetadata[b.group] = Object.assign({}, groupMetadata[b.group]);
+                bgmMigrated = true;
+            }
+        });
+        if (bgmMigrated) chrome.storage.sync.set({ bookmarkGroupMetadata });
+
         savedSessions.forEach((_, idx) => {
             if (collapsedSessions[idx] === undefined) {
                 collapsedSessions[idx] = true;
@@ -67,11 +155,22 @@ function loadData() {
         render();
         renderNotes();
         renderMakros();
+        renderBookmarks();
         renderTrash();
         renderRecentColors();
         renderSessions();
         populateGroupDropdowns();
+        populateProviderDropdowns();
         checkSyncStatus();
+        initGroupDragDrop(document.getElementById('promptList'), false);
+        initGroupDragDrop(document.getElementById('notesList'), true);
+        initGroupDragDrop(document.getElementById('bookmarksList'), 'bookmark');
+
+        chrome.storage.local.get({ tabCustomIcons: {} }, (localRes) => {
+            tabCustomIcons = localRes.tabCustomIcons || {};
+            renderTabsNavigation();
+            applyTabColors();
+        });
     });
 }
 
@@ -83,7 +182,16 @@ function renderTabsNavigation() {
     const activeTabKey = activeBtn ? activeBtn.dataset.tab : 'prompts';
 
     navContainer.innerHTML = tabOrder.map(key => {
-        return `<button id="nav${key.charAt(0).toUpperCase() + key.slice(1)}" class="tab-btn ${activeTabKey === key ? 'active' : ''}" data-tab="${key}">${tabNames[key] || key}</button>`;
+        const label = tabLabels[key] || tabNames[key] || key;
+        const customIcon = tabCustomIcons[key] || '';
+        const emojiIcon = tabIcons[key] || '';
+        const iconOnly = !!tabIconOnly[key];
+        const iconHtml = customIcon
+            ? `<img src="${customIcon}" style="height:14px; width:14px; object-fit:contain; vertical-align:middle;">`
+            : (emojiIcon || '');
+        const hasIcon = !!(customIcon || emojiIcon);
+        const displayText = (iconOnly && hasIcon) ? iconHtml : (hasIcon ? iconHtml + ' ' + label : label);
+        return `<button id="nav${key.charAt(0).toUpperCase() + key.slice(1)}" class="tab-btn ${activeTabKey === key ? 'active' : ''}" data-tab="${key}" title="${label}">${displayText}</button>`;
     }).join('');
 }
 
@@ -91,11 +199,13 @@ function applyTabColors() {
     document.querySelectorAll('.tab-btn').forEach(btn => {
         const tabKey = btn.dataset.tab;
         if (tabColors[tabKey]) {
-            btn.style.setProperty('background-color', tabColors[tabKey] + '33', 'important');
+            btn.style.setProperty('background-color', tabColors[tabKey], 'important');
             btn.style.setProperty('border-top', `3px solid ${tabColors[tabKey]}`, 'important');
+            btn.style.setProperty('--tab-glow-color', tabColors[tabKey]);
         } else {
             btn.style.removeProperty('background-color');
             btn.style.removeProperty('border-top');
+            btn.style.removeProperty('--tab-glow-color');
         }
     });
 }
@@ -129,21 +239,152 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
 function populateGroupDropdowns() {
     const pSelect = document.getElementById('groupSelectOptions');
     const nSelect = document.getElementById('noteGroupSelectOptions');
+    const bSelect = document.getElementById('bookmarkGroupSelectOptions');
     if (!pSelect || !nSelect) return;
-    
+
     const uniqueGroups = new Set();
     promts.forEach(p => { if (p.group && p.group.trim() !== "") uniqueGroups.add(p.group); });
     notes.forEach(n => { if (n.group && n.group.trim() !== "") uniqueGroups.add(n.group); });
     Object.keys(groupMetadata).forEach(g => uniqueGroups.add(g));
-    
-    let baseHtml = '<option value="">-- Keine Gruppe gewählt --</option>';
-    uniqueGroups.forEach(gName => {
-        baseHtml += `<option value="${gName}">${gName}</option>`;
-    });
-    baseHtml += '<option value="__NEW_GROUP__">[+ Neue Gruppe erstellen]</option>';
-    
+
+    const buildOptions = (names) => {
+        let html = '<option value="">Keine</option>';
+        names.sort((a, b) => a.localeCompare(b, 'de')).forEach(gName => {
+            html += `<option value="${gName}">${gName}</option>`;
+        });
+        html += '<option value="__NEW_GROUP__">[+ Neue Gruppe erstellen]</option>';
+        return html;
+    };
+
+    const baseHtml = buildOptions(Array.from(uniqueGroups));
     pSelect.innerHTML = baseHtml;
     nSelect.innerHTML = baseHtml;
+
+    if (bSelect) {
+        const uniqueBookmarkGroups = new Set();
+        bookmarks.forEach(b => { if (b.group && b.group.trim() !== "") uniqueBookmarkGroups.add(b.group); });
+        Object.keys(bookmarkGroupMetadata).forEach(g => uniqueBookmarkGroups.add(g));
+        bSelect.innerHTML = buildOptions(Array.from(uniqueBookmarkGroups));
+    }
+}
+
+function sortGroupNames(names, orderArray) {
+    if (!orderArray || orderArray.length === 0) return names;
+    const inOrder = orderArray.filter(n => names.includes(n));
+    const rest = names.filter(n => !orderArray.includes(n));
+    return [...inOrder, ...rest];
+}
+
+function populateProviderDropdowns() {
+    const effectiveIcons = getEffectiveProviderIcons();
+    const defaultProviders = ['none', 'ChatGPT', 'Gemini', 'Claude', 'Copilot', 'Perplexity', 'DeepL', 'Grok', 'Humata', 'Grammarly', 'DeepSeek', 'DataLab', 'Google Antigravity', 'Cursor', 'GitHub Copilot', 'Nano Banana', 'ChatGPT-Image-2.0', 'NotebookLM'];
+    const sortedNames = [...defaultProviders.filter(n => n !== 'none'), ...customProviders.map(cp => cp.name)]
+        .sort((a, b) => a.localeCompare(b, 'de'));
+    const allNames = ['none', ...sortedNames];
+
+    const buildOptions = (includeDefault) => {
+        let html = '';
+        if (includeDefault) html += '<option value="default">Gruppen-Anbieter (Standard)</option>';
+        allNames.forEach(name => {
+            if (name === 'none') {
+                html += '<option value="none">Keins</option>';
+            } else {
+                const ico = effectiveIcons[name] || '';
+                html += `<option value="${name}">${ico ? ico + ' ' : ''}${name}</option>`;
+            }
+        });
+        return html;
+    };
+
+    const prov = document.getElementById('aiProvider');
+    const gProv = document.getElementById('groupAiProvider');
+    if (prov) prov.innerHTML = buildOptions(false);
+    if (gProv) gProv.innerHTML = buildOptions(true);
+    renderCustomProviderList();
+}
+
+function renderCustomProviderList() {
+    const container = document.getElementById('customProviderList');
+    if (!container) return;
+    if (customProviders.length === 0) {
+        container.innerHTML = '<p style="font-size:11px;opacity:0.5;margin:0;">Keine eigenen Anbieter.</p>';
+        return;
+    }
+    container.innerHTML = customProviders.map((cp, i) => `
+        <div style="display:flex;align-items:center;gap:6px;padding:4px 0;">
+            <span style="font-size:16px;min-width:24px;">${cp.icon}</span>
+            <span style="flex:1;font-size:12px;">${cp.name}</span>
+            <button class="group-edit-btn remove-custom-provider" data-index="${i}"
+                    style="color:#cf6679;" title="Entfernen">✕</button>
+        </div>
+    `).join('');
+}
+
+function initGroupDragDrop(containerEl, isNotes) {
+    if (!containerEl) return;
+    let dragSrcName = null;
+
+    containerEl.addEventListener('dragstart', (e) => {
+        const gc = e.target.closest('.group-container[draggable]');
+        if (!gc) return;
+        dragSrcName = gc.dataset.groupname;
+        e.dataTransfer.effectAllowed = 'move';
+        setTimeout(() => { gc.style.opacity = '0.5'; }, 0);
+    });
+
+    containerEl.addEventListener('dragend', (e) => {
+        const gc = e.target.closest('.group-container[draggable]');
+        if (gc) gc.style.opacity = '';
+        containerEl.querySelectorAll('.group-container[draggable]').forEach(el => {
+            el.style.outline = '';
+        });
+        dragSrcName = null;
+    });
+
+    containerEl.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+        const gc = e.target.closest('.group-container[draggable]');
+        if (gc && gc.dataset.groupname !== dragSrcName) {
+            gc.style.outline = '2px dashed var(--accent, #ff8c00)';
+        }
+    });
+
+    containerEl.addEventListener('dragleave', (e) => {
+        const gc = e.target.closest('.group-container[draggable]');
+        if (gc) gc.style.outline = '';
+    });
+
+    containerEl.addEventListener('drop', (e) => {
+        e.preventDefault();
+        const gc = e.target.closest('.group-container[draggable]');
+        if (!gc || !dragSrcName) return;
+        gc.style.outline = '';
+        const targetName = gc.dataset.groupname;
+        if (targetName === dragSrcName) return;
+
+        const allRendered = Array.from(
+            containerEl.querySelectorAll('.group-container[draggable]')
+        ).map(el => el.dataset.groupname);
+
+        let newOrder = [...allRendered];
+        const fromIdx = newOrder.indexOf(dragSrcName);
+        const toIdx = newOrder.indexOf(targetName);
+        if (fromIdx === -1 || toIdx === -1) return;
+        newOrder.splice(fromIdx, 1);
+        newOrder.splice(toIdx, 0, dragSrcName);
+
+        if (isNotes === 'bookmark') {
+            bookmarkGroupOrder = newOrder;
+            chrome.storage.sync.set({ bookmarkGroupOrder }, renderBookmarks);
+        } else if (isNotes) {
+            noteGroupOrder = newOrder;
+            chrome.storage.sync.set({ noteGroupOrder }, renderNotes);
+        } else {
+            groupOrder = newOrder;
+            chrome.storage.sync.set({ groupOrder }, render);
+        }
+    });
 }
 
 function handleDropdownChange(selectId, inputId) {
@@ -163,6 +404,7 @@ function handleDropdownChange(selectId, inputId) {
 }
 handleDropdownChange('groupSelectOptions', 'groupInput');
 handleDropdownChange('noteGroupSelectOptions', 'noteGroupInput');
+handleDropdownChange('bookmarkGroupSelectOptions', 'bookmarkGroupInput');
 
 function render() {
     const pList = document.getElementById('promptList');
@@ -181,15 +423,16 @@ function render() {
     });
 
     let html = "";
-    Object.keys(groups).forEach(gName => {
-        const isCollapsed = collapsedGroups[gName] || false;
+    sortGroupNames(Object.keys(groups), groupOrder).forEach(gName => {
+        const isCollapsed = (gName in collapsedGroups) ? collapsedGroups[gName] : true;
         const meta = groupMetadata[gName] || { color: '#ff8c00', icon: '📁' };
         let totalCount = groups[gName] ? groups[gName].length : 0;
 
         html += `
-            <div class="group-container" style="border-top: 2px solid ${meta.color}">
+            <div class="group-container" draggable="true" data-groupname="${gName}" style="border-top: 2px solid ${meta.color}">
                 <div class="group-header" data-group="${gName}" style="color: ${meta.color};">
                     <div class="group-title-wrapper">
+                        <span class="drag-handle" title="Verschieben">⠿</span>
                         <span>${meta.icon} ${gName}</span>
                     </div>
                     <div class="group-right-wrapper">
@@ -216,13 +459,14 @@ function render() {
 }
 
 function getCardHtml(p, i) {
-    const icon = providerIcons[p.provider] !== undefined ? providerIcons[p.provider] : '⚬';
+    const icons = getEffectiveProviderIcons();
+    const icon = icons[p.provider] !== undefined ? icons[p.provider] : '⚬';
     const showIcon = icon !== '';
     return `
         <div class="prompt-card" style="border-left: 3px solid ${p.color || '#ff8c00'}">
             <div class="card-header">
                 <div class="prompt-info" data-action="copy-insert" data-index="${i}">
-                    ${showIcon ? `<span class="provider-icon" title="${p.provider === 'none' ? 'Kein Anbieter' : (p.provider || 'Anbieter')}">${icon}</span>` : ''}
+                    ${showIcon ? `<span class="provider-icon" title="${p.provider === 'none' ? 'Keins' : (p.provider || 'Anbieter')}">${icon}</span>` : ''}
                     <span class="prompt-title">${p.title || 'Unbenannt'}</span>
                 </div>
                 <div class="card-actions">
@@ -269,19 +513,21 @@ function renderNotes() {
     });
 
     let html = "";
-    Object.keys(groups).forEach(gName => {
-        const isCollapsed = collapsedNoteGroups[gName] || false;
+    sortGroupNames(Object.keys(groups), noteGroupOrder).forEach(gName => {
+        const isCollapsed = (gName in collapsedNoteGroups) ? collapsedNoteGroups[gName] : true;
         const meta = groupMetadata[gName] || { color: '#ff8c00', icon: '📁' };
         let totalCount = groups[gName].length;
 
         html += `
-            <div class="group-container" style="border-top: 2px solid ${meta.color}">
+            <div class="group-container" draggable="true" data-groupname="${gName}" style="border-top: 2px solid ${meta.color}">
                 <div class="group-header" data-notegroup="${gName}" style="color: ${meta.color};">
                     <div class="group-title-wrapper">
+                        <span class="drag-handle" title="Verschieben">⠿</span>
                         <span>${meta.icon} ${gName}</span>
                     </div>
                     <div class="group-right-wrapper">
                         <span class="badge">${totalCount}</span>
+                        <button class="group-edit-btn" data-notegroupedit="${gName}" title="Gruppe bearbeiten">✎</button>
                         <span style="font-size:10px; padding-left:4px;">${isCollapsed ? '►' : '▼'}</span>
                     </div>
                 </div>
@@ -314,11 +560,13 @@ function getNoteCardHtml(n, i) {
 
     const tileColor = n.color || '#ff8c00';
 
-    return `
-        <div class="note-card" style="border-left: 3px solid ${tileColor}; background: rgba(0,0,0,0.15);">
+    const noteCardEl = document.createElement('div');
+    noteCardEl.className = 'note-card';
+    noteCardEl.style.cssText = `border-left: 3px solid ${tileColor}; background: rgba(0,0,0,0.15);`;
+    noteCardEl.innerHTML = `
             <div class="card-header">
                 <div class="note-info" data-note-action="toggle-view" data-index="${i}">
-                    <span class="note-title" style="font-weight:bold; color:${tileColor};">${n.pinned ? '📌 ' : ''}${n.title || 'Unbenannte Notiz'}</span>
+                    <span class="note-title" style="font-weight:bold; color:${tileColor}; cursor:pointer;" data-note-copy-idx="${i}">${n.pinned ? '📌 ' : ''}${n.icon ? '<span class="note-card-icon">' + n.icon + '</span> ' : ''}${n.title || 'Unbenannte Notiz'}</span>
                 </div>
                 <div class="card-actions">
                     <button class="btn-icon" data-note-action="toggle-view" data-index="${i}" title="Vorschau">👁</button>
@@ -330,6 +578,88 @@ function getNoteCardHtml(n, i) {
                 <div style="white-space: pre-wrap;">${n.text || ''}</div>
                 ${todoHtml}
             </div>
+    `;
+    return noteCardEl.outerHTML;
+}
+
+function renderBookmarks() {
+    const bList = document.getElementById('bookmarksList');
+    if (!bList) return;
+
+    const groups = {};
+    const unassigned = [];
+
+    bookmarks.forEach((b, i) => {
+        if (b.group && b.group.trim() !== "") {
+            if (!groups[b.group]) groups[b.group] = [];
+            groups[b.group].push({ item: b, index: i });
+        } else {
+            unassigned.push({ item: b, index: i });
+        }
+    });
+
+    let html = "";
+    sortGroupNames(Object.keys(groups), bookmarkGroupOrder).forEach(gName => {
+        const isCollapsed = (gName in collapsedBookmarkGroups) ? collapsedBookmarkGroups[gName] : true;
+        const meta = bookmarkGroupMetadata[gName] || { color: '#ff8c00', icon: '🔖' };
+        let totalCount = groups[gName].length;
+
+        html += `
+            <div class="group-container" draggable="true" data-groupname="${gName}" style="border-top: 2px solid ${meta.color}">
+                <div class="group-header" data-bookmarkgroup="${gName}" style="color: ${meta.color};">
+                    <div class="group-title-wrapper">
+                        <span class="drag-handle" title="Verschieben">⠿</span>
+                        <span>${meta.icon} ${gName}</span>
+                    </div>
+                    <div class="group-right-wrapper">
+                        <span class="badge">${totalCount}</span>
+                        <button class="group-edit-btn" data-bookmarkgroupedit="${gName}" title="Gruppe bearbeiten">✎</button>
+                        <span style="font-size:10px; padding-left:4px;">${isCollapsed ? '►' : '▼'}</span>
+                    </div>
+                </div>
+                <div class="group-content" style="display: ${isCollapsed ? 'none' : 'flex'};">
+                    ${groups[gName].map(bObj => getBookmarkCardHtml(bObj.item, bObj.index)).join('')}
+                </div>
+            </div>
+        `;
+    });
+
+    if (unassigned.length > 0) {
+        html += unassigned.map(bObj => getBookmarkCardHtml(bObj.item, bObj.index)).join('');
+    } else if (html === "") {
+        html = '<p style="font-size:12px; opacity:0.5; margin:0;">Keine Lesezeichen vorhanden.</p>';
+    }
+
+    bList.innerHTML = html;
+}
+
+function faviconUrl(pageUrl) {
+    try {
+        const u = new URL(chrome.runtime.getURL('/_favicon/'));
+        u.searchParams.set('pageUrl', pageUrl);
+        u.searchParams.set('size', '32');
+        return u.toString();
+    } catch (e) {
+        return '';
+    }
+}
+
+function getBookmarkCardHtml(b, i) {
+    const favicon = b.url ? faviconUrl(b.url) : '';
+    return `
+        <div class="bookmark-card" style="border-left: 3px solid ${b.color || '#ff8c00'}">
+            <div class="card-header">
+                <div class="prompt-info" data-bookmark-action="open" data-index="${i}" title="In neuem Tab öffnen">
+                    <span class="bookmark-favicon-wrap" style="display:inline-flex; width:16px; height:16px; align-items:center; justify-content:center; flex-shrink:0;">${favicon ? `<img class="bookmark-favicon" src="${favicon}" data-fallback="🔖" style="width:14px; height:14px; object-fit:contain;">` : '🔖'}</span>
+                    <span class="prompt-title">${b.title || 'Unbenanntes Lesezeichen'}</span>
+                </div>
+                <div class="card-actions">
+                    <button class="btn-icon" data-bookmark-action="toggle" data-index="${i}" title="Vorschau">👁</button>
+                    <button class="btn-icon" data-bookmark-action="edit" data-index="${i}" title="Bearbeiten">✎</button>
+                    <button class="btn-icon" data-bookmark-action="delete" data-index="${i}" title="Löschen">✕</button>
+                </div>
+            </div>
+            <div id="bookmark-content-${i}" class="content-box">${b.url || ''}</div>
         </div>
     `;
 }
@@ -345,22 +675,44 @@ function renderMakros() {
 
     mList.innerHTML = makros.map((m, i) => {
         const stepsCount = m.steps ? m.steps.length : 0;
+        const stepIcon = (s) => ({ click:'🖱', type:'⌨', wait:'⏱', waitForReload:'🔄', navigate:'🌐', scroll:'🔃', keypress:'⌨', select:'☰', doubleclick:'🖱🖱', rightclick:'🖱❯', hover:'↗' }[s.type] || '▸');
+        const stepDesc = (s) => {
+            if (s.type === 'click') return `Klick @ (${s._px},${s._py})`;
+            if (s.type === 'type') return `Text: "${(s.value||'').slice(0,28)}"`;
+            if (s.type === 'wait') return `Pause ${s.duration||1000}ms`;
+            if (s.type === 'waitForReload') return `Reload warten (max ${s.timeout||10000}ms)`;
+            if (s.type === 'navigate') return `→ ${(s.url||'').slice(0,35)}`;
+            if (s.type === 'scroll') return s.selector ? `Scroll zu ${s.selector}` : `Scroll (${s.x||0},${s.y||0})`;
+            if (s.type === 'keypress') return `Taste: ${(s.modifiers||[]).join('+')}${s.modifiers?.length?'+':''}${s.key}`;
+            if (s.type === 'select') return `Auswahl: ${s.selector} = "${s.value}"`;
+            if (s.type === 'doubleclick') return `Doppelklick: ${s.selector||`(${s._px},${s._py})`}`;
+            if (s.type === 'rightclick') return `Rechtsklick: ${s.selector||`(${s._px},${s._py})`}`;
+            if (s.type === 'hover') return `Hover: ${s.selector||`(${s._px},${s._py})`}`;
+            return s.type;
+        };
+        const stepsHtml = (m.steps || []).map((s, j) => `
+            <div class="makro-step-item" draggable="true" data-makro-idx="${i}" data-step-idx="${j}" title="Klicken zum Hervorheben auf Seite">
+                <span class="drag-handle">⠿</span>
+                <span>${stepIcon(s)}</span>
+                <span style="flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${stepDesc(s)}</span>
+            </div>
+        `).join('');
         return `
             <div class="makro-card" style="border-left: 3px solid ${m.color || '#ff8c00'}">
                 <div class="card-header">
                     <div class="makro-info" data-makro-action="run" data-index="${i}" title="Makro abspielen">
-                        <span style="color: #4caf50; font-size:14px;">▶</span>
+                        <span style="color: #4caf50; font-size:12px;">▶</span>
                         <span class="makro-title" style="font-weight:600;">${m.title || 'Unbenanntes Makro'}</span>
-                        <span style="font-size:10px; opacity:0.5;">(${stepsCount} Schritte)${(m.repeat && m.repeat > 1) ? ` <span style="color:#ff8c00;">${m.repeat}×</span>` : ''}</span>
+                        <span style="font-size:10px; opacity:0.5;">(${stepsCount} Schritte)${(m.repeat && m.repeat > 1) ? ` <span style="color:#ff8c00;">${m.repeat}×</span>` : ''}${m.domain ? ` <span title="Aufgenommen auf ${m.domain}">🌐</span>` : ''}${m.method === 1 ? ` <span style="color:#4caf50; font-weight:700; font-size:9px; background:rgba(76,175,80,0.15); padding:1px 4px; border-radius:3px;">M1</span>` : ''}</span>
                     </div>
                     <div class="card-actions">
                         <button class="btn-icon" data-makro-action="step" data-index="${i}" title="Einzelschritt-Wiedergabe">▶|</button>
-                        <button class="btn-icon" data-makro-action="toggle-json" data-index="${i}" title="JSON Code anzeigen">👁</button>
+                        <button class="btn-icon" data-makro-action="toggle-steps" data-index="${i}" title="Schritte anzeigen">👁</button>
                         <button class="btn-icon" data-makro-action="edit" data-index="${i}" title="Bearbeiten">✎</button>
                         <button class="btn-icon" data-makro-action="delete" data-index="${i}" title="Löschen">✕</button>
                     </div>
                 </div>
-                <div id="makro-content-${i}" class="content-box" style="font-family: monospace; font-size:11px; max-height:150px; overflow-y:auto;">${JSON.stringify(m.steps, null, 2)}</div>
+                <div id="makro-content-${i}" class="content-box" style="display:none; padding:4px;">${stepsHtml}</div>
             </div>
         `;
     }).join('');
@@ -391,7 +743,7 @@ function renderTrash() {
 }
 
 function renderRecentColors() {
-    ['recentColorsPrompt', 'recentColorsGroup', 'recentColorsNote', 'recentColorsMakro'].forEach(id => {
+    ['recentColorsPrompt', 'recentColorsGroup', 'recentColorsNote', 'recentColorsMakro', 'recentColorsBookmark'].forEach(id => {
         const container = document.getElementById(id);
         if (!container) return;
         container.innerHTML = recentColors.map(c => `
@@ -509,6 +861,34 @@ function insertTextIntoPage(text) {
 
 // Event-Handling für Makros
 document.getElementById('makrosList').addEventListener('click', (e) => {
+    // Step-Hervorhebung auf Seite (Klick auf eine Schritt-Zeile)
+    const stepItem = e.target.closest('.makro-step-item');
+    if (stepItem && !e.target.closest('[data-makro-action]') && !e.target.classList.contains('drag-handle')) {
+        const mi = parseInt(stepItem.dataset.makroIdx);
+        const si = parseInt(stepItem.dataset.stepIdx);
+        const step = makros[mi]?.steps?.[si];
+        if (step && step._px !== undefined) {
+            chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+                if (!tabs[0]) return;
+                chrome.scripting.executeScript({
+                    target: { tabId: tabs[0].id },
+                    func: (px, py) => {
+                        window.scrollTo({ top: py - window.innerHeight / 2, behavior: 'smooth' });
+                        const vx = px - window.scrollX, vy = py - window.scrollY;
+                        const el = document.elementFromPoint(vx, vy);
+                        if (!el) return;
+                        const orig = el.style.outline;
+                        el.style.outline = '3px solid #ff8c00';
+                        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                        setTimeout(() => { el.style.outline = orig; }, 1500);
+                    },
+                    args: [step._px, step._py]
+                });
+            });
+        }
+        return;
+    }
+
     const target = e.target.closest('[data-makro-action]');
     if (!target) return;
 
@@ -516,7 +896,7 @@ document.getElementById('makrosList').addEventListener('click', (e) => {
     const i = parseInt(target.dataset.index);
     const m = makros[i];
 
-    if (action === 'toggle-json') {
+    if (action === 'toggle-steps') {
         const el = document.getElementById(`makro-content-${i}`);
         if (el) el.style.display = el.style.display === 'block' ? 'none' : 'block';
     }
@@ -534,117 +914,104 @@ document.getElementById('makrosList').addEventListener('click', (e) => {
             document.getElementById('makroStepsInput').value = JSON.stringify(m.steps, null, 2);
             document.getElementById('makroColor').value = m.color || '#ff8c00';
             document.getElementById('makroRepeatInput').value = m.repeat || 1;
+            const sd = (m.speedDelay !== undefined) ? m.speedDelay : 700;
+            const speedActive = sd > 0;
+            document.getElementById('makroSpeedToggle').checked = speedActive;
+            document.getElementById('makroSpeedInput').value = speedActive ? sd : 700;
+            document.getElementById('makroSpeedRow').style.display = speedActive ? 'flex' : 'none';
+            document.getElementById('makroAskRepeatInput').checked = !!m.askRepeatBeforePlay;
+            document.getElementById('makroScrollToStartInput').checked = !!m.scrollToStart;
+            document.getElementById('makroScrollToEndInput').checked = !!m.scrollToEnd;
+            document.getElementById('makroLockScrollInput').checked = !!m.lockScroll;
+            const mMethod = m.method || 2;
+            document.getElementById('makroMethodInput').value = mMethod;
+            ['1','2','3','4'].forEach(n => document.getElementById('methodBtn' + n).classList.remove('active'));
+            document.getElementById('methodBtn' + mMethod).classList.add('active');
+            document.getElementById('makroRepeatDelayInput').value = m.repeatDelay || 0;
+            document.getElementById('makroWaitReloadInput').checked = !!m.waitReloadBetweenRepeats;
 
             document.getElementById('mainContainer').style.display = 'none';
             document.getElementById('makroInputGroup').style.display = 'flex';
             renderRecentColors();
+            // Zahlen-Markierungen automatisch auf der Seite anzeigen
+            chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+                if (!tabs[0]) return;
+                chrome.scripting.executeScript({ target: { tabId: tabs[0].id }, func: injectEditMarkersFunc, args: [m.steps] });
+                document.getElementById('showStepsOnPageBtn').style.display = 'none';
+                document.getElementById('applyPageEditsBtn').style.display = 'flex';
+                document.getElementById('cancelPageEditsBtn').style.display = 'flex';
+            });
         }
     }
     else if (action === 'run') {
         if (m && m.steps) {
             chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
                 if (!tabs[0]) return;
-                chrome.scripting.executeScript({
-                    target: { tabId: tabs[0].id },
-                    func: ({ stepsList, repeat }) => {
-                        const showClickIndicator = (x, y) => {
-                            const dot = document.createElement('div');
-                            dot.style.cssText = `position:fixed;left:${x}px;top:${y}px;width:24px;height:24px;border-radius:50%;background:rgba(255,140,0,0.6);border:2px solid #ff8c00;transform:translate(-50%,-50%) scale(0);animation:_mkRipple 0.55s ease forwards;pointer-events:none;z-index:2147483647;inset:auto;margin:0;`;
-                            const st = document.createElement('style');
-                            st.textContent = `@keyframes _mkRipple{0%{transform:translate(-50%,-50%) scale(0);opacity:1}100%{transform:translate(-50%,-50%) scale(2.8);opacity:0}}`;
-                            document.head.appendChild(st);
-                            try { dot.setAttribute('popover','manual'); document.documentElement.appendChild(dot); dot.showPopover(); }
-                            catch(e) { document.documentElement.appendChild(dot); }
-                            setTimeout(() => { dot.remove(); st.remove(); }, 600);
-                        };
-                        const executeAction = (step, attempt) => {
-                            if (step.type === 'click' && step._px !== undefined) {
-                                // Koordinaten als primäre Methode für Klicks
-                                window.scrollTo({ top: step._py - window.innerHeight / 2, behavior: 'instant' });
-                                const vx = step._px - window.scrollX;
-                                const vy = step._py - window.scrollY;
-                                let el = document.elementFromPoint(vx, vy);
-                                const originalEl = el;
-                                // Walk up max 5 levels to find a proper clickable ancestor
-                                let candidate = el;
-                                for (let d = 0; d < 5 && candidate && candidate !== document.body; d++) {
-                                    const tag = candidate.tagName.toLowerCase();
-                                    const role = (candidate.getAttribute && candidate.getAttribute('role')) || '';
-                                    if (['button','a','input','select','label'].includes(tag) ||
-                                        role === 'button' || role === 'link' || role === 'menuitem' || role === 'tab') {
-                                        el = candidate; break;
-                                    }
-                                    candidate = candidate.parentElement;
-                                }
-                                // Fall back to original element if no proper clickable found
-                                if (!el || el === document.body) el = originalEl;
-                                if (!el) {
-                                    if (attempt < 3) setTimeout(() => executeAction(step, attempt + 1), 300);
-                                    return;
-                                }
-                                el.focus();
-                                // Klick immer in die Mitte des gefundenen Elements
-                                const rect = el.getBoundingClientRect();
-                                const cx = rect.left + rect.width / 2;
-                                const cy = rect.top + rect.height / 2;
-                                // Indikator immer exakt auf der getroffenen Mitte zeigen
-                                showClickIndicator(cx, cy);
-                                el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, clientX: cx, clientY: cy }));
-                                el.dispatchEvent(new MouseEvent('mouseup',   { bubbles: true, cancelable: true, clientX: cx, clientY: cy }));
-                                el.dispatchEvent(new MouseEvent('click',     { bubbles: true, cancelable: true, clientX: cx, clientY: cy }));
-                            } else if (step.type === 'type') {
-                                // Selektor primär, Koordinaten als Fallback
-                                let el = null;
-                                try { el = document.querySelector(step.target); } catch (e) {}
-                                if (!el && step._px !== undefined) {
-                                    window.scrollTo({ top: step._py - window.innerHeight / 2, behavior: 'instant' });
-                                    el = document.elementFromPoint(step._px - window.scrollX, step._py - window.scrollY);
-                                }
-                                if (!el) {
-                                    if (attempt < 3) setTimeout(() => executeAction(step, attempt + 1), 300);
-                                    return;
-                                }
-                                el.focus();
-                                if (el.isContentEditable || el.tagName === 'DIV') {
-                                    document.execCommand('selectAll', false, null);
-                                    document.execCommand('insertText', false, step.value);
-                                    el.dispatchEvent(new Event('input', { bubbles: true }));
-                                } else {
-                                    const proto = el.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
-                                    const nativeSetter = Object.getOwnPropertyDescriptor(proto, 'value');
-                                    if (nativeSetter && nativeSetter.set) {
-                                        nativeSetter.set.call(el, step.value);
-                                    } else {
-                                        el.value = step.value;
-                                    }
-                                    el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: step.value }));
-                                    el.dispatchEvent(new Event('change', { bubbles: true }));
-                                }
-                            }
-                        };
-                        const stepDelay = 700;
-                        const pauseDelay = 900;
-                        for (let r = 0; r < repeat; r++) {
-                            const runOffset = r * (stepsList.length * stepDelay + pauseDelay);
-                            stepsList.forEach((step, i) => {
-                                setTimeout(() => executeAction(step, 0), runOffset + i * stepDelay);
-                            });
-                        }
-                    },
-                    args: [{ stepsList: m.steps, repeat: m.repeat || 1 }]
-                });
+                if (m.domain) {
+                    let currentDomain = '';
+                    try { currentDomain = new URL(tabs[0].url).hostname; } catch(e) {}
+                    if (currentDomain && m.domain !== currentDomain) {
+                        const ok = confirm(`⚠️ Dieses Makro wurde auf „${m.domain}" aufgenommen.\nAktueller Tab: „${currentDomain}".\nTrotzdem ausführen?`);
+                        if (!ok) return;
+                    }
+                }
+                if (m.askRepeatBeforePlay) {
+                    document.getElementById('makroRepeatAskInput').value = m.repeat || 1;
+                    document.getElementById('mainContainer').style.display = 'none';
+                    document.getElementById('makroRepeatAskDialog').style.display = 'block';
+                    window._pendingPlayTabId = tabs[0].id;
+                    window._pendingPlayMakro = m;
+                    return;
+                }
+                playMakroFull(tabs[0].id, m, m.steps);
             });
         }
     }
+});
+
+// Drag & Drop für Schritt-Reihenfolge in Makro-Karte
+let stepDragSrc = null;
+document.getElementById('makrosList').addEventListener('dragstart', (e) => {
+    const item = e.target.closest('.makro-step-item');
+    if (!item) return;
+    stepDragSrc = { mi: parseInt(item.dataset.makroIdx), si: parseInt(item.dataset.stepIdx) };
+    e.dataTransfer.effectAllowed = 'move';
+    setTimeout(() => { item.style.opacity = '0.5'; }, 0);
+});
+document.getElementById('makrosList').addEventListener('dragend', (e) => {
+    const item = e.target.closest('.makro-step-item');
+    if (item) item.style.opacity = '';
+    stepDragSrc = null;
+});
+document.getElementById('makrosList').addEventListener('dragover', (e) => {
+    const item = e.target.closest('.makro-step-item');
+    if (item && stepDragSrc) { e.preventDefault(); item.style.outline = '2px dashed var(--accent, #ff8c00)'; }
+});
+document.getElementById('makrosList').addEventListener('dragleave', (e) => {
+    const item = e.target.closest('.makro-step-item');
+    if (item) item.style.outline = '';
+});
+document.getElementById('makrosList').addEventListener('drop', (e) => {
+    const item = e.target.closest('.makro-step-item');
+    if (!item || !stepDragSrc) return;
+    item.style.outline = '';
+    const mi = parseInt(item.dataset.makroIdx);
+    const si = parseInt(item.dataset.stepIdx);
+    if (mi !== stepDragSrc.mi || si === stepDragSrc.si) return;
+    const steps = makros[mi].steps;
+    const moved = steps.splice(stepDragSrc.si, 1)[0];
+    steps.splice(si, 0, moved);
+    chrome.storage.sync.set({ makros }, renderMakros);
 });
 
 // Recorder-Injektion (wird bei Start und nach jedem Reload/Navigation neu aufgerufen)
 function injectRecorder(tabId) {
     chrome.scripting.executeScript({
         target: { tabId },
-        func: () => {
+        func: (method) => {
             if (window._makroRecordingActive) return;
             window._makroRecordingActive = true;
+            window._makroRecordingMethod = method;
 
             const style = document.createElement('style');
             style.id = '_makroStyle';
@@ -719,7 +1086,144 @@ function injectRecorder(tabId) {
             document.addEventListener('mouseout', window._makroMouseOutHandler, { capture: true });
             document.addEventListener('click', window._makroClickHandler, { capture: true });
             document.addEventListener('change', window._makroChangeHandler, { capture: true });
-        }
+
+            if (method === 3 || method === 1) {
+                // M3/M1: click als {selector, _px, _py} speichern (statt {target, _px, _py})
+                // Überschreibe den Standard-click-Handler für M3 um selector-Feld korrekt zu setzen
+                if (method === 3) {
+                    document.removeEventListener('click', window._makroClickHandler, { capture: true });
+                    window._makroClickHandler = (e) => {
+                        try {
+                            let target = e.target;
+                            let candidate = e.target;
+                            for (let d = 0; d < 5 && candidate && candidate !== document.body; d++) {
+                                const tag = candidate.tagName.toLowerCase();
+                                const role = (candidate.getAttribute && candidate.getAttribute('role')) || '';
+                                if (['button','a','input','select','label'].includes(tag) ||
+                                    role === 'button' || role === 'link' || role === 'menuitem' || role === 'tab') {
+                                    target = candidate; break;
+                                }
+                                candidate = candidate.parentElement;
+                            }
+                            const path = getPath(target);
+                            const rect = target.getBoundingClientRect();
+                            const px = Math.round(rect.left + rect.width / 2 + window.scrollX);
+                            const py = Math.round(rect.top + rect.height / 2 + window.scrollY);
+                            chrome.runtime.sendMessage({ _makroRecStep: { type: 'click', selector: path, _px: px, _py: py } });
+                            e.target.classList.remove('_makro-hover');
+                            target.classList.add('_makro-recorded');
+                            setTimeout(() => target.classList.remove('_makro-recorded'), 800);
+                        } catch (err) {}
+                    };
+                    document.addEventListener('click', window._makroClickHandler, { capture: true });
+                }
+            }
+            if (method === 1 || method === 3) {
+                // M1: dblclick
+                window._makroDblClickHandler = (e) => {
+                    try {
+                        let t = e.target;
+                        const path = getPath(t);
+                        const rect = t.getBoundingClientRect();
+                        const px = Math.round(rect.left + rect.width / 2 + window.scrollX);
+                        const py = Math.round(rect.top + rect.height / 2 + window.scrollY);
+                        chrome.runtime.sendMessage({ _makroRecStep: { type: 'doubleclick', selector: path, _px: px, _py: py } });
+                    } catch(err) {}
+                };
+                // M1: rightclick
+                window._makroContextHandler = (e) => {
+                    try {
+                        e.preventDefault();
+                        const path = getPath(e.target);
+                        const rect = e.target.getBoundingClientRect();
+                        const px = Math.round(rect.left + rect.width / 2 + window.scrollX);
+                        const py = Math.round(rect.top + rect.height / 2 + window.scrollY);
+                        chrome.runtime.sendMessage({ _makroRecStep: { type: 'rightclick', selector: path, _px: px, _py: py } });
+                    } catch(err) {}
+                };
+                // M1: keydown (only special/combo keys)
+                window._makroKeyHandler = (e) => {
+                    try {
+                        const special = ['Enter','Tab','Escape','Backspace','Delete','ArrowUp','ArrowDown','ArrowLeft','ArrowRight'];
+                        const isCombo = e.ctrlKey || e.altKey || e.metaKey;
+                        const isFKey = e.key && e.key.match(/^F\d+$/);
+                        if (!special.includes(e.key) && !isCombo && !isFKey) return;
+                        const modifiers = [];
+                        if (e.ctrlKey) modifiers.push('ctrl');
+                        if (e.shiftKey) modifiers.push('shift');
+                        if (e.altKey) modifiers.push('alt');
+                        chrome.runtime.sendMessage({ _makroRecStep: { type: 'keypress', key: e.key, modifiers } });
+                    } catch(err) {}
+                };
+                // M1: scroll (debounced)
+                let _scrollTimer = null;
+                let _lastScrollX = window.scrollX, _lastScrollY = window.scrollY;
+                window._makroScrollHandler = () => {
+                    clearTimeout(_scrollTimer);
+                    _scrollTimer = setTimeout(() => {
+                        const dx = Math.abs(window.scrollX - _lastScrollX);
+                        const dy = Math.abs(window.scrollY - _lastScrollY);
+                        if (dx > 50 || dy > 50) {
+                            chrome.runtime.sendMessage({ _makroRecStep: { type: 'scroll', x: Math.round(window.scrollX), y: Math.round(window.scrollY) } });
+                            _lastScrollX = window.scrollX; _lastScrollY = window.scrollY;
+                        }
+                    }, 500);
+                };
+                // M1: change on <select> → recorded as 'select' type (override change handler's 'type')
+                // The existing _makroChangeHandler already covers this but we want 'select' type for select elements
+                // So we add a separate handler that fires first for select elements
+                window._makroSelectHandler = (e) => {
+                    if (e.target.tagName !== 'SELECT') return;
+                    try {
+                        const path = getPath(e.target);
+                        chrome.runtime.sendMessage({ _makroRecStep: { type: 'select', selector: path, value: e.target.value } });
+                        e.target.classList.add('_makro-recorded');
+                        setTimeout(() => e.target.classList.remove('_makro-recorded'), 800);
+                        e.stopPropagation(); // prevent generic change handler from also firing
+                    } catch(err) {}
+                };
+                document.addEventListener('dblclick', window._makroDblClickHandler, { capture: true });
+                document.addEventListener('contextmenu', window._makroContextHandler, { capture: true });
+                document.addEventListener('keydown', window._makroKeyHandler, { capture: true });
+                document.addEventListener('scroll', window._makroScrollHandler, { capture: true, passive: true });
+                document.addEventListener('change', window._makroSelectHandler, { capture: true });
+            }
+            if (method === 4) {
+                // M4: Mausbewegungen 1:1 aufzeichnen (throttled 40ms)
+                let _m4LastSend = 0;
+                let _m4Points = [];
+                let _m4StartT = Date.now();
+                window._makroMoveHandler = (e) => {
+                    const now = Date.now();
+                    if (now - _m4LastSend < 40) return;
+                    _m4LastSend = now;
+                    const px = Math.round(e.clientX + window.scrollX);
+                    const py = Math.round(e.clientY + window.scrollY);
+                    _m4Points.push({ x: px, y: py, t: now - _m4StartT });
+                };
+                // Bei Klick: aktuelle Punkte als mousemovepath-Schritt senden, dann click-Schritt
+                document.removeEventListener('click', window._makroClickHandler, { capture: true });
+                window._makroClickHandler = (e) => {
+                    try {
+                        const px = Math.round(e.clientX + window.scrollX);
+                        const py = Math.round(e.clientY + window.scrollY);
+                        const now = Date.now();
+                        _m4Points.push({ x: px, y: py, t: now - _m4StartT });
+                        if (_m4Points.length > 1) {
+                            chrome.runtime.sendMessage({ _makroRecStep: { type: 'mousemovepath', points: _m4Points.slice() } });
+                        }
+                        _m4Points = [];
+                        _m4StartT = Date.now();
+                        chrome.runtime.sendMessage({ _makroRecStep: { type: 'click', selector: '', _px: px, _py: py } });
+                        e.target.classList.add('_makro-recorded');
+                        setTimeout(() => e.target.classList.remove('_makro-recorded'), 800);
+                    } catch(err) {}
+                };
+                document.addEventListener('mousemove', window._makroMoveHandler, { capture: true, passive: true });
+                document.addEventListener('click', window._makroClickHandler, { capture: true });
+            }
+        },
+        args: [recordingMethod]
     });
 }
 
@@ -728,49 +1232,142 @@ chrome.runtime.onMessage.addListener((msg) => {
     if (msg._makroRecStep && isRecording) {
         recordingBuffer.push(msg._makroRecStep);
     }
+    if (msg._makroStepPosUpdate) {
+        // Nur die Felder des aktuell angezeigten Schritts aktualisieren
+        const upd = msg._makroStepPosUpdate;
+        if (upd.idx === undefined || (stepPlaybackState && upd.idx === stepPlaybackState.stepIndex)) {
+            document.getElementById('stepEditPx').value = upd.px;
+            document.getElementById('stepEditPy').value = upd.py;
+        }
+    }
 });
 
 // Nach Reload/Navigation Recorder neu injizieren (Puffer bleibt erhalten)
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
-    if (isRecording && tabId === recordingTabId && changeInfo.status === 'complete') {
-        injectRecorder(tabId);
+    if (isRecording && tabId === recordingTabId) {
+        if (changeInfo.status === 'loading' && changeInfo.url) {
+            // Navigation erkannt → waitForReload-Schritt einfügen
+            recordingBuffer.push({ type: 'waitForReload', timeout: 10000 });
+        }
+        if (changeInfo.status === 'complete') {
+            injectRecorder(tabId);
+        }
     }
+    // Wiedergabe: auf vollständiges Neuladen zwischen Wiederholungen warten
+    if (runningMakroState && tabId === runningMakroState.tabId && changeInfo.status === 'complete') {
+        runningMakroState.reloadSeen = true;
+        if (runningMakroState.awaitingReload) {
+            runningMakroState.awaitingReload = false;
+            if (runningMakroState.fallbackTimer) { clearTimeout(runningMakroState.fallbackTimer); runningMakroState.fallbackTimer = null; }
+            setTimeout(runMakroIteration, runningMakroState.repeatDelay);
+        }
+    }
+});
+
+// Method-Toggle im Editor
+['1','2','3','4'].forEach(n => {
+    document.getElementById('methodBtn' + n).addEventListener('click', () => {
+        ['1','2','3','4'].forEach(m => document.getElementById('methodBtn' + m).classList.remove('active'));
+        document.getElementById('methodBtn' + n).classList.add('active');
+        document.getElementById('makroMethodInput').value = n;
+    });
+});
+
+// Aufnahme-Dialog Method-Toggle
+['1','2','3','4'].forEach(n => {
+    document.getElementById('dialogMethodBtn' + n).addEventListener('click', () => {
+        ['1','2','3','4'].forEach(m => document.getElementById('dialogMethodBtn' + m).classList.remove('active'));
+        document.getElementById('dialogMethodBtn' + n).classList.add('active');
+        recordingMethod = parseInt(n);
+    });
+});
+
+document.getElementById('cancelRecordDialogBtn').addEventListener('click', () => {
+    document.getElementById('recordMethodDialog').style.display = 'none';
+    document.getElementById('mainContainer').style.display = 'block';
+});
+
+document.getElementById('startRecordBtn').addEventListener('click', () => {
+    document.getElementById('recordMethodDialog').style.display = 'none';
+    document.getElementById('mainContainer').style.display = 'block';
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        if (!tabs[0]) { alert("Kein aktiver Tab für eine Aufnahme gefunden."); return; }
+        isRecording = true;
+        const btn = document.getElementById('recordMakroBtn');
+        btn.innerHTML = '<span class="record-dot"></span> ⏹ Stoppen';
+        btn.classList.add('recording');
+        recordingTabId = tabs[0].id;
+        recordingBuffer = [];
+        document.getElementById('recordingWaitBar').style.display = 'flex';
+        injectRecorder(recordingTabId);
+    });
+});
+
+// Wartezeit während Aufnahme einfügen
+document.getElementById('insertWaitBtn').addEventListener('click', () => {
+    if (!isRecording) return;
+    const dur = parseInt(document.getElementById('insertWaitDuration').value) || 1000;
+    recordingBuffer.push({ type: 'wait', duration: dur });
+});
+document.getElementById('insertReloadBtn').addEventListener('click', () => {
+    if (!isRecording) return;
+    recordingBuffer.push({ type: 'waitForReload', timeout: 10000 });
+});
+
+// Schritt im Editor einfügen
+document.getElementById('addWaitStepBtn').addEventListener('click', () => {
+    const dur = parseInt(document.getElementById('addWaitStepDuration').value) || 1000;
+    const ta = document.getElementById('makroStepsInput');
+    let steps = [];
+    try { steps = JSON.parse(ta.value || '[]'); } catch(e) { steps = []; }
+    steps.push({ type: 'wait', duration: dur });
+    ta.value = JSON.stringify(steps, null, 2);
+});
+document.getElementById('addReloadStepBtn').addEventListener('click', () => {
+    const ta = document.getElementById('makroStepsInput');
+    let steps = [];
+    try { steps = JSON.parse(ta.value || '[]'); } catch(e) { steps = []; }
+    steps.push({ type: 'waitForReload', timeout: 10000 });
+    ta.value = JSON.stringify(steps, null, 2);
 });
 
 // Live Aufnahme-Logik für Makros
 document.getElementById('recordMakroBtn').addEventListener('click', () => {
+    if (!isRecording) {
+        // Zeige Methoden-Dialog statt sofort zu starten
+        document.getElementById('mainContainer').style.display = 'none';
+        document.getElementById('recordMethodDialog').style.display = 'flex';
+        return;
+    }
+    // Stoppen
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-        if (!tabs[0]) {
-            alert("Kein aktiver Tab für eine Aufnahme gefunden.");
-            return;
-        }
-
-        isRecording = !isRecording;
+        if (!tabs[0]) return;
+        isRecording = false;
         const btn = document.getElementById('recordMakroBtn');
+        btn.innerHTML = '<span class="record-dot"></span> REC';
+        btn.classList.remove('recording');
+        document.getElementById('recordingWaitBar').style.display = 'none';
 
-        if (isRecording) {
-            btn.innerHTML = '<span class="record-dot"></span> ⏹ Stoppen';
-            btn.classList.add('recording');
-            recordingTabId = tabs[0].id;
-            recordingBuffer = [];
-            injectRecorder(recordingTabId);
-        } else {
-            btn.innerHTML = '<span class="record-dot"></span> Aufnahme';
-            btn.classList.remove('recording');
-
-            chrome.scripting.executeScript({
+        chrome.scripting.executeScript({
                 target: { tabId: tabs[0].id },
                 func: () => {
                     if (window._makroClickHandler) document.removeEventListener('click', window._makroClickHandler, { capture: true });
                     if (window._makroChangeHandler) document.removeEventListener('change', window._makroChangeHandler, { capture: true });
                     if (window._makroHoverHandler) document.removeEventListener('mouseover', window._makroHoverHandler, { capture: true });
                     if (window._makroMouseOutHandler) document.removeEventListener('mouseout', window._makroMouseOutHandler, { capture: true });
+                    if (window._makroDblClickHandler) document.removeEventListener('dblclick', window._makroDblClickHandler, { capture: true });
+                    if (window._makroContextHandler) document.removeEventListener('contextmenu', window._makroContextHandler, { capture: true });
+                    if (window._makroKeyHandler) document.removeEventListener('keydown', window._makroKeyHandler, { capture: true });
+                    if (window._makroScrollHandler) document.removeEventListener('scroll', window._makroScrollHandler, { capture: true });
+                    if (window._makroSelectHandler) document.removeEventListener('change', window._makroSelectHandler, { capture: true });
+                    if (window._makroMoveHandler) document.removeEventListener('mousemove', window._makroMoveHandler, { capture: true });
 
-                    delete window._makroClickHandler;
-                    delete window._makroChangeHandler;
-                    delete window._makroHoverHandler;
-                    delete window._makroMouseOutHandler;
-                    delete window._makroRecordingActive;
+                    delete window._makroClickHandler; delete window._makroChangeHandler;
+                    delete window._makroHoverHandler; delete window._makroMouseOutHandler;
+                    delete window._makroDblClickHandler; delete window._makroContextHandler;
+                    delete window._makroKeyHandler; delete window._makroScrollHandler;
+                    delete window._makroSelectHandler; delete window._makroMoveHandler;
+                    delete window._makroRecordingActive; delete window._makroRecordingMethod;
 
                     const s = document.getElementById('_makroStyle');
                     if (s) s.remove();
@@ -785,10 +1382,16 @@ document.getElementById('recordMakroBtn').addEventListener('click', () => {
                 if (recordedSteps.length > 0) {
                     const mName = prompt("Makro-Aufnahme erfolgreich! Name eingeben:", `Makro vom ${new Date().toLocaleTimeString()}`);
                     if (mName !== null) {
+                        let recDomain = '';
+                        try { recDomain = tabs[0] ? new URL(tabs[0].url).hostname : ''; } catch(e) {}
                         const newMakro = {
                             title: mName.trim() || "Aufgenommenes Makro",
                             steps: recordedSteps,
-                            color: "#ff8c00"
+                            color: "#ff8c00",
+                            speedDelay: 700,
+                            scrollToEnd: true,
+                            domain: recDomain,
+                            method: recordingMethod
                         };
                         makros.push(newMakro);
                         chrome.storage.sync.set({ makros }, renderMakros);
@@ -797,7 +1400,6 @@ document.getElementById('recordMakroBtn').addEventListener('click', () => {
                     alert("Es wurden keine Klicks oder Eingaben während der Aufnahme registriert.");
                 }
             });
-        }
     });
 });
 
@@ -808,21 +1410,68 @@ function closeMakroEditMode() {
     document.getElementById('makroTitleInput').value = '';
     document.getElementById('makroStepsInput').value = '';
     document.getElementById('makroRepeatInput').value = '1';
+    document.getElementById('makroRepeatDelayInput').value = '0';
+    document.getElementById('makroWaitReloadInput').checked = false;
+    document.getElementById('makroSpeedToggle').checked = true;
+    document.getElementById('makroSpeedInput').value = '700';
+    document.getElementById('makroSpeedRow').style.display = 'flex';
+    document.getElementById('makroAskRepeatInput').checked = false;
+    document.getElementById('makroScrollToStartInput').checked = false;
+    document.getElementById('makroScrollToEndInput').checked = true;
+    document.getElementById('makroLockScrollInput').checked = false;
     document.getElementById('showStepsOnPageBtn').style.display = 'flex';
     document.getElementById('applyPageEditsBtn').style.display = 'none';
     document.getElementById('cancelPageEditsBtn').style.display = 'none';
+    document.getElementById('makroMethodInput').value = '2';
+    document.getElementById('methodBtn2').classList.add('active');
+    document.getElementById('methodBtn1').classList.remove('active');
+    // Markierungen von der Seite entfernen
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        if (!tabs[0]) return;
+        chrome.scripting.executeScript({
+            target: { tabId: tabs[0].id },
+            func: () => {
+                sessionStorage.removeItem('_makroEditSteps');
+                if (window._makroMarkerScrollHandler) { window.removeEventListener('scroll', window._makroMarkerScrollHandler); delete window._makroMarkerScrollHandler; }
+                document.querySelectorAll('#_makroMarkerContainer').forEach(c => { if(c._makroMutObs) c._makroMutObs.disconnect(); if(c._makroDialogObs) c._makroDialogObs.disconnect(); try{c.hidePopover();}catch(e){} });
+                document.querySelectorAll('._makroEditMarker, #_makroEditPanel, #_makroEditStyle, #_makroMarkerContainer').forEach(el => el.remove());
+            }
+        });
+    });
 }
 
 document.getElementById('cancelMakroBtn').addEventListener('click', closeMakroEditMode);
 
+document.getElementById('makroSpeedToggle').addEventListener('change', (e) => {
+    document.getElementById('makroSpeedRow').style.display = e.target.checked ? 'flex' : 'none';
+});
+
 function openStepPlayback(i) {
     const m = makros[i];
     if (!m || !m.steps || m.steps.length === 0) return;
-    stepPlaybackState = { makro: m, stepIndex: 0, repeat: m.repeat || 1, currentRun: 0 };
-    document.getElementById('stepPlaybackTitle').textContent = m.title || 'Makro';
-    document.getElementById('mainContainer').style.display = 'none';
-    document.getElementById('stepPlaybackPanel').style.display = 'flex';
-    renderStepPanel();
+    const doOpen = () => {
+        stepPlaybackState = { makro: m, stepIndex: 0, repeat: m.repeat || 1, currentRun: 0 };
+        document.getElementById('stepPlaybackTitle').textContent = m.title || 'Makro';
+        document.getElementById('mainContainer').style.display = 'none';
+        document.getElementById('stepPlaybackPanel').style.display = 'flex';
+        renderStepPanel();
+        showStepMarkers();
+    };
+    if (m.domain) {
+        chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+            if (tabs[0] && m.domain) {
+                let currentDomain = '';
+                try { currentDomain = new URL(tabs[0].url).hostname; } catch(e) {}
+                if (currentDomain && m.domain !== currentDomain) {
+                    const ok = confirm(`⚠️ Dieses Makro wurde auf „${m.domain}" aufgenommen.\nAktueller Tab: „${currentDomain}".\nTrotzdem ausführen?`);
+                    if (!ok) return;
+                }
+            }
+            doOpen();
+        });
+    } else {
+        doOpen();
+    }
 }
 
 function renderStepPanel() {
@@ -832,44 +1481,133 @@ function renderStepPanel() {
     const step = makro.steps[stepIndex];
     const runLabel = repeat > 1 ? ` (Durchlauf ${currentRun + 1}/${repeat})` : '';
     document.getElementById('stepPlaybackCounter').textContent = `Schritt ${stepIndex + 1} / ${totalSteps}${runLabel}`;
-    const desc = step.type === 'click'
-        ? `🖱 Klick\nZiel: ${step.target}\nPosition: x=${step._px}, y=${step._py}`
-        : `⌨ Text eingeben\nZiel: ${step.target}\nWert: "${step.value}"`;
+
+    const typeLabels = { click:'🖱 Klick', type:'⌨ Text eingeben', wait:'⏱ Pause', waitForReload:'🔄 Warten auf Reload', navigate:'🌐 Navigation', scroll:'🔃 Scrollen', keypress:'⌨ Tastendruck', select:'☰ Dropdown-Auswahl', doubleclick:'🖱🖱 Doppelklick', rightclick:'🖱❯ Rechtsklick', hover:'↗ Hover' };
+    let desc = typeLabels[step.type] || step.type;
+    if (step.type === 'click') desc += `\nZiel: ${step.target||''}\nPosition: x=${step._px}, y=${step._py}`;
+    else if (step.type === 'type') desc += `\nZiel: ${step.target||''}\nWert: "${step.value||''}"`;
+    else if (step.type === 'wait') desc += `\nDauer: ${step.duration||1000}ms`;
+    else if (step.type === 'waitForReload') desc += `\nMax. Wartezeit: ${step.timeout||10000}ms`;
+    else if (step.type === 'navigate') desc += `\nURL: ${step.url||''}`;
+    else if (step.type === 'scroll') desc += step.selector ? `\nSelektor: ${step.selector}` : `\nPosition: x=${step.x||0}, y=${step.y||0}`;
+    else if (step.type === 'keypress') desc += `\nTaste: ${(step.modifiers||[]).join('+')}${step.modifiers?.length?'+':''}${step.key||''}`;
+    else if (step.type === 'select') desc += `\nSelektor: ${step.selector||''}\nWert: ${step.value||''}`;
+    else if (['doubleclick','rightclick','hover'].includes(step.type)) desc += step.selector ? `\nSelektor: ${step.selector}` : `\nPosition: x=${step._px}, y=${step._py}`;
     document.getElementById('stepPlaybackDesc').textContent = desc;
-    // Edit fields
+
+    // Hide all edit panels
+    ['stepEditClick','stepEditType','stepEditWait','stepEditWaitReload','stepEditNavigate','stepEditScroll','stepEditKeypress','stepEditSelect','stepEditSelectorOnly'].forEach(id => {
+        document.getElementById(id).style.display = 'none';
+    });
+    document.getElementById('showStepOnPageBtn').style.display = 'none';
+
     if (step.type === 'click') {
         document.getElementById('stepEditClick').style.display = 'flex';
-        document.getElementById('stepEditType').style.display = 'none';
         document.getElementById('stepEditPx').value = step._px || '';
         document.getElementById('stepEditPy').value = step._py || '';
-    } else {
-        document.getElementById('stepEditClick').style.display = 'none';
+    } else if (step.type === 'type') {
         document.getElementById('stepEditType').style.display = 'flex';
         document.getElementById('stepEditValue').value = step.value || '';
+    } else if (step.type === 'wait') {
+        document.getElementById('stepEditWait').style.display = 'flex';
+        document.getElementById('stepEditWaitDuration').value = step.duration || 1000;
+    } else if (step.type === 'waitForReload') {
+        document.getElementById('stepEditWaitReload').style.display = 'flex';
+        document.getElementById('stepEditReloadTimeout').value = step.timeout || 10000;
+    } else if (step.type === 'navigate') {
+        document.getElementById('stepEditNavigate').style.display = 'flex';
+        document.getElementById('stepEditUrl').value = step.url || '';
+    } else if (step.type === 'scroll') {
+        document.getElementById('stepEditScroll').style.display = 'flex';
+        document.getElementById('stepEditScrollSelector').value = step.selector || '';
+        document.getElementById('stepEditScrollX').value = step.x || '';
+        document.getElementById('stepEditScrollY').value = step.y || '';
+    } else if (step.type === 'keypress') {
+        document.getElementById('stepEditKeypress').style.display = 'flex';
+        document.getElementById('stepEditKey').value = step.key || '';
+        document.getElementById('stepEditModCtrl').checked = (step.modifiers||[]).includes('ctrl');
+        document.getElementById('stepEditModShift').checked = (step.modifiers||[]).includes('shift');
+        document.getElementById('stepEditModAlt').checked = (step.modifiers||[]).includes('alt');
+    } else if (step.type === 'select') {
+        document.getElementById('stepEditSelect').style.display = 'flex';
+        document.getElementById('stepEditSelectSelector').value = step.selector || '';
+        document.getElementById('stepEditSelectValue').value = step.value || '';
+    } else if (['doubleclick','rightclick','hover'].includes(step.type)) {
+        document.getElementById('stepEditSelectorOnly').style.display = 'flex';
+        document.getElementById('stepEditSelector').value = step.selector || '';
     }
-    const saveBtn = document.getElementById('stepEditSaveBtn');
-    saveBtn.textContent = '💾 Schritt speichern';
+    document.getElementById('stepEditSaveBtn').textContent = '💾 Schritt speichern';
+}
+
+// Zeigt alle nummerierten Markierungen für das aktuelle Makro auf der Seite an
+function showStepMarkers() {
+    if (!stepPlaybackState) return;
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        if (!tabs[0]) return;
+        chrome.scripting.executeScript({ target: { tabId: tabs[0].id }, func: injectEditMarkersFunc, args: [stepPlaybackState.makro.steps] });
+    });
+}
+
+// Liest verschobene Marker-Positionen von der Seite und übernimmt sie in die Schritte
+function syncMarkerPositions(cb) {
+    if (!stepPlaybackState) { if (cb) cb(); return; }
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        if (!tabs[0]) { if (cb) cb(); return; }
+        chrome.scripting.executeScript({
+            target: { tabId: tabs[0].id },
+            func: () => JSON.parse(sessionStorage.getItem('_makroEditSteps') || 'null')
+        }, (results) => {
+            const updated = results?.[0]?.result;
+            if (updated && stepPlaybackState) {
+                updated.forEach((s, idx) => {
+                    const target = stepPlaybackState.makro.steps[idx];
+                    if (s && target && s._px !== undefined) {
+                        target._px = s._px;
+                        target._py = s._py;
+                    }
+                });
+                chrome.storage.sync.set({ makros });
+            }
+            if (cb) cb();
+        });
+    });
 }
 
 function advanceStep() {
     if (!stepPlaybackState) return;
-    const { makro, repeat } = stepPlaybackState;
-    stepPlaybackState.stepIndex++;
-    if (stepPlaybackState.stepIndex >= makro.steps.length) {
-        stepPlaybackState.stepIndex = 0;
-        stepPlaybackState.currentRun++;
-        if (stepPlaybackState.currentRun >= repeat) {
-            closeStepPanel();
-            return;
+    syncMarkerPositions(() => {
+        if (!stepPlaybackState) return;
+        const { makro, repeat } = stepPlaybackState;
+        stepPlaybackState.stepIndex++;
+        if (stepPlaybackState.stepIndex >= makro.steps.length) {
+            stepPlaybackState.stepIndex = 0;
+            stepPlaybackState.currentRun++;
+            if (stepPlaybackState.currentRun >= repeat) {
+                closeStepPanel();
+                return;
+            }
         }
-    }
-    renderStepPanel();
+        renderStepPanel();
+        showStepMarkers();
+    });
 }
 
 function closeStepPanel() {
     stepPlaybackState = null;
     document.getElementById('stepPlaybackPanel').style.display = 'none';
     document.getElementById('mainContainer').style.display = 'block';
+    document.getElementById('showStepOnPageBtn').style.display = 'none';
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        if (!tabs[0]) return;
+        chrome.scripting.executeScript({
+            target: { tabId: tabs[0].id },
+            func: () => {
+                if (window._makroMarkerScrollHandler) { window.removeEventListener('scroll', window._makroMarkerScrollHandler); delete window._makroMarkerScrollHandler; }
+                document.querySelectorAll('#_makroMarkerContainer').forEach(c => { if(c._makroMutObs) c._makroMutObs.disconnect(); if(c._makroDialogObs) c._makroDialogObs.disconnect(); try{c.hidePopover();}catch(e){} });
+                document.querySelectorAll('._makroEditMarker, #_makroEditPanel, #_makroEditStyle, #_makroMarkerContainer').forEach(el => el.remove());
+            }
+        });
+    });
 }
 
 document.getElementById('stepPlaybackAbortBtn').addEventListener('click', closeStepPanel);
@@ -877,6 +1615,53 @@ document.getElementById('stepPlaybackSkipBtn').addEventListener('click', advance
 document.getElementById('stepPlaybackRunBtn').addEventListener('click', () => {
     if (!stepPlaybackState) return;
     const step = stepPlaybackState.makro.steps[stepPlaybackState.stepIndex];
+    // Apply edits from input fields
+    if (step.type === 'click') {
+        const newPx = parseInt(document.getElementById('stepEditPx').value);
+        const newPy = parseInt(document.getElementById('stepEditPy').value);
+        if (!isNaN(newPx)) step._px = newPx;
+        if (!isNaN(newPy)) step._py = newPy;
+    } else if (step.type === 'type') {
+        step.value = document.getElementById('stepEditValue').value;
+    } else if (step.type === 'wait') {
+        const dur = parseInt(document.getElementById('stepEditWaitDuration').value);
+        if (!isNaN(dur)) step.duration = dur;
+        document.getElementById('stepPlaybackDesc').textContent = `⏱ Warte ${step.duration||1000}ms…`;
+        setTimeout(() => { chrome.storage.sync.set({ makros }); advanceStep(); }, step.duration || 1000);
+        return;
+    } else if (step.type === 'waitForReload') {
+        document.getElementById('stepPlaybackDesc').textContent = '🔄 Warte auf Seitenneuladen…';
+        chrome.storage.sync.set({ makros });
+        advanceStep();
+        return;
+    } else if (step.type === 'navigate') {
+        step.url = document.getElementById('stepEditUrl').value || step.url;
+    } else if (step.type === 'scroll') {
+        step.selector = document.getElementById('stepEditScrollSelector').value;
+        step.x = parseInt(document.getElementById('stepEditScrollX').value) || step.x || 0;
+        step.y = parseInt(document.getElementById('stepEditScrollY').value) || step.y || 0;
+    } else if (step.type === 'keypress') {
+        step.key = document.getElementById('stepEditKey').value || step.key;
+        const mods = [];
+        if (document.getElementById('stepEditModCtrl').checked) mods.push('ctrl');
+        if (document.getElementById('stepEditModShift').checked) mods.push('shift');
+        if (document.getElementById('stepEditModAlt').checked) mods.push('alt');
+        step.modifiers = mods;
+    } else if (step.type === 'select') {
+        step.selector = document.getElementById('stepEditSelectSelector').value || step.selector;
+        step.value = document.getElementById('stepEditSelectValue').value;
+    } else if (['doubleclick','rightclick','hover'].includes(step.type)) {
+        step.selector = document.getElementById('stepEditSelector').value || step.selector;
+    }
+    // Remove any page marker before executing
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        if (tabs[0]) {
+            chrome.scripting.executeScript({
+                target: { tabId: tabs[0].id },
+                func: () => { document.querySelectorAll('#_makroMarkerContainer').forEach(c => { if(c._makroMutObs) c._makroMutObs.disconnect(); if(c._makroDialogObs) c._makroDialogObs.disconnect(); try{c.hidePopover();}catch(e){} }); document.querySelectorAll('._makroEditMarker, #_makroEditPanel, #_makroEditStyle, #_makroMarkerContainer').forEach(el => el.remove()); }
+            });
+        }
+    });
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
         if (!tabs[0]) { advanceStep(); return; }
         chrome.scripting.executeScript({
@@ -892,33 +1677,53 @@ document.getElementById('stepPlaybackRunBtn').addEventListener('click', () => {
                     catch(e) { document.documentElement.appendChild(dot); }
                     setTimeout(() => { dot.remove(); st.remove(); }, 600);
                 };
+                const findTopClickable = (vx, vy) => {
+                    const els = document.elementsFromPoint(vx, vy);
+                    const top = els.find(e => {
+                        const cs = window.getComputedStyle(e);
+                        return cs.pointerEvents !== 'none' && cs.visibility !== 'hidden' && cs.display !== 'none'
+                            && e !== document.documentElement && e !== document.body;
+                    }) || els[0];
+                    if (!top) return null;
+                    let candidate = top;
+                    for (let d = 0; d < 5 && candidate && candidate !== document.body; d++) {
+                        const tag = candidate.tagName.toLowerCase();
+                        const role = (candidate.getAttribute && candidate.getAttribute('role')) || '';
+                        if (['button','a','input','select','label'].includes(tag) ||
+                            role === 'button' || role === 'link' || role === 'menuitem' || role === 'tab') {
+                            return candidate;
+                        }
+                        candidate = candidate.parentElement;
+                    }
+                    return top;
+                };
+                const findEl = (step) => {
+                    if (step.selector) { try { return document.querySelector(step.selector); } catch(e) {} }
+                    if (step._px !== undefined) {
+                        window.scrollTo({ top: step._py - window.innerHeight / 2, behavior: 'instant' });
+                        return findTopClickable(step._px - window.scrollX, step._py - window.scrollY);
+                    }
+                    return null;
+                };
                 if (step.type === 'click' && step._px !== undefined) {
                     window.scrollTo({ top: step._py - window.innerHeight / 2, behavior: 'instant' });
                     const vx = step._px - window.scrollX, vy = step._py - window.scrollY;
-                    let el = document.elementFromPoint(vx, vy);
-                    const originalEl = el;
-                    let candidate = el;
-                    for (let d = 0; d < 5 && candidate && candidate !== document.body; d++) {
-                        const tag = candidate.tagName.toLowerCase(), role = (candidate.getAttribute && candidate.getAttribute('role')) || '';
-                        if (['button','a','input','select','label'].includes(tag) || role === 'button' || role === 'link' || role === 'menuitem' || role === 'tab') { el = candidate; break; }
-                        candidate = candidate.parentElement;
-                    }
-                    if (!el || el === document.body) el = originalEl;
+                    const el = findTopClickable(vx, vy);
                     if (!el) return;
                     el.focus();
                     const rect = el.getBoundingClientRect();
-                    const cx = rect.left + rect.width / 2;
-                    const cy = rect.top + rect.height / 2;
+                    const cx = rect.left + rect.width / 2, cy = rect.top + rect.height / 2;
                     showClickIndicator(cx, cy);
-                    el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, clientX: cx, clientY: cy }));
-                    el.dispatchEvent(new MouseEvent('mouseup',   { bubbles: true, cancelable: true, clientX: cx, clientY: cy }));
-                    el.dispatchEvent(new MouseEvent('click',     { bubbles: true, cancelable: true, clientX: cx, clientY: cy }));
+                    el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, composed: true, clientX: cx, clientY: cy }));
+                    el.dispatchEvent(new MouseEvent('mouseup',   { bubbles: true, cancelable: true, composed: true, clientX: cx, clientY: cy }));
+                    el.dispatchEvent(new MouseEvent('click',     { bubbles: true, cancelable: true, composed: true, clientX: cx, clientY: cy }));
+                    try { el.click(); } catch(e2) {}
                 } else if (step.type === 'type') {
                     let el = null;
                     try { el = document.querySelector(step.target); } catch(e) {}
                     if (!el && step._px !== undefined) {
                         window.scrollTo({ top: step._py - window.innerHeight / 2, behavior: 'instant' });
-                        el = document.elementFromPoint(step._px - window.scrollX, step._py - window.scrollY);
+                        el = findTopClickable(step._px - window.scrollX, step._py - window.scrollY);
                     }
                     if (!el) return;
                     el.focus();
@@ -933,15 +1738,47 @@ document.getElementById('stepPlaybackRunBtn').addEventListener('click', () => {
                         el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: step.value }));
                         el.dispatchEvent(new Event('change', { bubbles: true }));
                     }
+                } else if (step.type === 'navigate') {
+                    if (step.url) window.location.href = step.url;
+                } else if (step.type === 'scroll') {
+                    if (step.selector) {
+                        const el = document.querySelector(step.selector);
+                        if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    } else {
+                        window.scrollTo({ top: step.y || 0, left: step.x || 0, behavior: 'smooth' });
+                    }
+                } else if (step.type === 'keypress') {
+                    document.dispatchEvent(new KeyboardEvent('keydown', {
+                        key: step.key, bubbles: true, composed: true,
+                        ctrlKey: (step.modifiers||[]).includes('ctrl'),
+                        shiftKey: (step.modifiers||[]).includes('shift'),
+                        altKey: (step.modifiers||[]).includes('alt')
+                    }));
+                } else if (step.type === 'select') {
+                    const el = step.selector ? document.querySelector(step.selector) : null;
+                    if (el) { el.value = step.value; el.dispatchEvent(new Event('change', { bubbles: true })); }
+                } else if (step.type === 'doubleclick') {
+                    const el = findEl(step);
+                    if (el) el.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, cancelable: true, composed: true }));
+                } else if (step.type === 'rightclick') {
+                    const el = findEl(step);
+                    if (el) el.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, composed: true }));
+                } else if (step.type === 'hover') {
+                    const el = findEl(step);
+                    if (el) el.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, composed: true }));
                 }
             },
             args: [step]
         });
+        chrome.storage.sync.set({ makros });
         advanceStep();
     });
 });
 
 document.getElementById('stepEditSaveBtn').addEventListener('click', () => {
+    if (!stepPlaybackState) return;
+    // Zuerst alle (auch verschobene) Marker-Positionen übernehmen
+    syncMarkerPositions(() => {
     if (!stepPlaybackState) return;
     const { makro, stepIndex } = stepPlaybackState;
     const step = makro.steps[stepIndex];
@@ -952,15 +1789,176 @@ document.getElementById('stepEditSaveBtn').addEventListener('click', () => {
         if (!isNaN(py)) step._py = py;
     } else if (step.type === 'type') {
         step.value = document.getElementById('stepEditValue').value;
+    } else if (step.type === 'wait') {
+        step.duration = parseInt(document.getElementById('stepEditWaitDuration').value) || 1000;
+    } else if (step.type === 'waitForReload') {
+        step.timeout = parseInt(document.getElementById('stepEditReloadTimeout').value) || 10000;
+    } else if (step.type === 'navigate') {
+        step.url = document.getElementById('stepEditUrl').value;
+    } else if (step.type === 'scroll') {
+        step.selector = document.getElementById('stepEditScrollSelector').value;
+        step.x = parseInt(document.getElementById('stepEditScrollX').value) || 0;
+        step.y = parseInt(document.getElementById('stepEditScrollY').value) || 0;
+    } else if (step.type === 'keypress') {
+        step.key = document.getElementById('stepEditKey').value;
+        const mods = [];
+        if (document.getElementById('stepEditModCtrl').checked) mods.push('ctrl');
+        if (document.getElementById('stepEditModShift').checked) mods.push('shift');
+        if (document.getElementById('stepEditModAlt').checked) mods.push('alt');
+        step.modifiers = mods;
+    } else if (step.type === 'select') {
+        step.selector = document.getElementById('stepEditSelectSelector').value;
+        step.value = document.getElementById('stepEditSelectValue').value;
+    } else if (['doubleclick','rightclick','hover'].includes(step.type)) {
+        step.selector = document.getElementById('stepEditSelector').value;
     }
     chrome.storage.sync.set({ makros }, () => {
         const btn = document.getElementById('stepEditSaveBtn');
         btn.textContent = '✓ Gespeichert!';
         setTimeout(() => { if (btn) btn.textContent = '💾 Schritt speichern'; }, 1500);
     });
+    });
 });
 
 // Page-Overlay: Schritte auf Seite anzeigen und bearbeiten
+function injectEditMarkersFunc(steps) {
+    document.querySelectorAll('#_makroMarkerContainer').forEach(c => { if(c._makroMutObs) c._makroMutObs.disconnect(); if(c._makroDialogObs) c._makroDialogObs.disconnect(); try{c.hidePopover();}catch(e){} });
+    document.querySelectorAll('._makroEditMarker, #_makroEditPanel, #_makroEditStyle, #_makroMarkerContainer').forEach(el => el.remove());
+    sessionStorage.setItem('_makroEditSteps', JSON.stringify(steps));
+    const style = document.createElement('style');
+    style.id = '_makroEditStyle';
+    style.textContent = `
+        ._makroEditMarker{position:fixed;z-index:2147483647;width:26px;height:26px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:bold;color:#fff;cursor:grab;user-select:none;box-shadow:0 2px 8px rgba(0,0,0,0.5);border:2px solid rgba(255,255,255,0.5);}
+        ._makroEditMarker:active{cursor:grabbing;}
+        ._makroEditMarker._click{background:#ff8c00;}
+        ._makroEditMarker._type{background:#2196f3;}
+        ._makroEditMarker._wait{background:#9c27b0;}
+        ._makroEditMarker._nav{background:#4caf50;}
+        #_makroEditPanel{position:fixed;z-index:2147483647;background:#1e1e1e;border:1px solid #555;border-radius:8px;padding:12px;min-width:210px;box-shadow:0 4px 16px rgba(0,0,0,0.7);font-family:system-ui;font-size:12px;color:#e0e0e0;}
+        #_makroEditPanel label{display:block;font-size:10px;opacity:.6;margin-top:6px;}
+        #_makroEditPanel input,#_makroEditPanel textarea{width:100%;background:#252525;border:1px solid #444;color:#e0e0e0;border-radius:4px;padding:4px;font-size:12px;box-sizing:border-box;margin:2px 0;}
+        #_makroEditPanel button{background:rgba(255,140,0,.2);border:1px solid rgba(255,140,0,.4);color:#ff8c00;border-radius:4px;padding:4px 10px;cursor:pointer;font-size:11px;margin:4px 2px 0;}
+    `;
+    document.head.appendChild(style);
+
+    // Converts page coords to viewport coords for fixed positioning
+    const toViewport = (px, py) => ({ vx: px - window.scrollX - 13, vy: py - window.scrollY - 13 });
+
+    const markerEls = [];
+    steps.forEach((step, idx) => {
+        if (step._px === undefined || step._py === undefined) return;
+        const marker = document.createElement('div');
+        const cls = step.type === 'click' ? '_click' : step.type === 'type' ? '_type' : step.type === 'wait' || step.type === 'waitForReload' ? '_wait' : '_nav';
+        marker.className = `_makroEditMarker ${cls}`;
+        marker.textContent = idx + 1;
+        marker.dataset.idx = idx;
+        const vp = toViewport(step._px, step._py);
+        marker.style.left = vp.vx + 'px';
+        marker.style.top = vp.vy + 'px';
+        markerEls.push(marker);
+
+        let isDragging = false, startX, startY, startLeft, startTop;
+        marker.addEventListener('mousedown', (e) => {
+            e.preventDefault();
+            isDragging = false;
+            startX = e.clientX; startY = e.clientY;
+            startLeft = parseInt(marker.style.left); startTop = parseInt(marker.style.top);
+            const onMove = (me) => {
+                if (!isDragging && (Math.abs(me.clientX - startX) > 3 || Math.abs(me.clientY - startY) > 3)) isDragging = true;
+                if (isDragging) {
+                    const nl = startLeft + (me.clientX - startX);
+                    const nt = startTop + (me.clientY - startY);
+                    marker.style.left = nl + 'px'; marker.style.top = nt + 'px';
+                    const stps = JSON.parse(sessionStorage.getItem('_makroEditSteps') || '[]');
+                    const npx = nl + 13 + window.scrollX;
+                    const npy = nt + 13 + window.scrollY;
+                    stps[idx]._px = npx;
+                    stps[idx]._py = npy;
+                    sessionStorage.setItem('_makroEditSteps', JSON.stringify(stps));
+                    try { chrome.runtime.sendMessage({ _makroStepPosUpdate: { idx, px: npx, py: npy } }); } catch(e) {}
+                }
+            };
+            const onUp = () => { document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp); };
+            document.addEventListener('mousemove', onMove);
+            document.addEventListener('mouseup', onUp);
+        });
+        marker.addEventListener('click', (e) => {
+            if (isDragging) { isDragging = false; return; }
+            const existing = document.getElementById('_makroEditPanel');
+            if (existing) existing.remove();
+            const stps = JSON.parse(sessionStorage.getItem('_makroEditSteps') || '[]');
+            const s = stps[idx];
+            const panel = document.createElement('div');
+            panel.id = '_makroEditPanel';
+            panel.style.left = Math.min(e.clientX + 12, window.innerWidth - 230) + 'px';
+            panel.style.top = Math.min(e.clientY + 12, window.innerHeight - 160) + 'px';
+            if (s.type === 'click') {
+                panel.innerHTML = `<b>🖱 Schritt ${idx+1}: Klick</b><label>X:</label><input type="number" id="_ep_px" value="${s._px}"><label>Y:</label><input type="number" id="_ep_py" value="${s._py}"><div><button id="_ep_save">💾 Speichern</button><button id="_ep_close">✕</button></div>`;
+            } else if (s.type === 'type') {
+                panel.innerHTML = `<b>⌨ Schritt ${idx+1}: Text</b><label>Ziel:</label><input type="text" id="_ep_target" value="${(s.target||'').replace(/"/g,'&quot;')}"><label>Wert:</label><textarea id="_ep_value" rows="2">${(s.value||'').replace(/</g,'&lt;')}</textarea><div><button id="_ep_save">💾 Speichern</button><button id="_ep_close">✕</button></div>`;
+            } else {
+                panel.innerHTML = `<b>Schritt ${idx+1}: ${s.type}</b><div style="opacity:.7;font-size:11px;margin-top:4px;">${JSON.stringify(s,null,1).replace(/</g,'&lt;')}</div><div><button id="_ep_close">✕</button></div>`;
+            }
+            document.body.appendChild(panel);
+            document.getElementById('_ep_close').addEventListener('click', () => panel.remove());
+            const saveBtn = document.getElementById('_ep_save');
+            if (saveBtn) saveBtn.addEventListener('click', () => {
+                const stps2 = JSON.parse(sessionStorage.getItem('_makroEditSteps') || '[]');
+                if (s.type === 'click') {
+                    stps2[idx]._px = parseInt(document.getElementById('_ep_px').value) || stps2[idx]._px;
+                    stps2[idx]._py = parseInt(document.getElementById('_ep_py').value) || stps2[idx]._py;
+                    const nvp = toViewport(stps2[idx]._px, stps2[idx]._py);
+                    marker.style.left = nvp.vx + 'px';
+                    marker.style.top = nvp.vy + 'px';
+                } else if (s.type === 'type') {
+                    stps2[idx].target = document.getElementById('_ep_target').value;
+                    stps2[idx].value = document.getElementById('_ep_value').value;
+                }
+                sessionStorage.setItem('_makroEditSteps', JSON.stringify(stps2));
+                panel.remove();
+            });
+        });
+        document.body.appendChild(marker);
+    });
+
+    // Container im Browser Top Layer platzieren (Popover API) → über nativen <dialog showModal()>
+    const container = document.createElement('div');
+    container.id = '_makroMarkerContainer';
+    container.setAttribute('popover', 'manual');
+    container.style.cssText = 'position:fixed;top:0;left:0;width:100vw;height:100vh;background:transparent;border:none;padding:0;margin:0;max-width:100vw;max-height:100vh;overflow:visible;pointer-events:none;z-index:2147483647;';
+    document.body.appendChild(container);
+    try { container.showPopover(); } catch(e) {}
+
+    // MutationObserver: Container im Top Layer re-promoten wenn neues Element erscheint
+    const _repromote = () => {
+        try { container.hidePopover(); container.showPopover(); } catch(e) {
+            if (document.body.lastElementChild !== container) document.body.appendChild(container);
+        }
+    };
+    const _obs = new MutationObserver(_repromote);
+    _obs.observe(document.body, { childList: true });
+    container._makroMutObs = _obs;
+    // Zweiter Observer: feuert wenn <dialog> via showModal() das 'open'-Attribut erhält
+    const _dialogObs = new MutationObserver(_repromote);
+    _dialogObs.observe(document.documentElement, { subtree: true, attributes: true, attributeFilter: ['open', 'aria-modal'] });
+    container._makroDialogObs = _dialogObs;
+
+    // Update fixed-position markers on scroll
+    const updateMarkers = () => {
+        const stps = JSON.parse(sessionStorage.getItem('_makroEditSteps') || '[]');
+        markerEls.forEach(m => {
+            const i = parseInt(m.dataset.idx);
+            const s = stps[i];
+            if (s && s._px !== undefined) {
+                m.style.left = (s._px - window.scrollX - 13) + 'px';
+                m.style.top  = (s._py - window.scrollY - 13) + 'px';
+            }
+        });
+    };
+    window._makroMarkerScrollHandler = updateMarkers;
+    window.addEventListener('scroll', updateMarkers, { passive: true });
+}
+
 document.getElementById('showStepsOnPageBtn').addEventListener('click', () => {
     let steps = [];
     try { steps = JSON.parse(document.getElementById('makroStepsInput').value); } catch(e) { alert('Ungültiges JSON in Aktionen'); return; }
@@ -968,85 +1966,7 @@ document.getElementById('showStepsOnPageBtn').addEventListener('click', () => {
         if (!tabs[0]) return;
         chrome.scripting.executeScript({
             target: { tabId: tabs[0].id },
-            func: (steps) => {
-                document.querySelectorAll('._makroEditMarker, #_makroEditPanel, #_makroEditStyle').forEach(el => el.remove());
-                sessionStorage.setItem('_makroEditSteps', JSON.stringify(steps));
-                const style = document.createElement('style');
-                style.id = '_makroEditStyle';
-                style.textContent = `
-                    ._makroEditMarker{position:absolute;z-index:999998;width:26px;height:26px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:bold;color:#fff;cursor:grab;user-select:none;box-shadow:0 2px 8px rgba(0,0,0,0.5);border:2px solid rgba(255,255,255,0.5);}
-                    ._makroEditMarker:active{cursor:grabbing;}
-                    ._makroEditMarker._click{background:#ff8c00;}
-                    ._makroEditMarker._type{background:#2196f3;}
-                    #_makroEditPanel{position:fixed;z-index:999999;background:#1e1e1e;border:1px solid #555;border-radius:8px;padding:12px;min-width:210px;box-shadow:0 4px 16px rgba(0,0,0,0.7);font-family:system-ui;font-size:12px;color:#e0e0e0;}
-                    #_makroEditPanel label{display:block;font-size:10px;opacity:.6;margin-top:6px;}
-                    #_makroEditPanel input,#_makroEditPanel textarea{width:100%;background:#252525;border:1px solid #444;color:#e0e0e0;border-radius:4px;padding:4px;font-size:12px;box-sizing:border-box;margin:2px 0;}
-                    #_makroEditPanel button{background:rgba(255,140,0,.2);border:1px solid rgba(255,140,0,.4);color:#ff8c00;border-radius:4px;padding:4px 10px;cursor:pointer;font-size:11px;margin:4px 2px 0;}
-                `;
-                document.head.appendChild(style);
-                steps.forEach((step, idx) => {
-                    if (step._px === undefined || step._py === undefined) return;
-                    const marker = document.createElement('div');
-                    marker.className = `_makroEditMarker ${step.type === 'click' ? '_click' : '_type'}`;
-                    marker.textContent = idx + 1;
-                    marker.style.left = (step._px - 13) + 'px';
-                    marker.style.top = (step._py - 13) + 'px';
-                    let isDragging = false, startX, startY, startLeft, startTop;
-                    marker.addEventListener('mousedown', (e) => {
-                        e.preventDefault();
-                        isDragging = false;
-                        startX = e.clientX; startY = e.clientY;
-                        startLeft = parseInt(marker.style.left); startTop = parseInt(marker.style.top);
-                        const onMove = (me) => {
-                            if (!isDragging && (Math.abs(me.clientX - startX) > 3 || Math.abs(me.clientY - startY) > 3)) isDragging = true;
-                            if (isDragging) {
-                                const nl = startLeft + (me.clientX - startX);
-                                const nt = startTop + (me.clientY - startY);
-                                marker.style.left = nl + 'px'; marker.style.top = nt + 'px';
-                                const stps = JSON.parse(sessionStorage.getItem('_makroEditSteps') || '[]');
-                                stps[idx]._px = nl + 13; stps[idx]._py = nt + 13;
-                                sessionStorage.setItem('_makroEditSteps', JSON.stringify(stps));
-                            }
-                        };
-                        const onUp = () => { document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp); };
-                        document.addEventListener('mousemove', onMove);
-                        document.addEventListener('mouseup', onUp);
-                    });
-                    marker.addEventListener('click', (e) => {
-                        if (isDragging) { isDragging = false; return; }
-                        const existing = document.getElementById('_makroEditPanel');
-                        if (existing) existing.remove();
-                        const stps = JSON.parse(sessionStorage.getItem('_makroEditSteps') || '[]');
-                        const s = stps[idx];
-                        const panel = document.createElement('div');
-                        panel.id = '_makroEditPanel';
-                        panel.style.left = Math.min(e.clientX + 12, window.innerWidth - 230) + 'px';
-                        panel.style.top = Math.min(e.clientY + 12, window.innerHeight - 160) + 'px';
-                        if (s.type === 'click') {
-                            panel.innerHTML = `<b>🖱 Schritt ${idx+1}: Klick</b><label>X:</label><input type="number" id="_ep_px" value="${s._px}"><label>Y:</label><input type="number" id="_ep_py" value="${s._py}"><div><button id="_ep_save">💾 Speichern</button><button id="_ep_close">✕</button></div>`;
-                        } else {
-                            panel.innerHTML = `<b>⌨ Schritt ${idx+1}: Text</b><label>Ziel:</label><input type="text" id="_ep_target" value="${(s.target||'').replace(/"/g,'&quot;')}"><label>Wert:</label><textarea id="_ep_value" rows="2">${(s.value||'').replace(/</g,'&lt;')}</textarea><div><button id="_ep_save">💾 Speichern</button><button id="_ep_close">✕</button></div>`;
-                        }
-                        document.body.appendChild(panel);
-                        document.getElementById('_ep_close').addEventListener('click', () => panel.remove());
-                        document.getElementById('_ep_save').addEventListener('click', () => {
-                            const stps2 = JSON.parse(sessionStorage.getItem('_makroEditSteps') || '[]');
-                            if (s.type === 'click') {
-                                stps2[idx]._px = parseInt(document.getElementById('_ep_px').value) || stps2[idx]._px;
-                                stps2[idx]._py = parseInt(document.getElementById('_ep_py').value) || stps2[idx]._py;
-                                marker.style.left = (stps2[idx]._px - 13) + 'px';
-                                marker.style.top = (stps2[idx]._py - 13) + 'px';
-                            } else {
-                                stps2[idx].target = document.getElementById('_ep_target').value;
-                                stps2[idx].value = document.getElementById('_ep_value').value;
-                            }
-                            sessionStorage.setItem('_makroEditSteps', JSON.stringify(stps2));
-                            panel.remove();
-                        });
-                    });
-                    document.body.appendChild(marker);
-                });
-            },
+            func: injectEditMarkersFunc,
             args: [steps]
         });
         document.getElementById('showStepsOnPageBtn').style.display = 'none';
@@ -1063,7 +1983,9 @@ document.getElementById('applyPageEditsBtn').addEventListener('click', () => {
             func: () => {
                 const steps = JSON.parse(sessionStorage.getItem('_makroEditSteps') || '[]');
                 sessionStorage.removeItem('_makroEditSteps');
-                document.querySelectorAll('._makroEditMarker, #_makroEditPanel, #_makroEditStyle').forEach(el => el.remove());
+                if (window._makroMarkerScrollHandler) { window.removeEventListener('scroll', window._makroMarkerScrollHandler); delete window._makroMarkerScrollHandler; }
+                document.querySelectorAll('#_makroMarkerContainer').forEach(c => { if(c._makroMutObs) c._makroMutObs.disconnect(); if(c._makroDialogObs) c._makroDialogObs.disconnect(); try{c.hidePopover();}catch(e){} });
+                document.querySelectorAll('._makroEditMarker, #_makroEditPanel, #_makroEditStyle, #_makroMarkerContainer').forEach(el => el.remove());
                 return steps;
             }
         }, (results) => {
@@ -1084,7 +2006,9 @@ document.getElementById('cancelPageEditsBtn').addEventListener('click', () => {
                 target: { tabId: tabs[0].id },
                 func: () => {
                     sessionStorage.removeItem('_makroEditSteps');
-                    document.querySelectorAll('._makroEditMarker, #_makroEditPanel, #_makroEditStyle').forEach(el => el.remove());
+                    if (window._makroMarkerScrollHandler) { window.removeEventListener('scroll', window._makroMarkerScrollHandler); delete window._makroMarkerScrollHandler; }
+                    document.querySelectorAll('#_makroMarkerContainer').forEach(c => { if(c._makroMutObs) c._makroMutObs.disconnect(); if(c._makroDialogObs) c._makroDialogObs.disconnect(); try{c.hidePopover();}catch(e){} });
+                    document.querySelectorAll('._makroEditMarker, #_makroEditPanel, #_makroEditStyle, #_makroMarkerContainer').forEach(el => el.remove());
                 }
             });
         }
@@ -1094,11 +2018,401 @@ document.getElementById('cancelPageEditsBtn').addEventListener('click', () => {
     document.getElementById('cancelPageEditsBtn').style.display = 'none';
 });
 
+// Eine einzelne Makro-Iteration im Tab ausführen (eine injizierte Funktion)
+function injectOneRun({ stepsList, speedDelay }) {
+    function showClickRipple(vx, vy) {
+        const d = document.createElement('div');
+        d.style.cssText = 'position:fixed;left:' + (vx-18) + 'px;top:' + (vy-18) + 'px;width:36px;height:36px;border-radius:50%;border:3px solid #ff8c00;pointer-events:none;z-index:2147483647;animation:_makroRipple 0.5s ease-out forwards;';
+        if (!document.getElementById('_makroRippleStyle')) {
+            const s = document.createElement('style');
+            s.id = '_makroRippleStyle';
+            s.textContent = '@keyframes _makroRipple{0%{transform:scale(0.3);opacity:1}100%{transform:scale(1.5);opacity:0}}';
+            document.head.appendChild(s);
+        }
+        // Im bestehenden Top-Layer-Container einbetten, sonst eigenen Popover erstellen
+        const host = document.getElementById('_makroMarkerContainer') || (() => {
+            const h = document.createElement('div');
+            h.setAttribute('popover', 'manual');
+            h.style.cssText = 'position:fixed;top:0;left:0;width:0;height:0;background:transparent;border:none;padding:0;margin:0;overflow:visible;pointer-events:none;';
+            document.body.appendChild(h);
+            try { h.showPopover(); } catch(e) {}
+            setTimeout(() => { try{h.hidePopover();}catch(e){} h.remove(); }, 700);
+            return h;
+        })();
+        host.appendChild(d);
+        setTimeout(() => d.remove(), 600);
+    }
+    const showClickIndicator = (x, y) => {
+        const dot = document.createElement('div');
+        dot.style.cssText = `position:fixed;left:${x}px;top:${y}px;width:24px;height:24px;border-radius:50%;background:rgba(255,140,0,0.6);border:2px solid #ff8c00;transform:translate(-50%,-50%) scale(0);animation:_mkRipple 0.55s ease forwards;pointer-events:none;z-index:2147483647;inset:auto;margin:0;`;
+        const st = document.createElement('style');
+        st.textContent = `@keyframes _mkRipple{0%{transform:translate(-50%,-50%) scale(0);opacity:1}100%{transform:translate(-50%,-50%) scale(2.8);opacity:0}}`;
+        document.head.appendChild(st);
+        try { dot.setAttribute('popover','manual'); document.documentElement.appendChild(dot); dot.showPopover(); }
+        catch(e) { document.documentElement.appendChild(dot); }
+        setTimeout(() => { dot.remove(); st.remove(); }, 600);
+    };
+    const findTopClickable = (vx, vy) => {
+        const els = document.elementsFromPoint(vx, vy);
+        const top = els.find(e => {
+            const cs = window.getComputedStyle(e);
+            return cs.pointerEvents !== 'none' && cs.visibility !== 'hidden' && cs.display !== 'none'
+                && e !== document.documentElement && e !== document.body;
+        }) || els[0];
+        if (!top) return null;
+        let candidate = top;
+        for (let d = 0; d < 5 && candidate && candidate !== document.body; d++) {
+            const tag = candidate.tagName.toLowerCase();
+            const role = (candidate.getAttribute && candidate.getAttribute('role')) || '';
+            if (['button','a','input','select','label'].includes(tag) ||
+                role === 'button' || role === 'link' || role === 'menuitem' || role === 'tab') {
+                return candidate;
+            }
+            candidate = candidate.parentElement;
+        }
+        return top;
+    };
+    // Animierter Maus-Cursor
+    function getCursor() {
+        let cur = document.getElementById('_makroCursor');
+        if (!cur) {
+            const host = document.getElementById('_makroMarkerContainer') || document.body;
+            cur = document.createElement('div');
+            cur.id = '_makroCursor';
+            cur.style.cssText = 'position:fixed;pointer-events:none;z-index:2147483647;width:20px;height:20px;transition:left 0.12s ease,top 0.12s ease;transform:translate(-3px,-2px);';
+            cur.innerHTML = '<svg width="20" height="20" viewBox="0 0 20 20" xmlns="http://www.w3.org/2000/svg"><polygon points="3,2 3,17 7,13 10,19 12,18 9,12 15,12" fill="white" stroke="#333" stroke-width="1.5" stroke-linejoin="round"/></svg>';
+            host.appendChild(cur);
+        }
+        return cur;
+    }
+    function moveCursorTo(vx, vy) {
+        const cur = getCursor();
+        cur.style.left = vx + 'px';
+        cur.style.top = vy + 'px';
+    }
+    const findEl = (step) => {
+        const sel = step.selector || step.target;
+        if (sel) { try { const found = document.querySelector(sel); if (found) return found; } catch(e) {} }
+        if (step._px !== undefined) {
+            const vx = (step._px || 0) - window.scrollX;
+            const vy = (step._py || 0) - window.scrollY;
+            if (step._py > 0) window.scrollTo({ top: step._py - window.innerHeight / 2, behavior: 'instant' });
+            return findTopClickable(vx, vy);
+        }
+        return null;
+    };
+    const executeAction = (step, attempt) => {
+        if (step.type === 'click' && step._px !== undefined) {
+            if (step._py > 0) window.scrollTo({ top: step._py - window.innerHeight / 2, behavior: 'instant' });
+            const vx = (step._px || 0) - window.scrollX;
+            const vy = (step._py || 0) - window.scrollY;
+            moveCursorTo(vx, vy);
+            const el = findTopClickable(vx, vy);
+            if (!el) { if (attempt < 3) setTimeout(() => executeAction(step, attempt + 1), 300); return; }
+            el.focus();
+            const rect = el.getBoundingClientRect();
+            const cx = rect.left + rect.width / 2, cy = rect.top + rect.height / 2;
+            showClickIndicator(cx, cy);
+            el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, composed: true, clientX: vx, clientY: vy, pageX: step._px, pageY: step._py }));
+            el.dispatchEvent(new MouseEvent('mouseup',   { bubbles: true, cancelable: true, composed: true, clientX: vx, clientY: vy, pageX: step._px, pageY: step._py }));
+            el.dispatchEvent(new MouseEvent('click',     { bubbles: true, cancelable: true, composed: true, clientX: vx, clientY: vy, pageX: step._px, pageY: step._py }));
+            try { el.click(); } catch(e2) {}
+            showClickRipple(vx, vy);
+        } else if (step.type === 'type') {
+            let el = null;
+            try { el = document.querySelector(step.target); } catch (e) {}
+            if (!el && step._px !== undefined) {
+                const vx = (step._px || 0) - window.scrollX;
+                const vy = (step._py || 0) - window.scrollY;
+                window.scrollTo({ top: step._py - window.innerHeight / 2, behavior: 'instant' });
+                el = findTopClickable(vx, vy);
+            }
+            if (!el) { if (attempt < 3) setTimeout(() => executeAction(step, attempt + 1), 300); return; }
+            el.focus();
+            if (el.isContentEditable || el.tagName === 'DIV') {
+                document.execCommand('selectAll', false, null);
+                document.execCommand('insertText', false, step.value);
+                el.dispatchEvent(new Event('input', { bubbles: true }));
+            } else {
+                const proto = el.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+                const nativeSetter = Object.getOwnPropertyDescriptor(proto, 'value');
+                if (nativeSetter && nativeSetter.set) nativeSetter.set.call(el, step.value); else el.value = step.value;
+                el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: step.value }));
+                el.dispatchEvent(new Event('change', { bubbles: true }));
+            }
+        } else if (step.type === 'navigate') {
+            if (step.url) window.location.href = step.url;
+        } else if (step.type === 'scroll') {
+            if (step.selector) { const el = document.querySelector(step.selector); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' }); }
+            else { window.scrollTo({ top: step.y || 0, left: step.x || 0, behavior: 'smooth' }); }
+        } else if (step.type === 'keypress') {
+            document.dispatchEvent(new KeyboardEvent('keydown', { key: step.key, bubbles: true, composed: true, ctrlKey: (step.modifiers||[]).includes('ctrl'), shiftKey: (step.modifiers||[]).includes('shift'), altKey: (step.modifiers||[]).includes('alt') }));
+        } else if (step.type === 'select') {
+            const el = step.selector ? document.querySelector(step.selector) : null;
+            if (el) { el.value = step.value; el.dispatchEvent(new Event('change', { bubbles: true })); }
+        } else if (step.type === 'doubleclick') {
+            const vx = (step._px || 0) - window.scrollX;
+            const vy = (step._py || 0) - window.scrollY;
+            moveCursorTo(vx, vy);
+            const el = findEl(step); if (el) { el.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, cancelable: true, composed: true, clientX: vx, clientY: vy })); showClickRipple(vx, vy); }
+        } else if (step.type === 'rightclick') {
+            const vx = (step._px || 0) - window.scrollX;
+            const vy = (step._py || 0) - window.scrollY;
+            moveCursorTo(vx, vy);
+            const el = findEl(step); if (el) { el.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, composed: true, clientX: vx, clientY: vy })); showClickRipple(vx, vy); }
+        } else if (step.type === 'hover') {
+            const vx = (step._px || 0) - window.scrollX;
+            const vy = (step._py || 0) - window.scrollY;
+            moveCursorTo(vx, vy);
+            const el = findEl(step); if (el) { el.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, composed: true, clientX: vx, clientY: vy })); showClickRipple(vx, vy); }
+        }
+    };
+    const stepDelay = (speedDelay !== undefined && speedDelay !== null) ? speedDelay : 700;
+    let cumOffset = 0;
+    stepsList.forEach((step) => {
+        const delay = cumOffset;
+        if (step.type === 'wait') { cumOffset += stepDelay + (step.duration || 1000); return; }
+        if (step.type === 'waitForReload') { cumOffset += stepDelay; return; }
+        if (step.type === 'mousemovepath') {
+            // M4: Mausbewegungen abspielen
+            const pts = step.points || [];
+            const base = cumOffset;
+            pts.forEach(pt => {
+                setTimeout(() => {
+                    const vx = pt.x - window.scrollX;
+                    const vy = pt.y - window.scrollY;
+                    moveCursorTo(vx, vy);
+                }, base + (pt.t || 0));
+            });
+            cumOffset += stepDelay + (pts.length > 0 ? pts[pts.length - 1].t || 0 : 0);
+            return;
+        }
+        cumOffset += stepDelay;
+        setTimeout(() => executeAction(step, 0), delay);
+    });
+    // Cursor nach Abschluss entfernen
+    setTimeout(() => { const c = document.getElementById('_makroCursor'); if (c) c.remove(); }, cumOffset + 300);
+}
+
+// Geschätzte Dauer einer Iteration (für Sidebar-Timing)
+function makroIterationDuration(steps, stepDelay) {
+    return steps.reduce((acc, s) => {
+        if (s.type === 'mousemovepath') return acc + stepDelay + (s.points && s.points.length ? s.points[s.points.length-1].t || 0 : 0);
+        return acc + stepDelay + (s.type === 'wait' ? (s.duration || 1000) : 0);
+    }, 0) + 400;
+}
+
+// Startet die vollständige Wiedergabe (Wiederholungen werden vom Sidebar gesteuert)
+function playMakroFull(tabId, m, steps, overrideRepeat) {
+    if (runningMakroState && runningMakroState.fallbackTimer) clearTimeout(runningMakroState.fallbackTimer);
+    runningMakroState = {
+        tabId,
+        steps: steps || m.steps,
+        stepDelay: (m.speedDelay !== undefined && m.speedDelay !== null) ? m.speedDelay : 700,
+        repeat: Math.max(1, overrideRepeat || m.repeat || 1),
+        current: 0,
+        repeatDelay: Math.max(0, m.repeatDelay || 0),
+        waitReload: !!m.waitReloadBetweenRepeats,
+        awaitingReload: false,
+        reloadSeen: false,
+        fallbackTimer: null,
+        paused: false,
+        scrollToStart: !!m.scrollToStart,
+        scrollToEnd: !!m.scrollToEnd,
+        lockScroll: !!m.lockScroll,
+        title: m.title || 'Makro'
+    };
+    updatePlaybackBar();
+    runMakroIteration();
+}
+
+function runMakroIteration() {
+    const st = runningMakroState;
+    if (!st) return;
+    updatePlaybackBar();
+    st.reloadSeen = false;
+    if (st.scrollToStart && st.current === 0) {
+        const firstClickStep = (st.steps || []).find(s => ['click','doubleclick','rightclick','hover'].includes(s.type) && s._py > 0);
+        if (firstClickStep) {
+            chrome.scripting.executeScript({ target: { tabId: st.tabId }, func: (py) => { window.scrollTo({ top: py - window.innerHeight/2, behavior: 'smooth' }); }, args: [firstClickStep._py] });
+        }
+    }
+    const _runSteps = () => chrome.scripting.executeScript({
+        target: { tabId: st.tabId },
+        func: injectOneRun,
+        args: [{ stepsList: st.steps, speedDelay: st.stepDelay }]
+    });
+    if (st.lockScroll) {
+        chrome.scripting.executeScript({
+            target: { tabId: st.tabId },
+            func: () => { document.documentElement.style.overflow='hidden'; document.body.style.overflow='hidden'; }
+        }).then(_runSteps);
+    } else {
+        _runSteps();
+    }
+    const dur = makroIterationDuration(st.steps, st.stepDelay);
+    setTimeout(afterMakroIteration, dur);
+}
+
+function afterMakroIteration() {
+    const st = runningMakroState;
+    if (!st) return;
+    st.current++;
+    if (st.current >= st.repeat) {
+        if (st.lockScroll) {
+            chrome.scripting.executeScript({ target: { tabId: st.tabId }, func: () => { document.documentElement.style.overflow=''; document.body.style.overflow=''; }});
+        }
+        if (st.scrollToEnd) {
+            const steps = st.steps || [];
+            let lastClickStep = null;
+            for (let i = steps.length-1; i >= 0; i--) { if (['click','doubleclick','rightclick','hover'].includes(steps[i].type) && steps[i]._py !== undefined) { lastClickStep = steps[i]; break; } }
+            if (lastClickStep) {
+                chrome.scripting.executeScript({ target: { tabId: st.tabId }, func: (py) => { window.scrollTo({ top: py - window.innerHeight/2, behavior: 'smooth' }); }, args: [lastClickStep._py] });
+            }
+        }
+        runningMakroState = null;
+        updatePlaybackBar();
+        return;
+    }
+    if (st.paused) {
+        updatePlaybackBar();
+        return;
+    }
+    if (st.waitReload) {
+        if (st.reloadSeen) {
+            // Seite wurde während der Iteration bereits neu geladen → direkt weiter (nach repeatDelay)
+            setTimeout(runMakroIteration, st.repeatDelay);
+        } else {
+            st.awaitingReload = true;
+            st.fallbackTimer = setTimeout(() => {
+                if (runningMakroState && runningMakroState.awaitingReload) {
+                    runningMakroState.awaitingReload = false;
+                    runningMakroState.fallbackTimer = null;
+                    setTimeout(runMakroIteration, runningMakroState.repeatDelay);
+                }
+            }, 15000);
+        }
+    } else {
+        setTimeout(runMakroIteration, st.repeatDelay);
+    }
+}
+
+document.getElementById('showStepOnPageBtn').addEventListener('click', () => {
+    if (!stepPlaybackState) return;
+    const step = stepPlaybackState.makro.steps[stepPlaybackState.stepIndex];
+    if (!step || step._px === undefined) return;
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        if (!tabs[0]) return;
+        chrome.scripting.executeScript({
+            target: { tabId: tabs[0].id },
+            func: (px, py, stepIdx) => {
+                if (window._makroMarkerScrollHandler) { window.removeEventListener('scroll', window._makroMarkerScrollHandler); delete window._makroMarkerScrollHandler; }
+                document.querySelectorAll('._makroEditMarker, #_makroEditPanel, #_makroEditStyle').forEach(el => el.remove());
+                const style = document.createElement('style');
+                style.id = '_makroEditStyle';
+                style.textContent = `
+                    ._makroEditMarker{position:fixed;z-index:2147483647;width:26px;height:26px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:bold;color:#fff;cursor:grab;user-select:none;box-shadow:0 2px 8px rgba(0,0,0,0.5);border:2px solid rgba(255,255,255,0.5);}
+                    ._makroEditMarker:active{cursor:grabbing;}
+                    ._makroEditMarker._click{background:#ff8c00;}
+                `;
+                document.head.appendChild(style);
+                const marker = document.createElement('div');
+                marker.className = '_makroEditMarker _click';
+                marker.textContent = stepIdx + 1;
+                // page coords → viewport coords for fixed positioning
+                let vpx = px - window.scrollX - 13;
+                let vpy = py - window.scrollY - 13;
+                marker.style.left = vpx + 'px';
+                marker.style.top = vpy + 'px';
+                let isDragging = false, startX, startY, startLeft, startTop;
+                marker.addEventListener('mousedown', (e) => {
+                    e.preventDefault();
+                    isDragging = false;
+                    startX = e.clientX; startY = e.clientY;
+                    startLeft = parseInt(marker.style.left); startTop = parseInt(marker.style.top);
+                    const onMove = (me) => {
+                        if (!isDragging && (Math.abs(me.clientX - startX) > 3 || Math.abs(me.clientY - startY) > 3)) isDragging = true;
+                        if (isDragging) {
+                            marker.style.left = (startLeft + (me.clientX - startX)) + 'px';
+                            marker.style.top = (startTop + (me.clientY - startY)) + 'px';
+                        }
+                    };
+                    const onUp = () => {
+                        document.removeEventListener('mousemove', onMove);
+                        document.removeEventListener('mouseup', onUp);
+                        if (isDragging) {
+                            // Convert viewport back to page coords
+                            const newPx = parseInt(marker.style.left) + 13 + window.scrollX;
+                            const newPy = parseInt(marker.style.top) + 13 + window.scrollY;
+                            chrome.runtime.sendMessage({ _makroStepPosUpdate: { px: newPx, py: newPy } });
+                        }
+                    };
+                    document.addEventListener('mousemove', onMove);
+                    document.addEventListener('mouseup', onUp);
+                });
+                document.body.appendChild(marker);
+                // Keep marker visible on scroll
+                window._makroMarkerScrollHandler = () => {
+                    marker.style.left = (px - window.scrollX - 13) + 'px';
+                    marker.style.top  = (py - window.scrollY - 13) + 'px';
+                };
+                window.addEventListener('scroll', window._makroMarkerScrollHandler, { passive: true });
+                window.scrollTo({ top: py - window.innerHeight / 2, behavior: 'smooth' });
+            },
+            args: [step._px, step._py, stepPlaybackState.stepIndex]
+        });
+    });
+});
+
+document.getElementById('makroPlaybackPauseBtn').addEventListener('click', () => {
+    if (!runningMakroState) return;
+    if (runningMakroState.paused) {
+        runningMakroState.paused = false;
+        updatePlaybackBar();
+        runMakroIteration();
+    } else {
+        runningMakroState.paused = true;
+        updatePlaybackBar();
+    }
+});
+document.getElementById('makroPlaybackStopBtn').addEventListener('click', () => {
+    if (runningMakroState) {
+        const tabId = runningMakroState.tabId;
+        const shouldUnlock = runningMakroState.lockScroll;
+        if (runningMakroState.fallbackTimer) clearTimeout(runningMakroState.fallbackTimer);
+        runningMakroState = null;
+        updatePlaybackBar();
+        if (shouldUnlock) {
+            chrome.scripting.executeScript({ target: { tabId }, func: () => {
+                document.documentElement.style.overflow = '';
+                document.body.style.overflow = '';
+            }});
+        }
+    }
+});
+
+document.getElementById('cancelRepeatAskBtn').addEventListener('click', () => {
+    document.getElementById('makroRepeatAskDialog').style.display = 'none';
+    document.getElementById('mainContainer').style.display = 'block';
+    window._pendingPlayTabId = null;
+    window._pendingPlayMakro = null;
+});
+document.getElementById('confirmRepeatAskBtn').addEventListener('click', () => {
+    const tabId = window._pendingPlayTabId;
+    const m = window._pendingPlayMakro;
+    const overrideRepeat = Math.max(1, parseInt(document.getElementById('makroRepeatAskInput').value) || 1);
+    document.getElementById('makroRepeatAskDialog').style.display = 'none';
+    document.getElementById('mainContainer').style.display = 'block';
+    window._pendingPlayTabId = null;
+    window._pendingPlayMakro = null;
+    if (tabId && m) playMakroFull(tabId, m, m.steps, overrideRepeat);
+});
+
 document.getElementById('saveMakroBtn').addEventListener('click', () => {
-    const i = document.getElementById('editMakroIndex').value;
+    const editIdx = document.getElementById('editMakroIndex').value;
     const selectedColor = document.getElementById('makroColor').value;
     let parsedSteps = [];
-    
+
     try {
         parsedSteps = JSON.parse(document.getElementById('makroStepsInput').value);
     } catch (err) {
@@ -1106,23 +2420,55 @@ document.getElementById('saveMakroBtn').addEventListener('click', () => {
         return;
     }
 
-    const newMakro = {
-        title: document.getElementById('makroTitleInput').value,
-        steps: parsedSteps,
-        color: selectedColor,
-        repeat: Math.max(1, parseInt(document.getElementById('makroRepeatInput').value) || 1)
+    const finishSave = (steps) => {
+        const existingDomain = (editIdx !== '' && makros[parseInt(editIdx)]) ? (makros[parseInt(editIdx)].domain || '') : '';
+        const newMakro = {
+            title: document.getElementById('makroTitleInput').value,
+            steps: steps,
+            color: selectedColor,
+            repeat: Math.max(1, parseInt(document.getElementById('makroRepeatInput').value) || 1),
+            repeatDelay: Math.max(0, parseInt(document.getElementById('makroRepeatDelayInput').value) || 0),
+            waitReloadBetweenRepeats: document.getElementById('makroWaitReloadInput').checked,
+            speedDelay: document.getElementById('makroSpeedToggle').checked ? Math.max(0, parseInt(document.getElementById('makroSpeedInput').value) || 0) : 0,
+            askRepeatBeforePlay: document.getElementById('makroAskRepeatInput').checked,
+            scrollToStart: document.getElementById('makroScrollToStartInput').checked,
+            scrollToEnd: document.getElementById('makroScrollToEndInput').checked,
+            lockScroll: document.getElementById('makroLockScrollInput').checked,
+            domain: existingDomain,
+            method: parseInt(document.getElementById('makroMethodInput').value) || 2
+        };
+
+        if (editIdx !== "") {
+            makros[parseInt(editIdx)] = newMakro;
+        } else {
+            makros.push(newMakro);
+        }
+
+        updateRecentColors(selectedColor);
+        chrome.storage.sync.set({ makros }, () => {
+            closeMakroEditMode();
+            renderMakros();
+        });
     };
 
-    if (i !== "") {
-        makros[parseInt(i)] = newMakro;
-    } else {
-        makros.push(newMakro);
-    }
-
-    updateRecentColors(selectedColor);
-    chrome.storage.sync.set({ makros }, () => {
-        closeMakroEditMode();
-        renderMakros();
+    // Verschobene Marker-Positionen von der Seite übernehmen (falls vorhanden)
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        if (!tabs[0]) { finishSave(parsedSteps); return; }
+        chrome.scripting.executeScript({
+            target: { tabId: tabs[0].id },
+            func: () => JSON.parse(sessionStorage.getItem('_makroEditSteps') || 'null')
+        }, (results) => {
+            const marked = results?.[0]?.result;
+            if (Array.isArray(marked)) {
+                parsedSteps.forEach((s, idx) => {
+                    if (marked[idx] && marked[idx]._px !== undefined) {
+                        s._px = marked[idx]._px;
+                        s._py = marked[idx]._py;
+                    }
+                });
+            }
+            finishSave(parsedSteps);
+        });
     });
 });
 
@@ -1156,8 +2502,9 @@ document.getElementById('promptList').addEventListener('click', (e) => {
         document.getElementById('groupTitleInput').value = oldName;
         document.getElementById('groupIconInput').value = meta.icon;
         document.getElementById('groupColorInput').value = meta.color;
+        populateProviderDropdowns();
         document.getElementById('groupAiProvider').value = meta.groupProvider || 'default';
-        
+
         document.getElementById('mainContainer').style.display = 'none';
         document.getElementById('groupEditorGroup').style.display = 'flex';
         renderRecentColors();
@@ -1167,7 +2514,8 @@ document.getElementById('promptList').addEventListener('click', (e) => {
     const groupHeader = e.target.closest('.group-header');
     if (groupHeader && groupHeader.dataset.group) {
         const gName = groupHeader.dataset.group;
-        collapsedGroups[gName] = !collapsedGroups[gName];
+        const cur = (gName in collapsedGroups) ? collapsedGroups[gName] : true;
+        collapsedGroups[gName] = !cur;
         render();
         return;
     }
@@ -1191,8 +2539,10 @@ document.getElementById('promptList').addEventListener('click', (e) => {
             document.getElementById('editIndex').value = i;
             document.getElementById('titleInput').value = p.title || '';
             document.getElementById('textInput').value = p.text || '';
+            autoResizeTextInput();
             document.getElementById('promptColor').value = p.color || '#ff8c00';
             document.getElementById('shortcutInput').value = p.shortcut || '';
+            populateProviderDropdowns();
             document.getElementById('aiProvider').value = p.provider || 'ChatGPT';
             populateGroupDropdowns();
             
@@ -1221,7 +2571,8 @@ function handleNotesViewClicks(e) {
     const groupHeader = e.target.closest('.group-header');
     if (groupHeader && groupHeader.dataset.notegroup) {
         const gName = groupHeader.dataset.notegroup;
-        collapsedNoteGroups[gName] = !collapsedNoteGroups[gName];
+        const cur = (gName in collapsedNoteGroups) ? collapsedNoteGroups[gName] : true;
+        collapsedNoteGroups[gName] = !cur;
         renderNotes();
         return;
     }
@@ -1270,6 +2621,7 @@ function handleNotesViewClicks(e) {
             textInput.style.display = 'none';
             textInput.value = '';
 
+            document.getElementById('noteIconInput').value = n.icon || '';
             document.getElementById('mainContainer').style.display = 'none';
             document.getElementById('noteInputGroup').style.display = 'flex';
             renderRecentColors();
@@ -1278,6 +2630,309 @@ function handleNotesViewClicks(e) {
 }
 document.getElementById('pinnedNotesList').addEventListener('click', handleNotesViewClicks);
 document.getElementById('notesList').addEventListener('click', handleNotesViewClicks);
+
+// Note-Gruppen bearbeiten: Icon/Farbe via Popup
+document.getElementById('notesList').addEventListener('click', (e) => {
+    const editBtn = e.target.closest('[data-notegroupedit]');
+    if (!editBtn) return;
+    e.stopPropagation();
+    const gName = editBtn.dataset.notegroupedit;
+    const meta = groupMetadata[gName] || { color: '#ff8c00', icon: '📁' };
+    document.getElementById('editNoteGroupName').value = gName;
+    document.getElementById('noteGroupIconInput').value = meta.icon || '📁';
+    document.getElementById('noteGroupColorInput').value = meta.color || '#ff8c00';
+    const popup = document.getElementById('noteGroupEditPopup');
+    const rect = editBtn.getBoundingClientRect();
+    popup.style.display = 'block';
+    popup.style.top = (rect.bottom + 4) + 'px';
+    popup.style.left = Math.max(4, rect.left - 180) + 'px';
+});
+document.getElementById('noteGroupIconPick').addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-icon]');
+    if (btn) document.getElementById('noteGroupIconInput').value = btn.dataset.icon;
+});
+document.getElementById('cancelNoteGroupBtn').addEventListener('click', () => {
+    document.getElementById('noteGroupEditPopup').style.display = 'none';
+});
+document.getElementById('saveNoteGroupBtn').addEventListener('click', () => {
+    const gName = document.getElementById('editNoteGroupName').value;
+    if (!gName) return;
+    groupMetadata[gName] = {
+        ...(groupMetadata[gName] || {}),
+        icon: document.getElementById('noteGroupIconInput').value || '📁',
+        color: document.getElementById('noteGroupColorInput').value || '#ff8c00'
+    };
+    chrome.storage.sync.set({ groupMetadata }, () => {
+        document.getElementById('noteGroupEditPopup').style.display = 'none';
+        renderNotes();
+    });
+});
+
+function openBookmarkEditor(i) {
+    const b = bookmarks[i];
+    if (!b) return;
+    document.getElementById('editBookmarkIndex').value = i;
+    document.getElementById('bookmarkTitleInput').value = b.title || '';
+    document.getElementById('bookmarkUrlInput').value = b.url || '';
+    document.getElementById('bookmarkColor').value = b.color || '#ff8c00';
+
+    populateGroupDropdowns();
+    const textInput = document.getElementById('bookmarkGroupInput');
+    if (b.group && b.group.trim() !== "") {
+        document.getElementById('bookmarkGroupSelectOptions').value = b.group;
+    } else {
+        document.getElementById('bookmarkGroupSelectOptions').value = '';
+    }
+    textInput.style.display = 'none';
+    textInput.value = '';
+
+    document.getElementById('mainContainer').style.display = 'none';
+    document.getElementById('bookmarkInputGroup').style.display = 'flex';
+    renderRecentColors();
+}
+
+function openBookmarkEditorForCurrentPage() {
+    document.getElementById('editBookmarkIndex').value = "";
+    document.getElementById('bookmarkTitleInput').value = '';
+    document.getElementById('bookmarkUrlInput').value = '';
+    document.getElementById('mainContainer').style.display = 'none';
+    document.getElementById('bookmarkInputGroup').style.display = 'flex';
+    populateGroupDropdowns();
+    renderRecentColors();
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        if (tabs[0] && tabs[0].url) {
+            document.getElementById('bookmarkTitleInput').value = tabs[0].title || '';
+            document.getElementById('bookmarkUrlInput').value = tabs[0].url || '';
+        }
+    });
+}
+
+function handleBookmarksViewClicks(e) {
+    const groupHeader = e.target.closest('.group-header');
+    if (groupHeader && groupHeader.dataset.bookmarkgroup) {
+        const gName = groupHeader.dataset.bookmarkgroup;
+        const cur = (gName in collapsedBookmarkGroups) ? collapsedBookmarkGroups[gName] : true;
+        collapsedBookmarkGroups[gName] = !cur;
+        renderBookmarks();
+        return;
+    }
+
+    const target = e.target.closest('[data-bookmark-action]');
+    if (!target) return;
+    const action = target.dataset.bookmarkAction;
+    const i = parseInt(target.dataset.index);
+
+    if (action === 'open') {
+        const b = bookmarks[i];
+        if (b && b.url) {
+            let url = b.url.trim();
+            if (!/^https?:\/\//i.test(url)) url = 'https://' + url;
+            chrome.tabs.create({ url });
+        }
+    }
+    else if (action === 'toggle') {
+        const el = document.getElementById(`bookmark-content-${i}`);
+        if (el) el.style.display = el.style.display === 'block' ? 'none' : 'block';
+    }
+    else if (action === 'delete') {
+        bookmarks.splice(i, 1);
+        chrome.storage.sync.set({ bookmarks }, renderBookmarks);
+    }
+    else if (action === 'edit') {
+        openBookmarkEditor(i);
+    }
+}
+document.getElementById('bookmarksList').addEventListener('click', handleBookmarksViewClicks);
+
+// Favicon-Fallback: bei Ladefehler durch Emoji ersetzen (error-Events bubblen nicht -> capture:true)
+document.getElementById('bookmarksList').addEventListener('error', (e) => {
+    const img = e.target;
+    if (img.classList && img.classList.contains('bookmark-favicon')) {
+        const wrap = img.parentElement;
+        if (wrap) wrap.textContent = img.dataset.fallback || '🔖';
+    }
+}, true);
+
+// Lesezeichen-Gruppen bearbeiten: Icon/Farbe via Popup
+document.getElementById('bookmarksList').addEventListener('click', (e) => {
+    const editBtn = e.target.closest('[data-bookmarkgroupedit]');
+    if (!editBtn) return;
+    e.stopPropagation();
+    const gName = editBtn.dataset.bookmarkgroupedit;
+    const meta = bookmarkGroupMetadata[gName] || { color: '#ff8c00', icon: '🔖' };
+    document.getElementById('editBookmarkGroupName').value = gName;
+    document.getElementById('bookmarkGroupIconInput').value = meta.icon || '🔖';
+    document.getElementById('bookmarkGroupColorInput').value = meta.color || '#ff8c00';
+    const popup = document.getElementById('bookmarkGroupEditPopup');
+    const rect = editBtn.getBoundingClientRect();
+    popup.style.display = 'block';
+    popup.style.top = (rect.bottom + 4) + 'px';
+    popup.style.left = Math.max(4, rect.left - 180) + 'px';
+});
+document.getElementById('bookmarkGroupIconPick').addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-icon]');
+    if (btn) document.getElementById('bookmarkGroupIconInput').value = btn.dataset.icon;
+});
+document.getElementById('cancelBookmarkGroupBtn').addEventListener('click', () => {
+    document.getElementById('bookmarkGroupEditPopup').style.display = 'none';
+});
+document.getElementById('saveBookmarkGroupBtn').addEventListener('click', () => {
+    const gName = document.getElementById('editBookmarkGroupName').value;
+    if (!gName) return;
+    bookmarkGroupMetadata[gName] = {
+        ...(bookmarkGroupMetadata[gName] || {}),
+        icon: document.getElementById('bookmarkGroupIconInput').value || '🔖',
+        color: document.getElementById('bookmarkGroupColorInput').value || '#ff8c00'
+    };
+    chrome.storage.sync.set({ bookmarkGroupMetadata }, () => {
+        document.getElementById('bookmarkGroupEditPopup').style.display = 'none';
+        renderBookmarks();
+    });
+});
+
+function closeBookmarkEditMode() {
+    document.getElementById('bookmarkInputGroup').style.display = 'none';
+    document.getElementById('mainContainer').style.display = 'block';
+    document.getElementById('editBookmarkIndex').value = "";
+    document.getElementById('bookmarkTitleInput').value = '';
+    document.getElementById('bookmarkUrlInput').value = '';
+    document.getElementById('bookmarkGroupInput').value = '';
+    document.getElementById('bookmarkGroupInput').style.display = 'none';
+    document.getElementById('bookmarkGroupSelectOptions').value = '';
+}
+
+document.getElementById('cancelBookmarkBtn').addEventListener('click', closeBookmarkEditMode);
+
+document.getElementById('saveBookmarkBtn').addEventListener('click', () => {
+    const i = document.getElementById('editBookmarkIndex').value;
+    const selectedColor = document.getElementById('bookmarkColor').value;
+
+    let finalGroup = '';
+    const dropdownValue = document.getElementById('bookmarkGroupSelectOptions').value;
+    if (dropdownValue === '__NEW_GROUP__') {
+        finalGroup = document.getElementById('bookmarkGroupInput').value.trim();
+    } else {
+        finalGroup = dropdownValue;
+    }
+
+    const newBookmark = {
+        title: document.getElementById('bookmarkTitleInput').value,
+        url: document.getElementById('bookmarkUrlInput').value.trim(),
+        color: selectedColor,
+        group: finalGroup
+    };
+
+    if (i !== "") {
+        bookmarks[parseInt(i)] = newBookmark;
+    } else {
+        bookmarks.push(newBookmark);
+    }
+
+    updateRecentColors(selectedColor);
+    chrome.storage.sync.set({ bookmarks }, () => {
+        closeBookmarkEditMode();
+        renderBookmarks();
+    });
+});
+
+document.getElementById('addBookmarkToggleBtn').addEventListener('click', openBookmarkEditorForCurrentPage);
+
+document.getElementById('searchBookmarksInput').addEventListener('input', (e) => {
+    const query = e.target.value.toLowerCase();
+    document.querySelectorAll('.bookmark-card').forEach(card => {
+        const title = card.querySelector('.prompt-title').innerText.toLowerCase();
+        const url = card.querySelector('.content-box').innerText.toLowerCase();
+        card.style.display = (title.includes(query) || url.includes(query)) ? 'block' : 'none';
+    });
+});
+
+// Lesezeichen per Drag & Drop importieren (einzelne Links, mehrere Links oder ganze Ordner aus der Lesezeichenleiste)
+const bookmarksListEl = document.getElementById('bookmarksList');
+bookmarksListEl.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    bookmarksListEl.classList.add('bookmarks-dropzone-active');
+});
+bookmarksListEl.addEventListener('dragleave', (e) => {
+    if (!bookmarksListEl.contains(e.relatedTarget)) {
+        bookmarksListEl.classList.remove('bookmarks-dropzone-active');
+    }
+});
+bookmarksListEl.addEventListener('drop', (e) => {
+    e.preventDefault();
+    bookmarksListEl.classList.remove('bookmarks-dropzone-active');
+
+    const links = [];
+    const seenUrls = new Set();
+    const addLink = (group, url, title) => {
+        if (!url) return;
+        url = url.trim();
+        if (!url || seenUrls.has(url)) return;
+        seenUrls.add(url);
+        links.push({ group: group || '', title: (title || '').trim() || url, url });
+    };
+
+    // Chrome-Lesezeichen-HTML (Netscape-Bookmark-Format): <h3>Ordnername</h3> gefolgt von <a>-Links.
+    // Verlinkte <h3>/<a>-Elemente in Dokumentreihenfolge durchlaufen: jeder Link gehört zum zuletzt
+    // gesehenen <h3> (= seinem unmittelbaren Ordner), so werden auch verschachtelte Ordner korrekt zugeordnet.
+    const html = e.dataTransfer.getData('text/html');
+    if (html) {
+        try {
+            const doc = new DOMParser().parseFromString(html, 'text/html');
+            let currentGroup = '';
+            doc.querySelectorAll('h3, a[href]').forEach(el => {
+                if (el.tagName === 'H3') {
+                    currentGroup = (el.textContent || '').trim();
+                } else {
+                    addLink(currentGroup, el.getAttribute('href'), el.textContent);
+                }
+            });
+        } catch (err) {}
+    }
+
+    if (links.length === 0) {
+        const uriList = e.dataTransfer.getData('text/uri-list');
+        if (uriList) {
+            uriList.split(/\r?\n/).forEach(line => {
+                if (line && !line.startsWith('#')) addLink('', line, '');
+            });
+        }
+    }
+
+    if (links.length === 0) {
+        const plain = e.dataTransfer.getData('text/plain');
+        if (plain) addLink('', plain, '');
+    }
+
+    if (links.length === 0) return;
+
+    const newGroupNames = new Set();
+    links.forEach(l => {
+        if (l.group && !bookmarkGroupMetadata[l.group]) newGroupNames.add(l.group);
+        bookmarks.push({ title: l.title, url: l.url, color: '#ff8c00', group: l.group });
+    });
+    newGroupNames.forEach(gName => {
+        bookmarkGroupMetadata[gName] = { color: '#ff8c00', icon: '🔖' };
+    });
+    chrome.storage.sync.set({ bookmarks, bookmarkGroupMetadata }, renderBookmarks);
+});
+
+// Clipboard-Copy via Event-Delegation (Listener muss auf dem DOM-Element sein, nicht auf outerHTML)
+document.getElementById('notesList').addEventListener('click', (e) => {
+    const titleEl = e.target.closest('[data-note-copy-idx]');
+    if (!titleEl) return;
+    e.stopPropagation();
+    const i = parseInt(titleEl.dataset.noteCopyIdx);
+    const n = notes[i];
+    if (!n) return;
+    let content = n.text || '';
+    if (n.todos && n.todos.length)
+        content += '\n' + n.todos.map(t => (t.done ? '✓ ' : '○ ') + t.text).join('\n');
+    navigator.clipboard.writeText(content).then(() => {
+        const orig = titleEl.innerHTML;
+        titleEl.innerHTML = '✓ Kopiert';
+        setTimeout(() => { titleEl.innerHTML = orig; }, 1200);
+    }).catch(() => {});
+});
 
 function renderEditorTodos() {
     const listEl = document.getElementById('editorTodoList');
@@ -1328,9 +2983,15 @@ function closeNoteEditMode() {
     document.getElementById('noteGroupInput').style.display = 'none';
     document.getElementById('noteGroupSelectOptions').value = '';
     currentEditorTodos = [];
+    document.getElementById('noteIconInput').value = '';
 }
 
 document.getElementById('cancelNoteBtn').addEventListener('click', closeNoteEditMode);
+
+document.getElementById('noteIconQuickPick').addEventListener('click', (e) => {
+    const btn = e.target.closest('.note-icon-pick');
+    if (btn) document.getElementById('noteIconInput').value = btn.dataset.icon;
+});
 
 document.getElementById('saveNoteBtn').addEventListener('click', () => {
     const i = document.getElementById('editNoteIndex').value;
@@ -1351,7 +3012,8 @@ document.getElementById('saveNoteBtn').addEventListener('click', () => {
         color: selectedColor,
         pinned: pinned,
         group: finalGroup,
-        todos: currentEditorTodos
+        todos: currentEditorTodos,
+        icon: document.getElementById('noteIconInput').value.trim()
     };
 
     if (i !== "") {
@@ -1583,15 +3245,48 @@ document.getElementById('saveGroupBtn').addEventListener('click', () => {
         promts.forEach(p => { if (p.group === oldName) p.group = newName; });
         notes.forEach(n => { if (n.group === oldName) n.group = newName; });
         if (groupMetadata[oldName]) delete groupMetadata[oldName];
+        const goIdx = groupOrder.indexOf(oldName);
+        if (goIdx !== -1) groupOrder[goIdx] = newName;
+        const ngoIdx = noteGroupOrder.indexOf(oldName);
+        if (ngoIdx !== -1) noteGroupOrder[ngoIdx] = newName;
     }
     groupMetadata[newName] = { color, icon, groupProvider };
     updateRecentColors(color);
-    chrome.storage.sync.set({ promts, notes, groupMetadata }, () => {
+    chrome.storage.sync.set({ promts, notes, groupMetadata, groupOrder, noteGroupOrder }, () => {
         closeGroupEditMode();
     });
 });
 
 document.getElementById('cancelGroupBtn').addEventListener('click', closeGroupEditMode);
+
+document.getElementById('groupIconQuickPick').addEventListener('click', (e) => {
+    const btn = e.target.closest('.group-icon-pick');
+    if (btn) document.getElementById('groupIconInput').value = btn.dataset.icon;
+});
+
+document.getElementById('addCustomProviderBtn').addEventListener('click', () => {
+    const nameIn = document.getElementById('customProviderNameInput');
+    const iconIn = document.getElementById('customProviderIconInput');
+    const name = nameIn.value.trim();
+    const icon = iconIn.value.trim() || '⚬';
+    if (!name) return;
+    if (customProviders.some(cp => cp.name === name)) {
+        alert('Ein Anbieter mit diesem Namen existiert bereits.');
+        return;
+    }
+    customProviders.push({ name, icon });
+    nameIn.value = '';
+    iconIn.value = '';
+    chrome.storage.sync.set({ customProviders }, populateProviderDropdowns);
+});
+
+document.getElementById('customProviderList').addEventListener('click', (e) => {
+    const btn = e.target.closest('.remove-custom-provider');
+    if (!btn) return;
+    const idx = parseInt(btn.dataset.index);
+    customProviders.splice(idx, 1);
+    chrome.storage.sync.set({ customProviders }, populateProviderDropdowns);
+});
 
 document.addEventListener('click', (e) => {
     const dot = e.target.closest('.color-dot[data-color]');
@@ -1605,6 +3300,8 @@ document.addEventListener('click', (e) => {
         document.getElementById('noteColor').value = dot.dataset.color;
     } else if (document.getElementById('makroInputGroup').style.display === 'flex') {
         document.getElementById('makroColor').value = dot.dataset.color;
+    } else if (document.getElementById('bookmarkInputGroup').style.display === 'flex') {
+        document.getElementById('bookmarkColor').value = dot.dataset.color;
     }
 });
 
@@ -1631,11 +3328,42 @@ function closeEditMode() {
     document.getElementById('editIndex').value = "";
     document.getElementById('titleInput').value = '';
     document.getElementById('textInput').value = '';
+    autoResizeTextInput();
     document.getElementById('shortcutInput').value = '';
     document.getElementById('groupInput').value = '';
     document.getElementById('groupInput').style.display = 'none';
     document.getElementById('groupSelectOptions').value = '';
 }
+
+// Prompt-Text-Feld: Höhe an Inhalt anpassen (leer = doppelte Standardhöhe)
+function autoResizeTextInput() {
+    const el = document.getElementById('textInput');
+    if (!el) return;
+    if (!el.value) {
+        el.style.height = '200px';
+    } else {
+        el.style.height = 'auto';
+        el.style.height = el.scrollHeight + 'px';
+    }
+}
+document.getElementById('textInput').addEventListener('input', autoResizeTextInput);
+
+// Shortcut per Tastendruck aufnehmen statt manuell eintippen
+document.getElementById('shortcutInput').addEventListener('keydown', (e) => {
+    e.preventDefault();
+    if (['Control', 'Alt', 'Shift', 'Meta'].includes(e.key)) return;
+    const parts = [];
+    if (e.ctrlKey) parts.push('Ctrl');
+    if (e.altKey) parts.push('Alt');
+    if (e.shiftKey) parts.push('Shift');
+    if (e.metaKey) parts.push('Meta');
+    parts.push(e.key.length === 1 ? e.key.toUpperCase() : e.key);
+    e.target.value = parts.join('+');
+});
+
+document.getElementById('clearShortcutBtn').addEventListener('click', () => {
+    document.getElementById('shortcutInput').value = '';
+});
 
 document.getElementById('saveBtn').addEventListener('click', () => {
     const i = document.getElementById('editIndex').value;
@@ -1704,6 +3432,7 @@ document.getElementById('addToggleBtn').addEventListener('click', () => {
     document.getElementById('inputGroup').style.display = 'flex';
     populateGroupDropdowns();
     renderRecentColors();
+    autoResizeTextInput();
 });
 
 document.getElementById('themeToggle').addEventListener('click', () => {
@@ -1741,19 +3470,22 @@ document.getElementById('closeBackupBtn').addEventListener('click', () => {
 document.getElementById('btnExecuteBackupExport').addEventListener('click', () => {
     if(confirm("Möchtest du jetzt ein vollständiges Backup erstellen und den Speicherort festlegen?")) {
         chrome.storage.sync.get(null, (syncData) => {
-            const totalBackup = {
-                K_SIDEBAR_BACKUP_VERSION: "1.0.16",
-                timestamp: Date.now(),
-                syncStorage: syncData
-            };
-            const blob = new Blob([JSON.stringify(totalBackup, null, 2)], { type: "application/json" });
-            const url = URL.createObjectURL(blob);
-            chrome.downloads.download({
-                url: url,
-                filename: `k_sidebar_full_backup_${new Date().toISOString().slice(0,10)}.json`,
-                saveAs: true
-            }, () => {
-                URL.revokeObjectURL(url);
+            chrome.storage.local.get({ tabCustomIcons: {} }, (localData) => {
+                const totalBackup = {
+                    K_SIDEBAR_BACKUP_VERSION: "1.0.16",
+                    timestamp: Date.now(),
+                    syncStorage: syncData,
+                    localStorage: { tabCustomIcons: localData.tabCustomIcons || {} }
+                };
+                const blob = new Blob([JSON.stringify(totalBackup, null, 2)], { type: "application/json" });
+                const url = URL.createObjectURL(blob);
+                chrome.downloads.download({
+                    url: url,
+                    filename: `k_sidebar_full_backup_${new Date().toISOString().slice(0,10)}.json`,
+                    saveAs: true
+                }, () => {
+                    URL.revokeObjectURL(url);
+                });
             });
         });
     }
@@ -1773,11 +3505,14 @@ document.getElementById('backupFileInput').addEventListener('change', (e) => {
             if (backup && backup.syncStorage) {
                 if (confirm("Achtung! Das Einspielen überschreibt alle aktuellen Daten. Fortfahren?")) {
                     const syncToSet = backup.syncStorage || {};
+                    const localToSet = (backup.localStorage && backup.localStorage.tabCustomIcons) ? backup.localStorage : { tabCustomIcons: {} };
                     chrome.storage.sync.clear(() => {
                         chrome.storage.sync.set(syncToSet, () => {
-                            alert("System-Backup erfolgreich eingespielt!");
-                            document.getElementById('backupOverlay').style.display = 'none';
-                            document.getElementById('mainContainer').style.display = 'block';
+                            chrome.storage.local.set(localToSet, () => {
+                                alert("System-Backup erfolgreich eingespielt!");
+                                document.getElementById('backupOverlay').style.display = 'none';
+                                document.getElementById('mainContainer').style.display = 'block';
+                            });
                         });
                     });
                 }
@@ -1833,26 +3568,302 @@ document.getElementById('saveCurrentSessionBtn').addEventListener('click', () =>
     });
 });
 
+// Kontextmenü-Trigger für Rechtsklick auf Prompts, Notizen, Lesezeichen und Gruppen
+document.addEventListener('contextmenu', (e) => {
+    const promptCard = e.target.closest('.prompt-card');
+    const noteCard = e.target.closest('.note-card');
+    const bookmarkCard = e.target.closest('.bookmark-card');
+    const groupHeader = e.target.closest('.group-header[data-group]');
+    const noteGroupHeader = e.target.closest('.group-header[data-notegroup]');
+    const bookmarkGroupHeader = e.target.closest('.group-header[data-bookmarkgroup]');
+
+    if (promptCard || noteCard || bookmarkCard || groupHeader || noteGroupHeader || bookmarkGroupHeader) {
+        e.preventDefault();
+        document.getElementById('tabContextMenu').style.display = 'none';
+        document.getElementById('promptContextMenu').style.display = 'none';
+        document.getElementById('noteContextMenu').style.display = 'none';
+        document.getElementById('bookmarkContextMenu').style.display = 'none';
+        document.getElementById('groupContextMenu').style.display = 'none';
+
+        const positionMenu = (menu) => {
+            let x = e.clientX, y = e.clientY;
+            if (x + 170 > window.innerWidth) x = window.innerWidth - 175;
+            if (y + 100 > window.innerHeight) y = window.innerHeight - 105;
+            menu.style.left = x + 'px';
+            menu.style.top = y + 'px';
+            menu.style.display = 'block';
+        };
+
+        if (promptCard) {
+            const actionEl = promptCard.querySelector('[data-index]');
+            const idx = actionEl ? parseInt(actionEl.dataset.index) : -1;
+            const menu = document.getElementById('promptContextMenu');
+            positionMenu(menu);
+            menu.dataset.index = idx;
+        } else if (noteCard) {
+            const actionEl = noteCard.querySelector('[data-index]');
+            const idx = actionEl ? parseInt(actionEl.dataset.index) : -1;
+            const menu = document.getElementById('noteContextMenu');
+            positionMenu(menu);
+            menu.dataset.index = idx;
+        } else if (bookmarkCard) {
+            const actionEl = bookmarkCard.querySelector('[data-index]');
+            const idx = actionEl ? parseInt(actionEl.dataset.index) : -1;
+            const menu = document.getElementById('bookmarkContextMenu');
+            positionMenu(menu);
+            menu.dataset.index = idx;
+        } else if (groupHeader) {
+            const menu = document.getElementById('groupContextMenu');
+            positionMenu(menu);
+            menu.dataset.group = groupHeader.dataset.group;
+            menu.dataset.type = 'prompt';
+            document.getElementById('ctxDuplicateGroup').style.display = 'block';
+        } else if (noteGroupHeader) {
+            const menu = document.getElementById('groupContextMenu');
+            positionMenu(menu);
+            menu.dataset.group = noteGroupHeader.dataset.notegroup;
+            menu.dataset.type = 'note';
+            document.getElementById('ctxDuplicateGroup').style.display = 'none';
+        } else if (bookmarkGroupHeader) {
+            const menu = document.getElementById('groupContextMenu');
+            positionMenu(menu);
+            menu.dataset.group = bookmarkGroupHeader.dataset.bookmarkgroup;
+            menu.dataset.type = 'bookmark';
+            document.getElementById('ctxDuplicateGroup').style.display = 'none';
+        }
+        return;
+    }
+});
+
+document.getElementById('ctxDuplicatePrompt').addEventListener('click', () => {
+    const menu = document.getElementById('promptContextMenu');
+    const idx = parseInt(menu.dataset.index);
+    menu.style.display = 'none';
+    if (isNaN(idx) || !promts[idx]) return;
+    const orig = promts[idx];
+    const copy = Object.assign({}, orig, { title: orig.title + ' (Kopie)' });
+    promts.splice(idx + 1, 0, copy);
+    chrome.storage.sync.set({ promts }, render);
+});
+
+document.getElementById('ctxDuplicateGroup').addEventListener('click', () => {
+    const menu = document.getElementById('groupContextMenu');
+    const gName = menu.dataset.group;
+    menu.style.display = 'none';
+    if (!gName || menu.dataset.type === 'note') return;
+    let newName = gName + ' (Kopie)';
+    let counter = 2;
+    while (promts.some(p => p.group === newName) || groupMetadata[newName]) {
+        newName = gName + ` (Kopie ${counter++})`;
+    }
+    // Gruppe-Metadaten kopieren
+    if (groupMetadata[gName]) {
+        groupMetadata[newName] = Object.assign({}, groupMetadata[gName]);
+    }
+    // Alle Prompts der Gruppe kopieren
+    const groupPrompts = promts.filter(p => p.group === gName);
+    const copies = groupPrompts.map(p => Object.assign({}, p, { title: p.title + ' (Kopie)', group: newName }));
+    // Kopien direkt nach dem letzten Prompt der Originalgruppe einfügen
+    const lastIdx = promts.reduce((acc, p, i) => p.group === gName ? i : acc, -1);
+    promts.splice(lastIdx + 1, 0, ...copies);
+    groupOrder.push(newName);
+    chrome.storage.sync.set({ promts, groupMetadata, groupOrder }, render);
+});
+
+document.getElementById('ctxRenamePrompt').addEventListener('click', () => {
+    const menu = document.getElementById('promptContextMenu');
+    const idx = parseInt(menu.dataset.index);
+    menu.style.display = 'none';
+    if (isNaN(idx) || !promts[idx]) return;
+    const newTitle = prompt('Neuer Titel:', promts[idx].title || '');
+    if (newTitle === null) return;
+    const trimmed = newTitle.trim();
+    if (!trimmed) return;
+    promts[idx].title = trimmed;
+    chrome.storage.sync.set({ promts }, render);
+});
+
+document.getElementById('ctxDeletePrompt').addEventListener('click', () => {
+    const menu = document.getElementById('promptContextMenu');
+    const idx = parseInt(menu.dataset.index);
+    menu.style.display = 'none';
+    if (isNaN(idx) || !promts[idx]) return;
+    const removed = promts.splice(idx, 1)[0];
+    deletedPromts.push(removed);
+    chrome.storage.sync.set({ promts, deletedPromts }, render);
+});
+
+document.getElementById('ctxRenameNote').addEventListener('click', () => {
+    const menu = document.getElementById('noteContextMenu');
+    const idx = parseInt(menu.dataset.index);
+    menu.style.display = 'none';
+    if (isNaN(idx) || !notes[idx]) return;
+    const newTitle = prompt('Neuer Titel:', notes[idx].title || '');
+    if (newTitle === null) return;
+    const trimmed = newTitle.trim();
+    if (!trimmed) return;
+    notes[idx].title = trimmed;
+    chrome.storage.sync.set({ notes }, renderNotes);
+});
+
+document.getElementById('ctxDeleteNote').addEventListener('click', () => {
+    const menu = document.getElementById('noteContextMenu');
+    const idx = parseInt(menu.dataset.index);
+    menu.style.display = 'none';
+    if (isNaN(idx) || !notes[idx]) return;
+    notes.splice(idx, 1);
+    chrome.storage.sync.set({ notes }, renderNotes);
+});
+
+document.getElementById('ctxAddCurrentPageBookmark').addEventListener('click', () => {
+    document.getElementById('bookmarkContextMenu').style.display = 'none';
+    openBookmarkEditorForCurrentPage();
+});
+
+document.getElementById('ctxEditBookmark').addEventListener('click', () => {
+    const menu = document.getElementById('bookmarkContextMenu');
+    const idx = parseInt(menu.dataset.index);
+    menu.style.display = 'none';
+    if (isNaN(idx) || !bookmarks[idx]) return;
+    openBookmarkEditor(idx);
+});
+
+document.getElementById('ctxDeleteBookmark').addEventListener('click', () => {
+    const menu = document.getElementById('bookmarkContextMenu');
+    const idx = parseInt(menu.dataset.index);
+    menu.style.display = 'none';
+    if (isNaN(idx) || !bookmarks[idx]) return;
+    bookmarks.splice(idx, 1);
+    chrome.storage.sync.set({ bookmarks }, renderBookmarks);
+});
+
+document.getElementById('ctxRenameGroup').addEventListener('click', () => {
+    const menu = document.getElementById('groupContextMenu');
+    const gName = menu.dataset.group;
+    const type = menu.dataset.type || 'prompt';
+    menu.style.display = 'none';
+    if (!gName) return;
+    const newName = prompt('Neuer Gruppenname:', gName);
+    if (newName === null) return;
+    const trimmed = newName.trim();
+    if (!trimmed || trimmed === gName) return;
+    if (type === 'bookmark') {
+        if (bookmarkGroupMetadata[gName]) {
+            bookmarkGroupMetadata[trimmed] = bookmarkGroupMetadata[gName];
+            delete bookmarkGroupMetadata[gName];
+        }
+        bookmarks.forEach(b => { if (b.group === gName) b.group = trimmed; });
+        const oi = bookmarkGroupOrder.indexOf(gName);
+        if (oi !== -1) bookmarkGroupOrder[oi] = trimmed;
+        chrome.storage.sync.set({ bookmarks, bookmarkGroupMetadata, bookmarkGroupOrder }, renderBookmarks);
+        return;
+    }
+    if (groupMetadata[gName]) {
+        groupMetadata[trimmed] = groupMetadata[gName];
+        delete groupMetadata[gName];
+    }
+    if (type === 'note') {
+        notes.forEach(n => { if (n.group === gName) n.group = trimmed; });
+        const oi = noteGroupOrder.indexOf(gName);
+        if (oi !== -1) noteGroupOrder[oi] = trimmed;
+        chrome.storage.sync.set({ notes, groupMetadata, noteGroupOrder }, renderNotes);
+    } else {
+        promts.forEach(p => { if (p.group === gName) p.group = trimmed; });
+        const oi = groupOrder.indexOf(gName);
+        if (oi !== -1) groupOrder[oi] = trimmed;
+        chrome.storage.sync.set({ promts, groupMetadata, groupOrder }, render);
+    }
+});
+
+document.getElementById('ctxDeleteGroup').addEventListener('click', () => {
+    const menu = document.getElementById('groupContextMenu');
+    const gName = menu.dataset.group;
+    const type = menu.dataset.type || 'prompt';
+    menu.style.display = 'none';
+    if (!gName) return;
+    window._pendingDeleteGroup = { gName, type };
+    document.getElementById('groupDeletePopupInfo').textContent = `Gruppe "${gName}" wirklich löschen?`;
+    document.getElementById('groupDeletePopup').style.display = 'flex';
+});
+
+function finishGroupDelete(alsoDeleteItems) {
+    const pending = window._pendingDeleteGroup;
+    document.getElementById('groupDeletePopup').style.display = 'none';
+    window._pendingDeleteGroup = null;
+    if (!pending) return;
+    const { gName, type } = pending;
+    if (type === 'bookmark') {
+        delete bookmarkGroupMetadata[gName];
+        if (alsoDeleteItems) {
+            bookmarks = bookmarks.filter(b => b.group !== gName);
+        } else {
+            bookmarks.forEach(b => { if (b.group === gName) b.group = ''; });
+        }
+        bookmarkGroupOrder = bookmarkGroupOrder.filter(g => g !== gName);
+        chrome.storage.sync.set({ bookmarks, bookmarkGroupMetadata, bookmarkGroupOrder }, renderBookmarks);
+        return;
+    }
+    delete groupMetadata[gName];
+    if (type === 'note') {
+        if (alsoDeleteItems) {
+            notes = notes.filter(n => n.group !== gName);
+        } else {
+            notes.forEach(n => { if (n.group === gName) n.group = ''; });
+        }
+        noteGroupOrder = noteGroupOrder.filter(g => g !== gName);
+        chrome.storage.sync.set({ notes, groupMetadata, noteGroupOrder }, renderNotes);
+    } else {
+        if (alsoDeleteItems) {
+            const removedPrompts = promts.filter(p => p.group === gName);
+            deletedPromts.push(...removedPrompts);
+            promts = promts.filter(p => p.group !== gName);
+        } else {
+            promts.forEach(p => { if (p.group === gName) p.group = ''; });
+        }
+        groupOrder = groupOrder.filter(g => g !== gName);
+        chrome.storage.sync.set({ promts, deletedPromts, groupMetadata, groupOrder }, render);
+    }
+}
+
+document.getElementById('groupDeleteAllBtn').addEventListener('click', () => finishGroupDelete(true));
+document.getElementById('groupDeleteKeepItemsBtn').addEventListener('click', () => finishGroupDelete(false));
+document.getElementById('groupDeleteCancelBtn').addEventListener('click', () => {
+    document.getElementById('groupDeletePopup').style.display = 'none';
+    window._pendingDeleteGroup = null;
+});
+
 // Kontextmenü-Trigger für Rechtsklick auf Reiter
 document.addEventListener('contextmenu', (e) => {
     const btn = e.target.closest('.tab-btn');
     if (btn) {
         e.preventDefault();
+        document.getElementById('promptContextMenu').style.display = 'none';
+        document.getElementById('groupContextMenu').style.display = 'none';
         const menu = document.getElementById('tabContextMenu');
         const key = btn.dataset.tab;
-        
-        let x = e.clientX;
-        let y = e.clientY;
-        
-        if (x + 150 > window.innerWidth) x = window.innerWidth - 160;
-        if (y + 130 > window.innerHeight) y = window.innerHeight - 140;
-        
-        menu.style.left = x + 'px';
-        menu.style.top = y + 'px';
-        menu.style.display = 'block';
+
         menu.dataset.activeKey = key;
-        
         document.getElementById('tabColorPicker').value = tabColors[key] || '#ff8c00';
+        document.getElementById('tabRenameInput').value = tabLabels[key] || tabNames[key] || key;
+        document.getElementById('tabIconInput').value = tabIcons[key] || '';
+        document.getElementById('tabIconOnlyInput').checked = !!tabIconOnly[key];
+
+        // Menü zunächst unsichtbar positionieren, um die tatsächliche Größe zu messen,
+        // damit es garantiert im sichtbaren Bereich bleibt (unabhängig vom Inhalt)
+        menu.style.visibility = 'hidden';
+        menu.style.left = '0px';
+        menu.style.top = '0px';
+        menu.style.display = 'block';
+        requestAnimationFrame(() => {
+            const rect = menu.getBoundingClientRect();
+            let x = Math.min(e.clientX, window.innerWidth - rect.width - 5);
+            let y = Math.min(e.clientY, window.innerHeight - rect.height - 5);
+            x = Math.max(5, x);
+            y = Math.max(5, y);
+            menu.style.left = x + 'px';
+            menu.style.top = y + 'px';
+            menu.style.visibility = 'visible';
+        });
     }
 });
 
@@ -1873,6 +3884,101 @@ document.getElementById('resetTabColorBtn').addEventListener('click', () => {
         applyTabColors();
         document.getElementById('tabContextMenu').style.display = 'none';
     }
+});
+
+document.getElementById('tabRenameApplyBtn').addEventListener('click', () => {
+    const key = document.getElementById('tabContextMenu').dataset.activeKey;
+    if (!key) return;
+    const newLabel = document.getElementById('tabRenameInput').value.trim();
+    if (!newLabel || newLabel === (tabNames[key] || key)) {
+        delete tabLabels[key];
+    } else {
+        tabLabels[key] = newLabel;
+    }
+    chrome.storage.sync.set({ tabLabels }, () => {
+        renderTabsNavigation();
+        applyTabColors();
+        document.getElementById('tabContextMenu').style.display = 'none';
+    });
+});
+
+document.getElementById('tabIconInput').addEventListener('input', (e) => {
+    const key = document.getElementById('tabContextMenu').dataset.activeKey;
+    if (!key) return;
+    const icon = e.target.value.trim();
+    if (icon) tabIcons[key] = icon; else delete tabIcons[key];
+    delete tabCustomIcons[key];
+    chrome.storage.sync.set({ tabIcons }, () => {
+        chrome.storage.local.set({ tabCustomIcons }, () => {
+            renderTabsNavigation();
+            applyTabColors();
+        });
+    });
+});
+
+document.getElementById('tabIconQuickPick').addEventListener('click', (e) => {
+    const btn = e.target.closest('.tab-icon-pick');
+    if (!btn) return;
+    const key = document.getElementById('tabContextMenu').dataset.activeKey;
+    if (!key) return;
+    tabIcons[key] = btn.dataset.icon;
+    delete tabCustomIcons[key];
+    document.getElementById('tabIconInput').value = btn.dataset.icon;
+    chrome.storage.sync.set({ tabIcons }, () => {
+        chrome.storage.local.set({ tabCustomIcons }, () => {
+            renderTabsNavigation();
+            applyTabColors();
+        });
+    });
+});
+
+document.getElementById('tabIconUploadBtn').addEventListener('click', () => {
+    document.getElementById('tabIconFileInput').click();
+});
+
+document.getElementById('tabIconFileInput').addEventListener('change', (e) => {
+    const file = e.target.files[0];
+    e.target.value = '';
+    if (!file) return;
+    const key = document.getElementById('tabContextMenu').dataset.activeKey;
+    if (!key) return;
+    const reader = new FileReader();
+    reader.onload = (event) => {
+        tabCustomIcons[key] = event.target.result;
+        delete tabIcons[key];
+        document.getElementById('tabIconInput').value = '';
+        chrome.storage.local.set({ tabCustomIcons }, () => {
+            chrome.storage.sync.set({ tabIcons }, () => {
+                renderTabsNavigation();
+                applyTabColors();
+            });
+        });
+    };
+    reader.readAsDataURL(file);
+});
+
+document.getElementById('tabIconClearBtn').addEventListener('click', () => {
+    const key = document.getElementById('tabContextMenu').dataset.activeKey;
+    if (!key) return;
+    delete tabIcons[key];
+    delete tabCustomIcons[key];
+    document.getElementById('tabIconInput').value = '';
+    chrome.storage.sync.set({ tabIcons }, () => {
+        chrome.storage.local.set({ tabCustomIcons }, () => {
+            renderTabsNavigation();
+            applyTabColors();
+        });
+    });
+});
+
+document.getElementById('tabIconOnlyInput').addEventListener('change', (e) => {
+    const key = document.getElementById('tabContextMenu').dataset.activeKey;
+    if (!key) return;
+    if (e.target.checked) tabIconOnly[key] = true; else delete tabIconOnly[key];
+    chrome.storage.sync.set({ tabIconOnly }, () => {
+        renderTabsNavigation();
+        applyTabColors();
+    });
 });
 
 document.getElementById('moveTabLeftBtn').addEventListener('click', () => {
@@ -1903,6 +4009,13 @@ document.getElementById('moveTabRightBtn').addEventListener('click', () => {
             document.getElementById('tabContextMenu').style.display = 'none';
         });
     }
+});
+
+document.addEventListener('click', () => {
+    document.getElementById('promptContextMenu').style.display = 'none';
+    document.getElementById('noteContextMenu').style.display = 'none';
+    document.getElementById('bookmarkContextMenu').style.display = 'none';
+    document.getElementById('groupContextMenu').style.display = 'none';
 });
 
 loadData();
