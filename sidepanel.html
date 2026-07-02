@@ -9,7 +9,7 @@
     <button id="trashToggleBtn" class="btn-icon-elegant top-btn" title="Papierkorb öffnen">🗑️</button>
     <div style="display:flex; flex-direction:column; align-items:center; gap:1px;">
       <button id="backupToggleBtn" class="btn-icon-elegant top-btn" title="Backup & Sync Manager">🛡️ Backup & Sync</button>
-      <span id="addonVersionLabel" style="font-size:9px; opacity:0.4; line-height:1;"></span>
+      <span style="font-size:9px; opacity:0.4; line-height:1;">K-Sidebar <span id="addonVersionLabel"></span></span>
     </div>
     <button id="themeToggle" class="theme-btn">◑</button>
   </div>
@@ -488,10 +488,10 @@
     <div class="field-block">
       <label class="field-label">Aufnahme-Methode</label>
       <div class="method-toggle">
-        <button class="method-btn" id="methodBtn1" data-method="1" title="Selektor-basiert: findet Elemente anhand CSS-Selektor">Methode 1 – Selektor<small>Merkt sich Elemente anhand von CSS-Selektoren (robust bei Layout-Änderungen).</small></button>
-        <button class="method-btn active" id="methodBtn2" data-method="2" title="Koordinaten-basiert: nutzt Pixel-Position">Methode 2 – Koordinaten<small>Merkt sich exakte Bildschirmpositionen (Standard).</small></button>
-        <button class="method-btn" id="methodBtn3" data-method="3" title="Hybrid: Selektor mit Koordinaten-Fallback (empfohlen)">Methode 3 – Hybrid<small>Selektor mit Koordinaten-Fallback (empfohlen).</small></button>
-        <button class="method-btn" id="methodBtn4" data-method="4" title="Mausbewegungen: zeichnet Mausbewegungen 1:1 auf">Methode 4 – Mausbewegungen 1:1<small>Zeichnet die komplette Mausbewegung inkl. Tastatureingaben originalgetreu auf.</small></button>
+        <button class="method-btn" id="methodBtn1" data-method="1" title="Selektor-basiert: findet Elemente anhand CSS-Selektor">Methode 1 – Selektor<small>Merkt sich Elemente anhand von CSS-Selektoren (robust bei Layout-Änderungen). Zeichnet alle Tastatureingaben auf.</small></button>
+        <button class="method-btn active" id="methodBtn2" data-method="2" title="Koordinaten-basiert: nutzt Pixel-Position">Methode 2 – Koordinaten<small>Merkt sich exakte Bildschirmpositionen (Standard). Zeichnet alle Tastatureingaben auf.</small></button>
+        <button class="method-btn" id="methodBtn3" data-method="3" title="Hybrid: Selektor mit Koordinaten-Fallback (empfohlen)">Methode 3 – Hybrid<small>Selektor mit Koordinaten-Fallback (empfohlen). Zeichnet alle Tastatureingaben auf.</small></button>
+        <button class="method-btn" id="methodBtn4" data-method="4" title="Mausbewegungen: zeichnet Mausbewegungen 1:1 auf">Methode 4 – Mausbewegungen 1:1<small>Zeichnet die komplette Mausbewegung inkl. aller Tastatureingaben originalgetreu auf, auch über mehrere Tabs/Seiten hinweg.</small></button>
       </div>
       <input type="hidden" id="makroMethodInput" value="2">
     </div>
@@ -662,10 +662,10 @@
     </div>
     <p style="font-size:12px; opacity:0.7; margin:0;">Wähle die Aufnahme-Methode:</p>
     <div class="method-toggle" style="margin-top:8px;">
-      <button class="method-btn" id="dialogMethodBtn1" data-method="1" title="Selektor-basiert: mehr Schritt-Typen">Methode 1 – Selektor<small>Merkt sich Elemente anhand von CSS-Selektoren (robust bei Layout-Änderungen).</small></button>
-      <button class="method-btn active" id="dialogMethodBtn2" data-method="2" title="Koordinaten-basiert">Methode 2 – Koordinaten<small>Merkt sich exakte Bildschirmpositionen (Standard).</small></button>
-      <button class="method-btn" id="dialogMethodBtn3" data-method="3" title="Hybrid: Selektor + Koordinaten-Fallback">Methode 3 – Hybrid<small>Selektor mit Koordinaten-Fallback (empfohlen).</small></button>
-      <button class="method-btn" id="dialogMethodBtn4" data-method="4" title="Mausbewegungen 1:1 aufzeichnen">Methode 4 – Mausbewegungen 1:1<small>Zeichnet die komplette Mausbewegung inkl. Tastatureingaben originalgetreu auf.</small></button>
+      <button class="method-btn" id="dialogMethodBtn1" data-method="1" title="Selektor-basiert: mehr Schritt-Typen">Methode 1 – Selektor<small>Merkt sich Elemente anhand von CSS-Selektoren (robust bei Layout-Änderungen). Zeichnet alle Tastatureingaben auf.</small></button>
+      <button class="method-btn active" id="dialogMethodBtn2" data-method="2" title="Koordinaten-basiert">Methode 2 – Koordinaten<small>Merkt sich exakte Bildschirmpositionen (Standard). Zeichnet alle Tastatureingaben auf.</small></button>
+      <button class="method-btn" id="dialogMethodBtn3" data-method="3" title="Hybrid: Selektor + Koordinaten-Fallback">Methode 3 – Hybrid<small>Selektor mit Koordinaten-Fallback (empfohlen). Zeichnet alle Tastatureingaben auf.</small></button>
+      <button class="method-btn" id="dialogMethodBtn4" data-method="4" title="Mausbewegungen 1:1 aufzeichnen">Methode 4 – Mausbewegungen 1:1<small>Zeichnet die komplette Mausbewegung inkl. aller Tastatureingaben originalgetreu auf, auch über mehrere Tabs/Seiten hinweg.</small></button>
     </div>
     <div class="editor-footer-buttons" style="margin-top:14px;">
       <button id="cancelRecordDialogBtn" class="danger-btn" style="flex:1;">✕ Abbrechen</button>

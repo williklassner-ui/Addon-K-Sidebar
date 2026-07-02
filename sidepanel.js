@@ -28,6 +28,11 @@ let recordingBuffer = [];
 let preRunMakroIdx = null;
 let recordingMethod = 2;
 let runningMakroState = null;
+// M4: verfolgt Tabs, die während einer Aufnahme besucht werden, damit Tab-/Seitenwechsel
+// als switchTab/newTab-Schritte aufgezeichnet und bei der Wiedergabe reproduziert werden können.
+let recordingTabIndexMap = {};
+let recordingNextTabIndex = 0;
+let recordingCreatedTabIds = new Set();
 
 function updatePlaybackBar() {
     const bar = document.getElementById('makroPlaybackBar');
@@ -165,6 +170,7 @@ function loadData() {
         initGroupDragDrop(document.getElementById('promptList'), false);
         initGroupDragDrop(document.getElementById('notesList'), true);
         initGroupDragDrop(document.getElementById('bookmarksList'), 'bookmark');
+        initBookmarkItemDragDrop(document.getElementById('bookmarksList'));
 
         chrome.storage.local.get({ tabCustomIcons: {} }, (localRes) => {
             tabCustomIcons = localRes.tabCustomIcons || {};
@@ -325,6 +331,7 @@ function initGroupDragDrop(containerEl, isNotes) {
     let dragSrcName = null;
 
     containerEl.addEventListener('dragstart', (e) => {
+        if (e.target.closest('.bookmark-card[draggable]')) return; // verschachtelte Lesezeichen-Karte -> initBookmarkItemDragDrop übernimmt
         const gc = e.target.closest('.group-container[draggable]');
         if (!gc) return;
         dragSrcName = gc.dataset.groupname;
@@ -385,6 +392,62 @@ function initGroupDragDrop(containerEl, isNotes) {
             groupOrder = newOrder;
             chrome.storage.sync.set({ groupOrder }, render);
         }
+    });
+}
+
+// Einzelne Lesezeichen innerhalb derselben Gruppe (bzw. innerhalb der Gruppenlosen) per
+// Drag & Drop umsortieren. Nutzt dasselbe dropEffect-Guard-Muster wie initGroupDragDrop,
+// damit der externe Lesezeichen-Import (dragover auf #bookmarksView) nicht gestört wird.
+function initBookmarkItemDragDrop(containerEl) {
+    if (!containerEl) return;
+    let dragSrcIndex = null;
+
+    containerEl.addEventListener('dragstart', (e) => {
+        const card = e.target.closest('.bookmark-card[draggable]');
+        if (!card) return;
+        dragSrcIndex = parseInt(card.dataset.bookmarkIndex, 10);
+        e.dataTransfer.effectAllowed = 'move';
+        setTimeout(() => { card.style.opacity = '0.5'; }, 0);
+    });
+
+    containerEl.addEventListener('dragend', (e) => {
+        const card = e.target.closest('.bookmark-card[draggable]');
+        if (card) card.style.opacity = '';
+        containerEl.querySelectorAll('.bookmark-card[draggable]').forEach(el => { el.style.outline = ''; });
+        dragSrcIndex = null;
+    });
+
+    containerEl.addEventListener('dragover', (e) => {
+        if (dragSrcIndex === null) return; // kein interner Karten-Drag aktiv -> externen Import-Listener nicht stören
+        const card = e.target.closest('.bookmark-card[draggable]');
+        if (!card) return;
+        const targetIndex = parseInt(card.dataset.bookmarkIndex, 10);
+        if ((bookmarks[targetIndex] && bookmarks[targetIndex].group) !== (bookmarks[dragSrcIndex] && bookmarks[dragSrcIndex].group)) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+        if (targetIndex !== dragSrcIndex) card.style.outline = '2px dashed var(--accent, #ff8c00)';
+    });
+
+    containerEl.addEventListener('dragleave', (e) => {
+        const card = e.target.closest('.bookmark-card[draggable]');
+        if (card) card.style.outline = '';
+    });
+
+    containerEl.addEventListener('drop', (e) => {
+        const card = e.target.closest('.bookmark-card[draggable]');
+        if (!card || dragSrcIndex === null) return;
+        const targetIndex = parseInt(card.dataset.bookmarkIndex, 10);
+        card.style.outline = '';
+        if (targetIndex === dragSrcIndex) return;
+        if ((bookmarks[targetIndex] && bookmarks[targetIndex].group) !== (bookmarks[dragSrcIndex] && bookmarks[dragSrcIndex].group)) return;
+        e.preventDefault();
+
+        const targetBookmark = bookmarks[targetIndex];
+        const [moved] = bookmarks.splice(dragSrcIndex, 1);
+        const newTargetIndex = bookmarks.indexOf(targetBookmark);
+        bookmarks.splice(newTargetIndex, 0, moved);
+        dragSrcIndex = null;
+        chrome.storage.sync.set({ bookmarks }, renderBookmarks);
     });
 }
 
@@ -648,7 +711,7 @@ function faviconUrl(pageUrl) {
 function getBookmarkCardHtml(b, i) {
     const favicon = b.url ? faviconUrl(b.url) : '';
     return `
-        <div class="bookmark-card" style="border-left: 3px solid ${b.color || '#ff8c00'}">
+        <div class="bookmark-card" draggable="true" data-bookmark-index="${i}" style="border-left: 3px solid ${b.color || '#ff8c00'}">
             <div class="card-header">
                 <div class="prompt-info" data-bookmark-action="open" data-index="${i}" title="In neuem Tab öffnen">
                     <span class="bookmark-favicon-wrap" style="display:inline-flex; width:16px; height:16px; align-items:center; justify-content:center; flex-shrink:0;">${favicon ? `<img class="bookmark-favicon" src="${favicon}" data-fallback="🔖" style="width:14px; height:14px; object-fit:contain;">` : '🔖'}</span>
@@ -676,7 +739,7 @@ function renderMakros() {
 
     mList.innerHTML = makros.map((m, i) => {
         const stepsCount = m.steps ? m.steps.length : 0;
-        const stepIcon = (s) => ({ click:'🖱', type:'⌨', wait:'⏱', waitForReload:'🔄', navigate:'🌐', scroll:'🔃', keypress:'⌨', select:'☰', doubleclick:'🖱🖱', rightclick:'🖱❯', hover:'↗' }[s.type] || '▸');
+        const stepIcon = (s) => ({ click:'🖱', type:'⌨', wait:'⏱', waitForReload:'🔄', navigate:'🌐', scroll:'🔃', keypress:'⌨', select:'☰', doubleclick:'🖱🖱', rightclick:'🖱❯', hover:'↗', switchTab:'⇄', newTab:'🗗', mousemovepath:'↝' }[s.type] || '▸');
         const stepDesc = (s) => {
             if (s.type === 'click') return `Klick @ (${s._px},${s._py})`;
             if (s.type === 'type') return `Text: "${(s.value||'').slice(0,28)}"`;
@@ -1174,23 +1237,20 @@ function injectRecorder(tabId) {
                 document.addEventListener('scroll', window._makroScrollHandler, { capture: true, passive: true });
                 document.addEventListener('change', window._makroSelectHandler, { capture: true });
             }
-            if (method === 1 || method === 2 || method === 3) {
-                // M1/M2/M3: keydown (only special/combo keys)
-                window._makroKeyHandler = (e) => {
-                    try {
-                        const special = ['Enter','Tab','Escape','Backspace','Delete','ArrowUp','ArrowDown','ArrowLeft','ArrowRight'];
-                        const isCombo = e.ctrlKey || e.altKey || e.metaKey;
-                        const isFKey = e.key && e.key.match(/^F\d+$/);
-                        if (!special.includes(e.key) && !isCombo && !isFKey) return;
-                        const modifiers = [];
-                        if (e.ctrlKey) modifiers.push('ctrl');
-                        if (e.shiftKey) modifiers.push('shift');
-                        if (e.altKey) modifiers.push('alt');
-                        chrome.runtime.sendMessage({ _makroRecStep: { type: 'keypress', key: e.key, modifiers } });
-                    } catch(err) {}
-                };
-                document.addEventListener('keydown', window._makroKeyHandler, { capture: true });
-            }
+            // Alle Methoden: jede Tastatureingabe aufzeichnen, exakt wie eingegeben (nur reine
+            // Modifier-Tastendrücke ohne weitere Taste werden übersprungen).
+            window._makroKeyHandler = (e) => {
+                try {
+                    const pureModifier = ['Shift','Control','Alt','Meta','CapsLock'].includes(e.key);
+                    if (pureModifier) return;
+                    const modifiers = [];
+                    if (e.ctrlKey) modifiers.push('ctrl');
+                    if (e.shiftKey) modifiers.push('shift');
+                    if (e.altKey) modifiers.push('alt');
+                    chrome.runtime.sendMessage({ _makroRecStep: { type: 'keypress', key: e.key, modifiers } });
+                } catch(err) {}
+            };
+            document.addEventListener('keydown', window._makroKeyHandler, { capture: true });
             if (method === 4) {
                 // M4: Mausbewegungen 1:1 aufzeichnen (throttled 40ms)
                 let _m4LastSend = 0;
@@ -1224,22 +1284,6 @@ function injectRecorder(tabId) {
                 };
                 document.addEventListener('mousemove', window._makroMoveHandler, { capture: true, passive: true });
                 document.addEventListener('click', window._makroClickHandler, { capture: true });
-
-                // M4: Tastatureingaben (Tab, Enter, etc.) ebenfalls aufzeichnen
-                window._makroKeyHandler = (e) => {
-                    try {
-                        const special = ['Enter','Tab','Escape','Backspace','Delete','ArrowUp','ArrowDown','ArrowLeft','ArrowRight'];
-                        const isCombo = e.ctrlKey || e.altKey || e.metaKey;
-                        const isFKey = e.key && e.key.match(/^F\d+$/);
-                        if (!special.includes(e.key) && !isCombo && !isFKey) return;
-                        const modifiers = [];
-                        if (e.ctrlKey) modifiers.push('ctrl');
-                        if (e.shiftKey) modifiers.push('shift');
-                        if (e.altKey) modifiers.push('alt');
-                        chrome.runtime.sendMessage({ _makroRecStep: { type: 'keypress', key: e.key, modifiers } });
-                    } catch(err) {}
-                };
-                document.addEventListener('keydown', window._makroKeyHandler, { capture: true });
             }
         },
         args: [recordingMethod]
@@ -1273,13 +1317,45 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
         }
     }
     // Wiedergabe: auf vollständiges Neuladen zwischen Wiederholungen warten
-    if (runningMakroState && tabId === runningMakroState.tabId && changeInfo.status === 'complete') {
+    if (runningMakroState && tabId === (runningMakroState.currentTabId || runningMakroState.tabId) && changeInfo.status === 'complete') {
         runningMakroState.reloadSeen = true;
         if (runningMakroState.awaitingReload) {
             runningMakroState.awaitingReload = false;
             if (runningMakroState.fallbackTimer) { clearTimeout(runningMakroState.fallbackTimer); runningMakroState.fallbackTimer = null; }
             setTimeout(runMakroIteration, runningMakroState.repeatDelay);
         }
+    }
+});
+
+// M4: neuen Tab während der Aufnahme merken (wird bei Aktivierung als 'newTab' erkannt)
+chrome.tabs.onCreated.addListener((tab) => {
+    if (isRecording && recordingMethod === 4) {
+        recordingCreatedTabIds.add(tab.id);
+    }
+});
+
+// M4: Tab-/Seitenwechsel während der Aufnahme als switchTab/newTab-Schritt aufzeichnen,
+// damit die komplette Session (auch über mehrere Tabs hinweg) 1:1 wiedergegeben werden kann.
+chrome.tabs.onActivated.addListener(({ tabId }) => {
+    if (!isRecording || recordingMethod !== 4 || tabId === recordingTabId) return;
+    let tabIndex = recordingTabIndexMap[tabId];
+    const isNewTab = tabIndex === undefined && recordingCreatedTabIds.has(tabId);
+    if (tabIndex === undefined) {
+        tabIndex = recordingNextTabIndex++;
+        recordingTabIndexMap[tabId] = tabIndex;
+    }
+    const afterStepQueued = () => {
+        recordingTabId = tabId;
+        injectRecorder(tabId);
+    };
+    if (isNewTab) {
+        chrome.tabs.get(tabId, (tab) => {
+            recordingBuffer.push({ type: 'newTab', tabIndex, url: (tab && tab.url) || 'about:blank' });
+            afterStepQueued();
+        });
+    } else {
+        recordingBuffer.push({ type: 'switchTab', tabIndex });
+        afterStepQueued();
     }
 });
 
@@ -1317,6 +1393,9 @@ document.getElementById('startRecordBtn').addEventListener('click', () => {
         btn.classList.add('recording');
         recordingTabId = tabs[0].id;
         recordingBuffer = [];
+        recordingTabIndexMap = { [recordingTabId]: 0 };
+        recordingNextTabIndex = 1;
+        recordingCreatedTabIds = new Set();
         document.getElementById('recordingWaitBar').style.display = 'flex';
         injectRecorder(recordingTabId);
     });
@@ -1367,33 +1446,15 @@ document.getElementById('recordMakroBtn').addEventListener('click', () => {
         btn.classList.remove('recording');
         document.getElementById('recordingWaitBar').style.display = 'none';
 
+        // M4: Recorder auch in allen anderen während der Aufnahme besuchten Tabs entfernen
+        // (best-effort, da einzelne Tabs zwischenzeitlich geschlossen worden sein können).
+        Object.keys(recordingTabIndexMap).map(Number).filter(id => id !== tabs[0].id).forEach(otherTabId => {
+            chrome.scripting.executeScript({ target: { tabId: otherTabId }, func: cleanupMakroRecorderListeners }).catch(() => {});
+        });
+
         chrome.scripting.executeScript({
                 target: { tabId: tabs[0].id },
-                func: () => {
-                    if (window._makroClickHandler) document.removeEventListener('click', window._makroClickHandler, { capture: true });
-                    if (window._makroChangeHandler) document.removeEventListener('change', window._makroChangeHandler, { capture: true });
-                    if (window._makroHoverHandler) document.removeEventListener('mouseover', window._makroHoverHandler, { capture: true });
-                    if (window._makroMouseOutHandler) document.removeEventListener('mouseout', window._makroMouseOutHandler, { capture: true });
-                    if (window._makroDblClickHandler) document.removeEventListener('dblclick', window._makroDblClickHandler, { capture: true });
-                    if (window._makroContextHandler) document.removeEventListener('contextmenu', window._makroContextHandler, { capture: true });
-                    if (window._makroKeyHandler) document.removeEventListener('keydown', window._makroKeyHandler, { capture: true });
-                    if (window._makroScrollHandler) document.removeEventListener('scroll', window._makroScrollHandler, { capture: true });
-                    if (window._makroSelectHandler) document.removeEventListener('change', window._makroSelectHandler, { capture: true });
-                    if (window._makroMoveHandler) document.removeEventListener('mousemove', window._makroMoveHandler, { capture: true });
-
-                    delete window._makroClickHandler; delete window._makroChangeHandler;
-                    delete window._makroHoverHandler; delete window._makroMouseOutHandler;
-                    delete window._makroDblClickHandler; delete window._makroContextHandler;
-                    delete window._makroKeyHandler; delete window._makroScrollHandler;
-                    delete window._makroSelectHandler; delete window._makroMoveHandler;
-                    delete window._makroRecordingActive; delete window._makroRecordingMethod;
-
-                    const s = document.getElementById('_makroStyle');
-                    if (s) s.remove();
-                    document.querySelectorAll('._makro-hover, ._makro-recorded').forEach(el => {
-                        el.classList.remove('_makro-hover', '_makro-recorded');
-                    });
-                }
+                func: cleanupMakroRecorderListeners
             }, () => {
                 const recordedSteps = recordingBuffer;
                 recordingTabId = null;
@@ -1421,6 +1482,32 @@ document.getElementById('recordMakroBtn').addEventListener('click', () => {
             });
     });
 });
+
+function cleanupMakroRecorderListeners() {
+    if (window._makroClickHandler) document.removeEventListener('click', window._makroClickHandler, { capture: true });
+    if (window._makroChangeHandler) document.removeEventListener('change', window._makroChangeHandler, { capture: true });
+    if (window._makroHoverHandler) document.removeEventListener('mouseover', window._makroHoverHandler, { capture: true });
+    if (window._makroMouseOutHandler) document.removeEventListener('mouseout', window._makroMouseOutHandler, { capture: true });
+    if (window._makroDblClickHandler) document.removeEventListener('dblclick', window._makroDblClickHandler, { capture: true });
+    if (window._makroContextHandler) document.removeEventListener('contextmenu', window._makroContextHandler, { capture: true });
+    if (window._makroKeyHandler) document.removeEventListener('keydown', window._makroKeyHandler, { capture: true });
+    if (window._makroScrollHandler) document.removeEventListener('scroll', window._makroScrollHandler, { capture: true });
+    if (window._makroSelectHandler) document.removeEventListener('change', window._makroSelectHandler, { capture: true });
+    if (window._makroMoveHandler) document.removeEventListener('mousemove', window._makroMoveHandler, { capture: true });
+
+    delete window._makroClickHandler; delete window._makroChangeHandler;
+    delete window._makroHoverHandler; delete window._makroMouseOutHandler;
+    delete window._makroDblClickHandler; delete window._makroContextHandler;
+    delete window._makroKeyHandler; delete window._makroScrollHandler;
+    delete window._makroSelectHandler; delete window._makroMoveHandler;
+    delete window._makroRecordingActive; delete window._makroRecordingMethod;
+
+    const s = document.getElementById('_makroStyle');
+    if (s) s.remove();
+    document.querySelectorAll('._makro-hover, ._makro-recorded').forEach(el => {
+        el.classList.remove('_makro-hover', '_makro-recorded');
+    });
+}
 
 function closeMakroEditMode() {
     document.getElementById('makroInputGroup').style.display = 'none';
@@ -1501,7 +1588,7 @@ function renderStepPanel() {
     const runLabel = repeat > 1 ? ` (Durchlauf ${currentRun + 1}/${repeat})` : '';
     document.getElementById('stepPlaybackCounter').textContent = `Schritt ${stepIndex + 1} / ${totalSteps}${runLabel}`;
 
-    const typeLabels = { click:'🖱 Klick', type:'⌨ Text eingeben', wait:'⏱ Pause', waitForReload:'🔄 Warten auf Reload', navigate:'🌐 Navigation', scroll:'🔃 Scrollen', keypress:'⌨ Tastendruck', select:'☰ Dropdown-Auswahl', doubleclick:'🖱🖱 Doppelklick', rightclick:'🖱❯ Rechtsklick', hover:'↗ Hover' };
+    const typeLabels = { click:'🖱 Klick', type:'⌨ Text eingeben', wait:'⏱ Pause', waitForReload:'🔄 Warten auf Reload', navigate:'🌐 Navigation', scroll:'🔃 Scrollen', keypress:'⌨ Tastendruck', select:'☰ Dropdown-Auswahl', doubleclick:'🖱🖱 Doppelklick', rightclick:'🖱❯ Rechtsklick', hover:'↗ Hover', switchTab:'⇄ Tab wechseln', newTab:'🗗 Neuer Tab', mousemovepath:'↝ Mausbewegung' };
     let desc = typeLabels[step.type] || step.type;
     if (step.type === 'click') desc += `\nZiel: ${step.target||''}\nPosition: x=${step._px}, y=${step._py}`;
     else if (step.type === 'type') desc += `\nZiel: ${step.target||''}\nWert: "${step.value||''}"`;
@@ -1512,6 +1599,7 @@ function renderStepPanel() {
     else if (step.type === 'keypress') desc += `\nTaste: ${(step.modifiers||[]).join('+')}${step.modifiers?.length?'+':''}${step.key||''}`;
     else if (step.type === 'select') desc += `\nSelektor: ${step.selector||''}\nWert: ${step.value||''}`;
     else if (['doubleclick','rightclick','hover'].includes(step.type)) desc += step.selector ? `\nSelektor: ${step.selector}` : `\nPosition: x=${step._px}, y=${step._py}`;
+    else if (step.type === 'newTab') desc += `\nURL: ${step.url||''}`;
     document.getElementById('stepPlaybackDesc').textContent = desc;
 
     // Hide all edit panels
@@ -2261,32 +2349,82 @@ function playMakroFull(tabId, m, steps, overrideRepeat) {
     runMakroIteration();
 }
 
+// M4: teilt eine Schrittliste an switchTab/newTab-Grenzen in pro-Tab-Segmente auf, damit
+// eine Aufnahme, die über mehrere Tabs/Seiten hinweg lief, beim Abspielen denselben
+// Tab-/Seitenwechseln folgen kann (Segmente ohne Tab-Wechsel ergeben genau 1 Segment,
+// Verhalten bleibt für M1-M3-Makros dadurch unverändert).
+function splitStepsIntoTabSegments(steps) {
+    const segments = [{ tabIndex: 0, enterStep: null, steps: [] }];
+    (steps || []).forEach(s => {
+        if (s.type === 'switchTab' || s.type === 'newTab') {
+            segments.push({ tabIndex: s.tabIndex, enterStep: s, steps: [] });
+        } else {
+            segments[segments.length - 1].steps.push(s);
+        }
+    });
+    return segments;
+}
+
+function waitForTabComplete(tabId, cb) {
+    let done = false;
+    const finish = () => { if (done) return; done = true; chrome.tabs.onUpdated.removeListener(listener); clearTimeout(fallback); cb(); };
+    const listener = (id, changeInfo) => { if (id === tabId && changeInfo.status === 'complete') finish(); };
+    chrome.tabs.onUpdated.addListener(listener);
+    const fallback = setTimeout(finish, 8000);
+}
+
 function runMakroIteration() {
     const st = runningMakroState;
     if (!st) return;
     updatePlaybackBar();
     st.reloadSeen = false;
-    if (st.scrollToStart && st.current === 0) {
-        const firstClickStep = (st.steps || []).find(s => ['click','doubleclick','rightclick','hover'].includes(s.type) && s._py > 0);
-        if (firstClickStep) {
-            chrome.scripting.executeScript({ target: { tabId: st.tabId }, func: (py) => { window.scrollTo({ top: py - window.innerHeight/2, behavior: 'smooth' }); }, args: [firstClickStep._py] });
+    st.tabRuntimeMap = { 0: st.tabId };
+    st.currentTabId = st.tabId;
+    runMakroSegment(splitStepsIntoTabSegments(st.steps || []), 0);
+}
+
+function runMakroSegment(segments, segIdx) {
+    const st = runningMakroState;
+    if (!st) return;
+    if (segIdx >= segments.length) { setTimeout(afterMakroIteration, 0); return; }
+    const seg = segments[segIdx];
+
+    const runOnTab = (tabId) => {
+        st.currentTabId = tabId;
+        if (st.scrollToStart && segIdx === 0 && st.current === 0) {
+            const firstClickStep = (seg.steps || []).find(s => ['click','doubleclick','rightclick','hover'].includes(s.type) && s._py > 0);
+            if (firstClickStep) {
+                chrome.scripting.executeScript({ target: { tabId }, func: (py) => { window.scrollTo({ top: py - window.innerHeight/2, behavior: 'smooth' }); }, args: [firstClickStep._py] });
+            }
         }
-    }
-    const _runSteps = () => chrome.scripting.executeScript({
-        target: { tabId: st.tabId },
-        func: injectOneRun,
-        args: [{ stepsList: st.steps, speedDelay: st.stepDelay }]
-    });
-    if (st.lockScroll) {
-        chrome.scripting.executeScript({
-            target: { tabId: st.tabId },
-            func: () => { document.documentElement.style.overflow='hidden'; document.body.style.overflow='hidden'; }
-        }).then(_runSteps);
+        const _runSteps = () => chrome.scripting.executeScript({
+            target: { tabId },
+            func: injectOneRun,
+            args: [{ stepsList: seg.steps, speedDelay: st.stepDelay }]
+        });
+        if (st.lockScroll) {
+            chrome.scripting.executeScript({
+                target: { tabId },
+                func: () => { document.documentElement.style.overflow='hidden'; document.body.style.overflow='hidden'; }
+            }).then(_runSteps);
+        } else {
+            _runSteps();
+        }
+        const dur = makroIterationDuration(seg.steps, st.stepDelay);
+        setTimeout(() => runMakroSegment(segments, segIdx + 1), dur);
+    };
+
+    if (!seg.enterStep) { runOnTab(st.tabRuntimeMap[seg.tabIndex] !== undefined ? st.tabRuntimeMap[seg.tabIndex] : st.tabId); return; }
+
+    if (seg.enterStep.type === 'newTab') {
+        chrome.tabs.create({ url: seg.enterStep.url || 'about:blank' }, (newTab) => {
+            st.tabRuntimeMap[seg.enterStep.tabIndex] = newTab.id;
+            waitForTabComplete(newTab.id, () => runOnTab(newTab.id));
+        });
     } else {
-        _runSteps();
+        const targetId = st.tabRuntimeMap[seg.enterStep.tabIndex] !== undefined ? st.tabRuntimeMap[seg.enterStep.tabIndex] : st.tabId;
+        chrome.tabs.update(targetId, { active: true }, () => runOnTab(targetId));
     }
-    const dur = makroIterationDuration(st.steps, st.stepDelay);
-    setTimeout(afterMakroIteration, dur);
 }
 
 function afterMakroIteration() {
@@ -2294,15 +2432,16 @@ function afterMakroIteration() {
     if (!st) return;
     st.current++;
     if (st.current >= st.repeat) {
+        const endTabId = st.currentTabId || st.tabId;
         if (st.lockScroll) {
-            chrome.scripting.executeScript({ target: { tabId: st.tabId }, func: () => { document.documentElement.style.overflow=''; document.body.style.overflow=''; }});
+            chrome.scripting.executeScript({ target: { tabId: endTabId }, func: () => { document.documentElement.style.overflow=''; document.body.style.overflow=''; }});
         }
         if (st.scrollToEnd) {
             const steps = st.steps || [];
             let lastClickStep = null;
             for (let i = steps.length-1; i >= 0; i--) { if (['click','doubleclick','rightclick','hover'].includes(steps[i].type) && steps[i]._py !== undefined) { lastClickStep = steps[i]; break; } }
             if (lastClickStep) {
-                chrome.scripting.executeScript({ target: { tabId: st.tabId }, func: (py) => { window.scrollTo({ top: py - window.innerHeight/2, behavior: 'smooth' }); }, args: [lastClickStep._py] });
+                chrome.scripting.executeScript({ target: { tabId: endTabId }, func: (py) => { window.scrollTo({ top: py - window.innerHeight/2, behavior: 'smooth' }); }, args: [lastClickStep._py] });
             }
         }
         runningMakroState = null;
@@ -2942,6 +3081,16 @@ bookmarksViewEl.addEventListener('drop', (e) => {
     }
 
     if (links.length === 0) return;
+
+    // Mehrere Links ohne erkannte Ordner-Gruppe (z.B. wenn Chrome beim Ordner-Drag nur
+    // text/uri-list ohne Ordnernamen liefert) -> Nutzer nach einem Gruppennamen fragen,
+    // damit der Ordner trotzdem als Gruppe importiert wird statt ungruppiert zu landen.
+    if (links.length > 1 && links.every(l => !l.group)) {
+        const folderGroup = prompt(`${links.length} Lesezeichen erkannt. Als Gruppe importieren unter dem Namen:`, 'Importierter Ordner');
+        if (folderGroup && folderGroup.trim()) {
+            links.forEach(l => { l.group = folderGroup.trim(); });
+        }
+    }
 
     const newGroupNames = new Set();
     links.forEach(l => {
