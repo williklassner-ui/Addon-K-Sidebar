@@ -362,7 +362,7 @@
   <div id="bookmarkGroupEditPopup" style="display:none; position:fixed; z-index:99999; background:var(--card-bg,#1e1e1e); border:1px solid #555; border-radius:8px; padding:12px 14px; min-width:220px; box-shadow:0 4px 16px rgba(0,0,0,0.5);">
     <div style="font-weight:600; font-size:13px; margin-bottom:10px; display:flex; align-items:center; justify-content:space-between;">
       <span>Gruppe bearbeiten</span>
-      <button id="cancelBookmarkGroupBtn" class="btn-icon" style="font-size:12px; padding:2px 6px;">✕</button>
+      <button id="cancelBookmarkGroupBtn" class="danger-btn" style="font-size:12px; padding:2px 6px;">✕</button>
     </div>
     <input type="hidden" id="editBookmarkGroupName">
     <div class="field-block" style="margin-bottom:8px;">
@@ -407,7 +407,7 @@
       <div class="input-row" style="gap:6px;">
         <button id="showStepsOnPageBtn" class="btn-icon-elegant" style="flex:1;">👁 Schritte auf Seite zeigen</button>
         <button id="applyPageEditsBtn" class="btn-icon-elegant" style="flex:1; display:none;">✓ Änderungen übernehmen</button>
-        <button id="cancelPageEditsBtn" class="btn-icon" style="display:none;">✕</button>
+        <button id="cancelPageEditsBtn" class="danger-btn" style="display:none;">✕</button>
       </div>
     </div>
 
@@ -488,13 +488,12 @@
     <div class="field-block">
       <label class="field-label">Aufnahme-Methode</label>
       <div class="method-toggle">
-        <button class="method-btn" id="methodBtn1" data-method="1" title="Selektor-basiert: findet Elemente anhand CSS-Selektor">M1 – Selektor</button>
-        <button class="method-btn active" id="methodBtn2" data-method="2" title="Koordinaten-basiert: nutzt Pixel-Position">M2 – Koordinaten</button>
-        <button class="method-btn" id="methodBtn3" data-method="3" title="Hybrid: Selektor mit Koordinaten-Fallback (empfohlen)">M3 – Hybrid</button>
-        <button class="method-btn" id="methodBtn4" data-method="4" title="Mausbewegungen: zeichnet Mausbewegungen 1:1 auf">M4 – Maus</button>
+        <button class="method-btn" id="methodBtn1" data-method="1" title="Selektor-basiert: findet Elemente anhand CSS-Selektor">Methode 1 – Selektor<small>Merkt sich Elemente anhand von CSS-Selektoren (robust bei Layout-Änderungen).</small></button>
+        <button class="method-btn active" id="methodBtn2" data-method="2" title="Koordinaten-basiert: nutzt Pixel-Position">Methode 2 – Koordinaten<small>Merkt sich exakte Bildschirmpositionen (Standard).</small></button>
+        <button class="method-btn" id="methodBtn3" data-method="3" title="Hybrid: Selektor mit Koordinaten-Fallback (empfohlen)">Methode 3 – Hybrid<small>Selektor mit Koordinaten-Fallback (empfohlen).</small></button>
+        <button class="method-btn" id="methodBtn4" data-method="4" title="Mausbewegungen: zeichnet Mausbewegungen 1:1 auf">Methode 4 – Mausbewegungen 1:1<small>Zeichnet die komplette Mausbewegung inkl. Tastatureingaben originalgetreu auf.</small></button>
       </div>
       <input type="hidden" id="makroMethodInput" value="2">
-      <small style="opacity:0.5; font-size:11px;">M1=Selektor, M2=Koordinaten, M3=Hybrid (empfohlen), M4=Mausbewegungen</small>
     </div>
 
     <div class="field-block">
@@ -516,7 +515,7 @@
   <div id="noteGroupEditPopup" style="display:none; position:fixed; z-index:99999; background:var(--card-bg,#1e1e1e); border:1px solid #555; border-radius:8px; padding:12px 14px; min-width:220px; box-shadow:0 4px 16px rgba(0,0,0,0.5);">
     <div style="font-weight:600; font-size:13px; margin-bottom:10px; display:flex; align-items:center; justify-content:space-between;">
       <span>Gruppe bearbeiten</span>
-      <button id="cancelNoteGroupBtn" class="btn-icon" style="font-size:12px; padding:2px 6px;">✕</button>
+      <button id="cancelNoteGroupBtn" class="danger-btn" style="font-size:12px; padding:2px 6px;">✕</button>
     </div>
     <input type="hidden" id="editNoteGroupName">
     <div class="field-block" style="margin-bottom:8px;">
@@ -545,7 +544,7 @@
   <div id="groupEditorGroup" style="display:none;">
     <div class="input-header">
       <h3>📁 Gruppe bearbeiten</h3>
-      <button id="cancelGroupBtn" class="btn-icon">✕</button>
+      <button id="cancelGroupBtn" class="danger-btn">✕</button>
     </div>
     <input type="hidden" id="editGroupOldName" value="">
 
@@ -652,7 +651,7 @@
       <div style="display:flex; flex-direction:column; gap:8px;">
         <button id="groupDeleteKeepItemsBtn" class="btn-icon-elegant" style="padding:10px; font-size:13px;">📤 Nur Gruppe löschen (Inhalte bleiben)</button>
         <button id="groupDeleteAllBtn" class="danger-btn">🗑️ Gruppe & Inhalte löschen</button>
-        <button id="groupDeleteCancelBtn" class="btn-icon-elegant" style="margin-top:4px;">✕ Abbrechen</button>
+        <button id="groupDeleteCancelBtn" class="danger-btn" style="margin-top:4px;">✕ Abbrechen</button>
       </div>
     </div>
   </div>
@@ -663,15 +662,14 @@
     </div>
     <p style="font-size:12px; opacity:0.7; margin:0;">Wähle die Aufnahme-Methode:</p>
     <div class="method-toggle" style="margin-top:8px;">
-      <button class="method-btn" id="dialogMethodBtn1" data-method="1" title="Selektor-basiert: mehr Schritt-Typen">M1 – Selektor</button>
-      <button class="method-btn active" id="dialogMethodBtn2" data-method="2" title="Koordinaten-basiert">M2 – Koordinaten</button>
-      <button class="method-btn" id="dialogMethodBtn3" data-method="3" title="Hybrid: Selektor + Koordinaten-Fallback">M3 – Hybrid</button>
-      <button class="method-btn" id="dialogMethodBtn4" data-method="4" title="Mausbewegungen 1:1 aufzeichnen">M4 – Maus</button>
+      <button class="method-btn" id="dialogMethodBtn1" data-method="1" title="Selektor-basiert: mehr Schritt-Typen">Methode 1 – Selektor<small>Merkt sich Elemente anhand von CSS-Selektoren (robust bei Layout-Änderungen).</small></button>
+      <button class="method-btn active" id="dialogMethodBtn2" data-method="2" title="Koordinaten-basiert">Methode 2 – Koordinaten<small>Merkt sich exakte Bildschirmpositionen (Standard).</small></button>
+      <button class="method-btn" id="dialogMethodBtn3" data-method="3" title="Hybrid: Selektor + Koordinaten-Fallback">Methode 3 – Hybrid<small>Selektor mit Koordinaten-Fallback (empfohlen).</small></button>
+      <button class="method-btn" id="dialogMethodBtn4" data-method="4" title="Mausbewegungen 1:1 aufzeichnen">Methode 4 – Mausbewegungen 1:1<small>Zeichnet die komplette Mausbewegung inkl. Tastatureingaben originalgetreu auf.</small></button>
     </div>
-    <small style="opacity:0.5; font-size:11px; display:block; margin-top:4px;">M3 empfohlen: Selektor mit Koordinaten-Fallback. M4: zeichnet Mausbewegungen auf.</small>
     <div class="editor-footer-buttons" style="margin-top:14px;">
       <button id="cancelRecordDialogBtn" class="danger-btn" style="flex:1;">✕ Abbrechen</button>
-      <button id="startRecordBtn" class="primary-btn icon-btn-large" style="flex:1;"><span class="record-dot"></span> Aufnehmen</button>
+      <button id="startRecordBtn" class="primary-btn icon-btn-large" style="flex:1;"><span class="record-dot"></span> REC</button>
     </div>
   </div>
 
@@ -734,7 +732,7 @@
       <label class="field-label">Selektor</label>
       <input type="text" id="stepEditSelector" placeholder="CSS-Selektor" style="width:100%;">
     </div>
-    <button id="stepEditSaveBtn" class="btn-icon-elegant" style="width:100%; margin-top:4px;">💾 Schritt speichern</button>
+    <button id="stepEditSaveBtn" class="primary-btn" style="width:100%; margin-top:4px;">💾 Schritt speichern</button>
 
     <div class="editor-footer-buttons" style="margin-top:12px;">
       <button id="stepPlaybackSkipBtn" class="btn-icon-elegant" style="flex:1;">⏭ Überspringen</button>

@@ -1142,20 +1142,6 @@ function injectRecorder(tabId) {
                         chrome.runtime.sendMessage({ _makroRecStep: { type: 'rightclick', selector: path, _px: px, _py: py } });
                     } catch(err) {}
                 };
-                // M1: keydown (only special/combo keys)
-                window._makroKeyHandler = (e) => {
-                    try {
-                        const special = ['Enter','Tab','Escape','Backspace','Delete','ArrowUp','ArrowDown','ArrowLeft','ArrowRight'];
-                        const isCombo = e.ctrlKey || e.altKey || e.metaKey;
-                        const isFKey = e.key && e.key.match(/^F\d+$/);
-                        if (!special.includes(e.key) && !isCombo && !isFKey) return;
-                        const modifiers = [];
-                        if (e.ctrlKey) modifiers.push('ctrl');
-                        if (e.shiftKey) modifiers.push('shift');
-                        if (e.altKey) modifiers.push('alt');
-                        chrome.runtime.sendMessage({ _makroRecStep: { type: 'keypress', key: e.key, modifiers } });
-                    } catch(err) {}
-                };
                 // M1: scroll (debounced)
                 let _scrollTimer = null;
                 let _lastScrollX = window.scrollX, _lastScrollY = window.scrollY;
@@ -1185,9 +1171,25 @@ function injectRecorder(tabId) {
                 };
                 document.addEventListener('dblclick', window._makroDblClickHandler, { capture: true });
                 document.addEventListener('contextmenu', window._makroContextHandler, { capture: true });
-                document.addEventListener('keydown', window._makroKeyHandler, { capture: true });
                 document.addEventListener('scroll', window._makroScrollHandler, { capture: true, passive: true });
                 document.addEventListener('change', window._makroSelectHandler, { capture: true });
+            }
+            if (method === 1 || method === 2 || method === 3) {
+                // M1/M2/M3: keydown (only special/combo keys)
+                window._makroKeyHandler = (e) => {
+                    try {
+                        const special = ['Enter','Tab','Escape','Backspace','Delete','ArrowUp','ArrowDown','ArrowLeft','ArrowRight'];
+                        const isCombo = e.ctrlKey || e.altKey || e.metaKey;
+                        const isFKey = e.key && e.key.match(/^F\d+$/);
+                        if (!special.includes(e.key) && !isCombo && !isFKey) return;
+                        const modifiers = [];
+                        if (e.ctrlKey) modifiers.push('ctrl');
+                        if (e.shiftKey) modifiers.push('shift');
+                        if (e.altKey) modifiers.push('alt');
+                        chrome.runtime.sendMessage({ _makroRecStep: { type: 'keypress', key: e.key, modifiers } });
+                    } catch(err) {}
+                };
+                document.addEventListener('keydown', window._makroKeyHandler, { capture: true });
             }
             if (method === 4) {
                 // M4: Mausbewegungen 1:1 aufzeichnen (throttled 40ms)
@@ -2880,19 +2882,22 @@ document.getElementById('searchBookmarksInput').addEventListener('input', (e) =>
 });
 
 // Lesezeichen per Drag & Drop importieren (einzelne Links, mehrere Links oder ganze Ordner aus der Lesezeichenleiste)
-const bookmarksListEl = document.getElementById('bookmarksList');
-bookmarksListEl.addEventListener('dragover', (e) => {
+// Listener hängen am gesamten Tab-Bereich (#bookmarksView), nicht nur an der (bei wenigen
+// Einträgen sehr kleinen) #bookmarksList, damit auch ein Drop im "leeren" Bereich unterhalb
+// der Liste erkannt wird und nicht die Browser-Standardaktion (Link in neuem Tab öffnen) greift.
+const bookmarksViewEl = document.getElementById('bookmarksView');
+bookmarksViewEl.addEventListener('dragover', (e) => {
     e.preventDefault();
-    bookmarksListEl.classList.add('bookmarks-dropzone-active');
+    bookmarksViewEl.classList.add('bookmarks-dropzone-active');
 });
-bookmarksListEl.addEventListener('dragleave', (e) => {
-    if (!bookmarksListEl.contains(e.relatedTarget)) {
-        bookmarksListEl.classList.remove('bookmarks-dropzone-active');
+bookmarksViewEl.addEventListener('dragleave', (e) => {
+    if (!bookmarksViewEl.contains(e.relatedTarget)) {
+        bookmarksViewEl.classList.remove('bookmarks-dropzone-active');
     }
 });
-bookmarksListEl.addEventListener('drop', (e) => {
+bookmarksViewEl.addEventListener('drop', (e) => {
     e.preventDefault();
-    bookmarksListEl.classList.remove('bookmarks-dropzone-active');
+    bookmarksViewEl.classList.remove('bookmarks-dropzone-active');
 
     const links = [];
     const seenUrls = new Set();
