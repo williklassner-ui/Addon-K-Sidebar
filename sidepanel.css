@@ -70,9 +70,9 @@ body { font-family: system-ui, -apple-system, sans-serif; margin: 0; display: fl
 #mainContainer { flex: 1; display: flex; flex-direction: column; overflow: hidden; position: relative; }
 
 .tabs-nav { position: fixed; bottom: 0; left: 0; right: 0; display: flex; flex-wrap: wrap; border-top: 1px solid #333; border-bottom: none !important; flex-shrink: 0; padding: 0; background: var(--bg-color); z-index: 1010; }
-.tab-btn { flex: 1; min-width: 70px; padding: 12px 4px; border: none !important; border-top: 3px solid transparent !important; border-bottom: none !important; border-radius: 0 !important; background: transparent; opacity: 0.6; font-weight: 600; font-size: 11px; text-transform: uppercase; text-align: center; white-space: normal; word-break: break-word; }
-.tab-btn.active { opacity: 1; border-top-color: var(--accent) !important; color: var(--accent) !important; }
-.tab-btn:hover { opacity: 0.9; }
+.tab-btn { flex: 1; min-width: 70px; padding: 12px 4px; border: none !important; border-top: 3px solid transparent !important; border-bottom: none !important; border-radius: 0 !important; background: transparent; font-weight: 600; font-size: 11px; text-transform: uppercase; text-align: center; white-space: normal; word-break: break-word; text-shadow: 0 1px 2px rgba(0,0,0,0.5); }
+.tab-btn.active { border-top-color: var(--accent) !important; color: var(--accent) !important; }
+.tab-btn:hover { box-shadow: 0 0 10px 2px var(--tab-glow-color, var(--accent)); }
 
 .tab-view { flex: 1; overflow-y: auto; padding: 15px 15px 55px 15px; display: flex; flex-direction: column; }
 .header { display: flex; gap: 10px; margin-bottom: 15px; flex-shrink: 0; align-items: center; }

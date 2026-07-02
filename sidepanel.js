@@ -201,9 +201,11 @@ function applyTabColors() {
         if (tabColors[tabKey]) {
             btn.style.setProperty('background-color', tabColors[tabKey], 'important');
             btn.style.setProperty('border-top', `3px solid ${tabColors[tabKey]}`, 'important');
+            btn.style.setProperty('--tab-glow-color', tabColors[tabKey]);
         } else {
             btn.style.removeProperty('background-color');
             btn.style.removeProperty('border-top');
+            btn.style.removeProperty('--tab-glow-color');
         }
     });
 }
