@@ -2764,7 +2764,6 @@ document.getElementById('promptList').addEventListener('click', (e) => {
             document.getElementById('editIndex').value = i;
             document.getElementById('titleInput').value = p.title || '';
             document.getElementById('textInput').value = p.text || '';
-            autoResizeTextInput();
             document.getElementById('promptColor').value = p.color || '#ff8c00';
             document.getElementById('shortcutInput').value = p.shortcut || '';
             populateProviderDropdowns();
@@ -2782,6 +2781,7 @@ document.getElementById('promptList').addEventListener('click', (e) => {
             
             document.getElementById('mainContainer').style.display = 'none';
             document.getElementById('inputGroup').style.display = 'flex';
+            autoResizeTextInput();
             renderRecentColors();
         }
     } 
