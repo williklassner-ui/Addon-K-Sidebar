@@ -6,6 +6,38 @@ if (chrome.sidePanel && typeof chrome.sidePanel.setPanelBehavior === 'function')
   console.log("Mobilgerät oder SidePanel nicht unterstützt. Nutze Popup-Modus.");
 }
 
+// Persistente Tab-Titel-Überschreibung
+function applyTabTitleOverride(tabId, url) {
+    if (!url || url.startsWith('chrome://') || url.startsWith('edge://') || url.startsWith('about:') || url.startsWith('chrome-extension://')) return;
+    chrome.storage.sync.get({ tabTitleOverrides: {} }, ({ tabTitleOverrides }) => {
+        const customTitle = tabTitleOverrides[url];
+        if (!customTitle) return;
+        chrome.scripting.executeScript({
+            target: { tabId },
+            func: (title) => {
+                document.title = title;
+                // MutationObserver hält den Titel gegen SPA-Überschreibungen
+                const titleEl = document.querySelector('title');
+                if (!titleEl) return;
+                const obs = new MutationObserver(() => { if (document.title !== title) document.title = title; });
+                obs.observe(titleEl, { childList: true, subtree: true, characterData: true });
+                setTimeout(() => obs.disconnect(), 30000);
+            },
+            args: [customTitle]
+        }).catch(() => {});
+    });
+}
+
+chrome.tabs.onUpdated.addListener((tabId, info, tab) => {
+    if (info.status === 'complete' && tab.url) applyTabTitleOverride(tabId, tab.url);
+});
+
+chrome.tabs.onActivated.addListener(({ tabId }) => {
+    chrome.tabs.get(tabId, (tab) => {
+        if (tab && tab.url) applyTabTitleOverride(tabId, tab.url);
+    });
+});
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === "executeInsertion" && message.text) {
     chrome.tabs.query({ active: true, currentWindow: true }, async (tabs) => {
