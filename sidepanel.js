@@ -4319,4 +4319,49 @@ document.addEventListener('click', () => {
     document.getElementById('groupContextMenu').style.display = 'none';
 });
 
+// Browser-Tab umbenennen
+let _renameTabId = null;
+
+document.getElementById('renameTabBtn').addEventListener('click', () => {
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        if (!tabs || !tabs[0]) return;
+        _renameTabId = tabs[0].id;
+        document.getElementById('renameTabInput').value = tabs[0].title || '';
+        const overlay = document.getElementById('renameTabOverlay');
+        overlay.style.display = 'block';
+        document.getElementById('renameTabInput').focus();
+        document.getElementById('renameTabInput').select();
+    });
+});
+
+function applyRenameTab() {
+    const newTitle = document.getElementById('renameTabInput').value.trim();
+    if (!newTitle || _renameTabId === null) {
+        document.getElementById('renameTabOverlay').style.display = 'none';
+        return;
+    }
+    chrome.scripting.executeScript({
+        target: { tabId: _renameTabId },
+        func: (t) => { document.title = t; },
+        args: [newTitle]
+    });
+    document.getElementById('renameTabOverlay').style.display = 'none';
+    _renameTabId = null;
+}
+
+document.getElementById('renameTabApplyBtn').addEventListener('click', applyRenameTab);
+
+document.getElementById('renameTabCancelBtn').addEventListener('click', () => {
+    document.getElementById('renameTabOverlay').style.display = 'none';
+    _renameTabId = null;
+});
+
+document.getElementById('renameTabInput').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') applyRenameTab();
+    if (e.key === 'Escape') {
+        document.getElementById('renameTabOverlay').style.display = 'none';
+        _renameTabId = null;
+    }
+});
+
 loadData();
