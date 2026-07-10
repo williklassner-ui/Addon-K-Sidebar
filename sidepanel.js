@@ -12,6 +12,7 @@ let savedSessions = [];
 let groupMetadata = {};
 let bookmarkGroupMetadata = {};
 let tabColors = {};
+let tabTextColors = {};
 let tabIcons = {};
 let tabIconOnly = {};
 let tabLabels = {};
@@ -106,6 +107,7 @@ function loadData() {
         bookmarkGroupMetadata: {},
         savedSessions: [],
         tabColors: {},
+        tabTextColors: {},
         tabIcons: {},
         tabIconOnly: {},
         tabLabels: {},
@@ -125,6 +127,7 @@ function loadData() {
         bookmarkGroupMetadata = res.bookmarkGroupMetadata || {};
         savedSessions = res.savedSessions || [];
         tabColors = res.tabColors || {};
+        tabTextColors = res.tabTextColors || {};
         tabIcons = res.tabIcons || {};
         tabIconOnly = res.tabIconOnly || {};
         tabLabels = res.tabLabels || {};
@@ -212,6 +215,11 @@ function applyTabColors() {
             btn.style.removeProperty('background-color');
             btn.style.removeProperty('border-top');
             btn.style.removeProperty('--tab-glow-color');
+        }
+        if (tabTextColors[tabKey]) {
+            btn.style.setProperty('color', tabTextColors[tabKey], 'important');
+        } else {
+            btn.style.removeProperty('color');
         }
     });
 }
@@ -3936,6 +3944,24 @@ document.addEventListener('contextmenu', (e) => {
     }
 });
 
+document.getElementById('ctxMovePromptUp').addEventListener('click', () => {
+    const menu = document.getElementById('promptContextMenu');
+    const idx = parseInt(menu.dataset.index);
+    menu.style.display = 'none';
+    if (isNaN(idx) || idx <= 0) return;
+    [promts[idx - 1], promts[idx]] = [promts[idx], promts[idx - 1]];
+    chrome.storage.sync.set({ promts }, render);
+});
+
+document.getElementById('ctxMovePromptDown').addEventListener('click', () => {
+    const menu = document.getElementById('promptContextMenu');
+    const idx = parseInt(menu.dataset.index);
+    menu.style.display = 'none';
+    if (isNaN(idx) || idx >= promts.length - 1) return;
+    [promts[idx], promts[idx + 1]] = [promts[idx + 1], promts[idx]];
+    chrome.storage.sync.set({ promts }, render);
+});
+
 document.getElementById('ctxDuplicatePrompt').addEventListener('click', () => {
     const menu = document.getElementById('promptContextMenu');
     const idx = parseInt(menu.dataset.index);
@@ -4036,6 +4062,42 @@ document.getElementById('ctxDeleteBookmark').addEventListener('click', () => {
     if (isNaN(idx) || !bookmarks[idx]) return;
     bookmarks.splice(idx, 1);
     chrome.storage.sync.set({ bookmarks }, renderBookmarks);
+});
+
+document.getElementById('ctxMoveGroupUp').addEventListener('click', () => {
+    const menu = document.getElementById('groupContextMenu');
+    const gName = menu.dataset.group;
+    const type = menu.dataset.type;
+    menu.style.display = 'none';
+    if (!gName) return;
+    if (type === 'prompt') {
+        const idx = groupOrder.indexOf(gName);
+        if (idx > 0) { [groupOrder[idx - 1], groupOrder[idx]] = [groupOrder[idx], groupOrder[idx - 1]]; chrome.storage.sync.set({ groupOrder }, renderPromts); }
+    } else if (type === 'note') {
+        const idx = noteGroupOrder.indexOf(gName);
+        if (idx > 0) { [noteGroupOrder[idx - 1], noteGroupOrder[idx]] = [noteGroupOrder[idx], noteGroupOrder[idx - 1]]; chrome.storage.sync.set({ noteGroupOrder }, renderNotes); }
+    } else if (type === 'bookmark') {
+        const idx = bookmarkGroupOrder.indexOf(gName);
+        if (idx > 0) { [bookmarkGroupOrder[idx - 1], bookmarkGroupOrder[idx]] = [bookmarkGroupOrder[idx], bookmarkGroupOrder[idx - 1]]; chrome.storage.sync.set({ bookmarkGroupOrder }, renderBookmarks); }
+    }
+});
+
+document.getElementById('ctxMoveGroupDown').addEventListener('click', () => {
+    const menu = document.getElementById('groupContextMenu');
+    const gName = menu.dataset.group;
+    const type = menu.dataset.type;
+    menu.style.display = 'none';
+    if (!gName) return;
+    if (type === 'prompt') {
+        const idx = groupOrder.indexOf(gName);
+        if (idx >= 0 && idx < groupOrder.length - 1) { [groupOrder[idx], groupOrder[idx + 1]] = [groupOrder[idx + 1], groupOrder[idx]]; chrome.storage.sync.set({ groupOrder }, renderPromts); }
+    } else if (type === 'note') {
+        const idx = noteGroupOrder.indexOf(gName);
+        if (idx >= 0 && idx < noteGroupOrder.length - 1) { [noteGroupOrder[idx], noteGroupOrder[idx + 1]] = [noteGroupOrder[idx + 1], noteGroupOrder[idx]]; chrome.storage.sync.set({ noteGroupOrder }, renderNotes); }
+    } else if (type === 'bookmark') {
+        const idx = bookmarkGroupOrder.indexOf(gName);
+        if (idx >= 0 && idx < bookmarkGroupOrder.length - 1) { [bookmarkGroupOrder[idx], bookmarkGroupOrder[idx + 1]] = [bookmarkGroupOrder[idx + 1], bookmarkGroupOrder[idx]]; chrome.storage.sync.set({ bookmarkGroupOrder }, renderBookmarks); }
+    }
 });
 
 document.getElementById('ctxRenameGroup').addEventListener('click', () => {
@@ -4148,6 +4210,10 @@ document.addEventListener('contextmenu', (e) => {
         document.getElementById('tabRenameInput').value = tabLabels[key] || tabNames[key] || key;
         document.getElementById('tabIconInput').value = tabIcons[key] || '';
         document.getElementById('tabIconOnlyInput').checked = !!tabIconOnly[key];
+        // Alle Sektionen beim Öffnen einklappen
+        document.getElementById('tabColorSection').style.display = 'none';
+        document.getElementById('tabTextColorSection').style.display = 'none';
+        document.getElementById('tabIconSection').style.display = 'none';
 
         // Menü zunächst unsichtbar positionieren, um die tatsächliche Größe zu messen,
         // damit es garantiert im sichtbaren Bereich bleibt (unabhängig vom Inhalt)
@@ -4310,6 +4376,58 @@ document.getElementById('moveTabRightBtn').addEventListener('click', () => {
             document.getElementById('tabContextMenu').style.display = 'none';
         });
     }
+});
+
+// Tab-Kontextmenü: Toggle-Sektionen
+function makeTabSectionToggle(btnId, sectionId) {
+    document.getElementById(btnId).addEventListener('click', (e) => {
+        e.stopPropagation();
+        const sec = document.getElementById(sectionId);
+        sec.style.display = sec.style.display === 'none' ? 'block' : 'none';
+    });
+}
+makeTabSectionToggle('tabColorSectionToggle', 'tabColorSection');
+makeTabSectionToggle('tabTextColorSectionToggle', 'tabTextColorSection');
+makeTabSectionToggle('tabIconSectionToggle', 'tabIconSection');
+
+// 64-Farben-Palette für Schriftfarbe (lazy init)
+const TAB_TEXT_COLORS_64 = [
+    '#000000','#1a1a1a','#333333','#4d4d4d','#666666','#808080','#b3b3b3','#ffffff',
+    '#ff0000','#ff4d00','#ff9900','#ffcc00','#ffff00','#99cc00','#00cc00','#00cc99',
+    '#00ccff','#0099ff','#0000ff','#6600cc','#cc00cc','#ff0099','#ff6699','#ff99cc',
+    '#cc0000','#cc3300','#cc6600','#cc9900','#999900','#336600','#006600','#006633',
+    '#006699','#003399','#000099','#330099','#660066','#990033','#993300','#996633',
+    '#ff6666','#ff9966','#ffcc66','#ffff66','#ccff66','#66ff66','#66ffcc','#66ffff',
+    '#66ccff','#6699ff','#6666ff','#9966ff','#ff66ff','#ff66cc','#ffcccc','#ffd9b3',
+    '#ffe0b3','#fff5cc','#ffffcc','#e6ffcc','#ccffcc','#ccffe6','#ccffff','#cce6ff',
+];
+let _tabTextColorPickerInited = false;
+function initTabTextColorPicker() {
+    if (_tabTextColorPickerInited) return;
+    _tabTextColorPickerInited = true;
+    const grid = document.getElementById('tabTextColorPicker64');
+    grid.innerHTML = TAB_TEXT_COLORS_64.map(c =>
+        `<button class="tab-text-color-swatch" data-color="${c}" style="background:${c}; width:22px; height:22px; border-radius:3px; border:1px solid rgba(128,128,128,0.3); cursor:pointer;" title="${c}"></button>`
+    ).join('');
+    grid.addEventListener('click', (e) => {
+        const sw = e.target.closest('.tab-text-color-swatch');
+        if (!sw) return;
+        const key = document.getElementById('tabContextMenu').dataset.activeKey;
+        if (!key) return;
+        tabTextColors[key] = sw.dataset.color;
+        chrome.storage.sync.set({ tabTextColors });
+        applyTabColors();
+    });
+}
+document.getElementById('tabTextColorSectionToggle').addEventListener('click', initTabTextColorPicker, { once: true });
+
+document.getElementById('resetTabTextColorBtn').addEventListener('click', () => {
+    const key = document.getElementById('tabContextMenu').dataset.activeKey;
+    if (!key) return;
+    delete tabTextColors[key];
+    chrome.storage.sync.set({ tabTextColors });
+    applyTabColors();
+    document.getElementById('tabContextMenu').style.display = 'none';
 });
 
 document.addEventListener('click', () => {
