@@ -4391,7 +4391,17 @@ function makeTabSectionToggle(btnId, sectionId) {
     document.getElementById(btnId).addEventListener('click', (e) => {
         e.stopPropagation();
         const sec = document.getElementById(sectionId);
-        sec.style.display = sec.style.display === 'none' ? 'block' : 'none';
+        const isOpening = sec.style.display === 'none';
+        sec.style.display = isOpening ? 'block' : 'none';
+        if (isOpening) {
+            requestAnimationFrame(() => {
+                const menu = document.getElementById('tabContextMenu');
+                const rect = menu.getBoundingClientRect();
+                if (rect.bottom > window.innerHeight - 5) {
+                    menu.style.top = Math.max(5, window.innerHeight - rect.height - 5) + 'px';
+                }
+            });
+        }
     });
 }
 makeTabSectionToggle('tabColorSectionToggle', 'tabColorSection');
