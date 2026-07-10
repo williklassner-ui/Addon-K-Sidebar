@@ -3958,7 +3958,8 @@ document.getElementById('ctxMovePromptUp').addEventListener('click', () => {
     menu.style.display = 'none';
     if (isNaN(idx) || idx <= 0) return;
     [promts[idx - 1], promts[idx]] = [promts[idx], promts[idx - 1]];
-    chrome.storage.sync.set({ promts }, render);
+    render();
+    chrome.storage.sync.set({ promts });
 });
 
 document.getElementById('ctxMovePromptDown').addEventListener('click', () => {
@@ -3967,7 +3968,8 @@ document.getElementById('ctxMovePromptDown').addEventListener('click', () => {
     menu.style.display = 'none';
     if (isNaN(idx) || idx >= promts.length - 1) return;
     [promts[idx], promts[idx + 1]] = [promts[idx + 1], promts[idx]];
-    chrome.storage.sync.set({ promts }, render);
+    render();
+    chrome.storage.sync.set({ promts });
 });
 
 document.getElementById('ctxDuplicatePrompt').addEventListener('click', () => {
