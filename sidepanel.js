@@ -3895,12 +3895,20 @@ document.addEventListener('contextmenu', (e) => {
         document.getElementById('groupContextMenu').style.display = 'none';
 
         const positionMenu = (menu) => {
-            let x = e.clientX, y = e.clientY;
-            if (x + 170 > window.innerWidth) x = window.innerWidth - 175;
-            if (y + 100 > window.innerHeight) y = window.innerHeight - 105;
-            menu.style.left = x + 'px';
-            menu.style.top = y + 'px';
+            menu.style.visibility = 'hidden';
+            menu.style.left = '0px';
+            menu.style.top = '0px';
             menu.style.display = 'block';
+            requestAnimationFrame(() => {
+                const rect = menu.getBoundingClientRect();
+                let x = Math.min(e.clientX, window.innerWidth - rect.width - 5);
+                let y = Math.min(e.clientY, window.innerHeight - rect.height - 5);
+                x = Math.max(5, x);
+                y = Math.max(5, y);
+                menu.style.left = x + 'px';
+                menu.style.top = y + 'px';
+                menu.style.visibility = 'visible';
+            });
         };
 
         if (promptCard) {
