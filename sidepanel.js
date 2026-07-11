@@ -99,13 +99,13 @@ function loadData() {
     chrome.storage.sync.get({
         promts: [],
         notes: [],
-        makros: [],
+        makros: null,
         bookmarks: [],
         deletedPromts: [],
         recentColors: [],
         groupMetadata: {},
         bookmarkGroupMetadata: {},
-        savedSessions: [],
+        savedSessions: null,
         tabColors: {},
         tabTextColors: {},
         tabIcons: {},
@@ -116,69 +116,78 @@ function loadData() {
         groupOrder: [],
         noteGroupOrder: [],
         bookmarkGroupOrder: []
-    }, (res) => {
-        promts = res.promts || [];
-        notes = res.notes || [];
-        makros = res.makros || [];
-        bookmarks = res.bookmarks || [];
-        deletedPromts = res.deletedPromts || [];
-        recentColors = res.recentColors || [];
-        groupMetadata = res.groupMetadata || {};
-        bookmarkGroupMetadata = res.bookmarkGroupMetadata || {};
-        savedSessions = res.savedSessions || [];
-        tabColors = res.tabColors || {};
-        tabTextColors = res.tabTextColors || {};
-        tabIcons = res.tabIcons || {};
-        tabIconOnly = res.tabIconOnly || {};
-        tabLabels = res.tabLabels || {};
-        tabOrder = res.tabOrder || ['prompts', 'sessions', 'notes', 'makros', 'bookmarks'];
-        customProviders = res.customProviders || [];
-        groupOrder = res.groupOrder || [];
-        noteGroupOrder = res.noteGroupOrder || [];
-        bookmarkGroupOrder = res.bookmarkGroupOrder || [];
-
-        if (!tabOrder.includes('bookmarks')) {
-            tabOrder.push('bookmarks');
-            chrome.storage.sync.set({ tabOrder });
-        }
-
-        // Migration: bestehende Lesezeichen-Gruppen (früher in gemeinsamer groupMetadata) nach bookmarkGroupMetadata übernehmen
-        let bgmMigrated = false;
-        bookmarks.forEach(b => {
-            if (b.group && b.group.trim() !== "" && !bookmarkGroupMetadata[b.group] && groupMetadata[b.group]) {
-                bookmarkGroupMetadata[b.group] = Object.assign({}, groupMetadata[b.group]);
-                bgmMigrated = true;
+    }, (syncRes) => {
+        chrome.storage.local.get({ makros: [], savedSessions: [], tabCustomIcons: {} }, (localRes) => {
+            // Migration: makros/savedSessions lagen früher in sync → nach local umziehen
+            if (syncRes.makros && syncRes.makros.length > 0 && localRes.makros.length === 0) {
+                chrome.storage.local.set({ makros: syncRes.makros });
+                chrome.storage.sync.remove('makros');
+                localRes.makros = syncRes.makros;
             }
-        });
-        if (bgmMigrated) chrome.storage.sync.set({ bookmarkGroupMetadata });
-
-        savedSessions.forEach((_, idx) => {
-            if (collapsedSessions[idx] === undefined) {
-                collapsedSessions[idx] = true;
+            if (syncRes.savedSessions && syncRes.savedSessions.length > 0 && localRes.savedSessions.length === 0) {
+                chrome.storage.local.set({ savedSessions: syncRes.savedSessions });
+                chrome.storage.sync.remove('savedSessions');
+                localRes.savedSessions = syncRes.savedSessions;
             }
-        });
 
-        renderTabsNavigation();
-        applyTabColors();
-        render();
-        renderNotes();
-        renderMakros();
-        renderBookmarks();
-        renderTrash();
-        renderRecentColors();
-        renderSessions();
-        populateGroupDropdowns();
-        populateProviderDropdowns();
-        checkSyncStatus();
-        initGroupDragDrop(document.getElementById('promptList'), false);
-        initGroupDragDrop(document.getElementById('notesList'), true);
-        initGroupDragDrop(document.getElementById('bookmarksList'), 'bookmark');
-        initBookmarkItemDragDrop(document.getElementById('bookmarksList'));
-
-        chrome.storage.local.get({ tabCustomIcons: {} }, (localRes) => {
+            promts = syncRes.promts || [];
+            notes = syncRes.notes || [];
+            makros = localRes.makros || [];
+            bookmarks = syncRes.bookmarks || [];
+            deletedPromts = syncRes.deletedPromts || [];
+            recentColors = syncRes.recentColors || [];
+            groupMetadata = syncRes.groupMetadata || {};
+            bookmarkGroupMetadata = syncRes.bookmarkGroupMetadata || {};
+            savedSessions = localRes.savedSessions || [];
             tabCustomIcons = localRes.tabCustomIcons || {};
+            tabColors = syncRes.tabColors || {};
+            tabTextColors = syncRes.tabTextColors || {};
+            tabIcons = syncRes.tabIcons || {};
+            tabIconOnly = syncRes.tabIconOnly || {};
+            tabLabels = syncRes.tabLabels || {};
+            tabOrder = syncRes.tabOrder || ['prompts', 'sessions', 'notes', 'makros', 'bookmarks'];
+            customProviders = syncRes.customProviders || [];
+            groupOrder = syncRes.groupOrder || [];
+            noteGroupOrder = syncRes.noteGroupOrder || [];
+            bookmarkGroupOrder = syncRes.bookmarkGroupOrder || [];
+
+            if (!tabOrder.includes('bookmarks')) {
+                tabOrder.push('bookmarks');
+                chrome.storage.sync.set({ tabOrder });
+            }
+
+            // Migration: bestehende Lesezeichen-Gruppen (früher in gemeinsamer groupMetadata) nach bookmarkGroupMetadata übernehmen
+            let bgmMigrated = false;
+            bookmarks.forEach(b => {
+                if (b.group && b.group.trim() !== "" && !bookmarkGroupMetadata[b.group] && groupMetadata[b.group]) {
+                    bookmarkGroupMetadata[b.group] = Object.assign({}, groupMetadata[b.group]);
+                    bgmMigrated = true;
+                }
+            });
+            if (bgmMigrated) chrome.storage.sync.set({ bookmarkGroupMetadata });
+
+            savedSessions.forEach((_, idx) => {
+                if (collapsedSessions[idx] === undefined) {
+                    collapsedSessions[idx] = true;
+                }
+            });
+
             renderTabsNavigation();
             applyTabColors();
+            render();
+            renderNotes();
+            renderMakros();
+            renderBookmarks();
+            renderTrash();
+            renderRecentColors();
+            renderSessions();
+            populateGroupDropdowns();
+            populateProviderDropdowns();
+            checkSyncStatus();
+            initGroupDragDrop(document.getElementById('promptList'), false);
+            initGroupDragDrop(document.getElementById('notesList'), true);
+            initGroupDragDrop(document.getElementById('bookmarksList'), 'bookmark');
+            initBookmarkItemDragDrop(document.getElementById('bookmarksList'));
         });
     });
 }
@@ -227,14 +236,23 @@ function applyTabColors() {
 function checkSyncStatus() {
     const statusBox = document.getElementById('syncStatusText');
     if (!statusBox) return;
-    
     try {
         chrome.storage.sync.getBytesInUse(null, (bytes) => {
             if (chrome.runtime.lastError) {
                 statusBox.innerText = "❌ Synchronisierung inaktiv (Account fehlt oder Offline)";
                 statusBox.style.color = "#cf6679";
+                return;
+            }
+            const kb = Math.round(bytes / 1024 * 10) / 10;
+            const pct = Math.round(bytes / 102400 * 100);
+            if (bytes > 92160) {
+                statusBox.innerText = `⚠️ Kritisch: ${kb} KB / 100 KB (${pct}%) — Sync gefährdet`;
+                statusBox.style.color = "#cf6679";
+            } else if (bytes > 71680) {
+                statusBox.innerText = `⚠️ ${kb} KB / 100 KB (${pct}%) — Speicher fast voll`;
+                statusBox.style.color = "#ffaa44";
             } else {
-                statusBox.innerText = "✅ Aktiv";
+                statusBox.innerText = `✅ Aktiv — ${kb} KB / 100 KB (${pct}%) verwendet`;
                 statusBox.style.color = "#4caf50";
             }
         });
@@ -977,7 +995,7 @@ document.getElementById('makrosList').addEventListener('click', (e) => {
     }
     else if (action === 'delete') {
         makros.splice(i, 1);
-        chrome.storage.sync.set({ makros }, renderMakros);
+        chrome.storage.local.set({ makros }, renderMakros);
     }
     else if (action === 'edit') {
         if (m) {
@@ -1073,7 +1091,7 @@ document.getElementById('makrosList').addEventListener('drop', (e) => {
     const steps = makros[mi].steps;
     const moved = steps.splice(stepDragSrc.si, 1)[0];
     steps.splice(si, 0, moved);
-    chrome.storage.sync.set({ makros }, renderMakros);
+    chrome.storage.local.set({ makros }, renderMakros);
 });
 
 // Recorder-Injektion (wird bei Start und nach jedem Reload/Navigation neu aufgerufen)
@@ -1513,7 +1531,7 @@ document.getElementById('recordMakroBtn').addEventListener('click', () => {
                             method: recordingMethod
                         };
                         makros.push(newMakro);
-                        chrome.storage.sync.set({ makros }, renderMakros);
+                        chrome.storage.local.set({ makros }, renderMakros);
                     }
                 } else {
                     alert("Es wurden keine Klicks oder Eingaben während der Aufnahme registriert.");
@@ -1714,7 +1732,7 @@ function syncMarkerPositions(cb) {
                         target._py = s._py;
                     }
                 });
-                chrome.storage.sync.set({ makros });
+                chrome.storage.local.set({ makros });
             }
             if (cb) cb();
         });
@@ -1775,11 +1793,11 @@ document.getElementById('stepPlaybackRunBtn').addEventListener('click', () => {
         const dur = parseInt(document.getElementById('stepEditWaitDuration').value);
         if (!isNaN(dur)) step.duration = dur;
         document.getElementById('stepPlaybackDesc').textContent = `⏱ Warte ${step.duration||1000}ms…`;
-        setTimeout(() => { chrome.storage.sync.set({ makros }); advanceStep(); }, step.duration || 1000);
+        setTimeout(() => { chrome.storage.local.set({ makros }); advanceStep(); }, step.duration || 1000);
         return;
     } else if (step.type === 'waitForReload') {
         document.getElementById('stepPlaybackDesc').textContent = '🔄 Warte auf Seitenneuladen…';
-        chrome.storage.sync.set({ makros });
+        chrome.storage.local.set({ makros });
         advanceStep();
         return;
     } else if (step.type === 'navigate') {
@@ -1918,7 +1936,7 @@ document.getElementById('stepPlaybackRunBtn').addEventListener('click', () => {
             },
             args: [step]
         });
-        chrome.storage.sync.set({ makros });
+        chrome.storage.local.set({ makros });
         advanceStep();
     });
 });
@@ -1960,7 +1978,7 @@ document.getElementById('stepEditSaveBtn').addEventListener('click', () => {
     } else if (['doubleclick','rightclick','hover'].includes(step.type)) {
         step.selector = document.getElementById('stepEditSelector').value;
     }
-    chrome.storage.sync.set({ makros }, () => {
+    chrome.storage.local.set({ makros }, () => {
         const btn = document.getElementById('stepEditSaveBtn');
         btn.textContent = '✓ Gespeichert!';
         setTimeout(() => { if (btn) btn.textContent = '💾 Schritt speichern'; }, 1500);
@@ -2678,7 +2696,7 @@ document.getElementById('saveMakroBtn').addEventListener('click', () => {
         }
 
         updateRecentColors(selectedColor);
-        chrome.storage.sync.set({ makros }, () => {
+        chrome.storage.local.set({ makros }, () => {
             closeMakroEditMode();
             renderMakros();
         });
@@ -3379,7 +3397,7 @@ document.getElementById('sessionsView').addEventListener('click', (e) => {
         const newName = prompt("Sitzungs-Name ändern:", session.name || "");
         if (newName !== null) {
             session.name = newName.trim() || "Unbenannte Session";
-            chrome.storage.sync.set({ savedSessions });
+            chrome.storage.local.set({ savedSessions });
         }
         return;
     }
@@ -3387,7 +3405,7 @@ document.getElementById('sessionsView').addEventListener('click', (e) => {
         if (confirm("Sitzung wirklich löschen?")) {
             savedSessions.splice(sIdx, 1);
             delete collapsedSessions[sIdx];
-            chrome.storage.sync.set({ savedSessions });
+            chrome.storage.local.set({ savedSessions });
         }
         return;
     }
@@ -3427,7 +3445,7 @@ document.getElementById('sessionsView').addEventListener('click', (e) => {
             }
             session.windows = savedWindows;
             if (session.tabs) delete session.tabs;
-            chrome.storage.sync.set({ savedSessions }, () => { 
+            chrome.storage.local.set({ savedSessions }, () => { 
                 alert("Session erfolgreich für alle geöffneten Fenster aktualisiert!");
             });
         });
@@ -3455,7 +3473,7 @@ document.getElementById('sessionsView').addEventListener('click', (e) => {
             const newTabTitle = prompt(`Seiten-Titel ändern für:\nURL: ${currentTab.url || "Neuer Tab"}\n\nAktueller Titel:`, currentTab.title || "");
             if (newTabTitle !== null) {
                 currentTab.title = newTabTitle.trim() || currentTab.url || "Neuer Tab";
-                chrome.storage.sync.set({ savedSessions });
+                chrome.storage.local.set({ savedSessions });
             }
         }
     }
@@ -3466,7 +3484,7 @@ document.getElementById('sessionsView').addEventListener('click', (e) => {
                 const wIdx = parseInt(target.dataset.winIdx);
                 session.windows.splice(wIdx, 1);
             }
-            chrome.storage.sync.set({ savedSessions });
+            chrome.storage.local.set({ savedSessions });
         }
     }
     else if (action === 'move-up') {
@@ -3474,7 +3492,7 @@ document.getElementById('sessionsView').addEventListener('click', (e) => {
             const temp = targetTabsArr[tIdx];
             targetTabsArr[tIdx] = targetTabsArr[tIdx - 1];
             targetTabsArr[tIdx - 1] = temp;
-            chrome.storage.sync.set({ savedSessions });
+            chrome.storage.local.set({ savedSessions });
         }
     }
     else if (action === 'move-down') {
@@ -3482,7 +3500,7 @@ document.getElementById('sessionsView').addEventListener('click', (e) => {
             const temp = targetTabsArr[tIdx];
             targetTabsArr[tIdx] = targetTabsArr[tIdx + 1];
             targetTabsArr[tIdx + 1] = temp;
-            chrome.storage.sync.set({ savedSessions });
+            chrome.storage.local.set({ savedSessions });
         }
     }
 });
@@ -3779,12 +3797,17 @@ document.getElementById('closeBackupBtn').addEventListener('click', () => {
 document.getElementById('btnExecuteBackupExport').addEventListener('click', () => {
     if(confirm("Möchtest du jetzt ein vollständiges Backup erstellen und den Speicherort festlegen?")) {
         chrome.storage.sync.get(null, (syncData) => {
-            chrome.storage.local.get({ tabCustomIcons: {} }, (localData) => {
+            chrome.storage.local.get({ tabCustomIcons: {}, makros: [], savedSessions: [] }, (localData) => {
+                const { makros: _m, savedSessions: _s, ...cleanSyncData } = syncData;
                 const totalBackup = {
-                    K_SIDEBAR_BACKUP_VERSION: "1.0.16",
+                    K_SIDEBAR_BACKUP_VERSION: "1.0.17",
                     timestamp: Date.now(),
-                    syncStorage: syncData,
-                    localStorage: { tabCustomIcons: localData.tabCustomIcons || {} }
+                    syncStorage: cleanSyncData,
+                    localStorage: {
+                        tabCustomIcons: localData.tabCustomIcons || {},
+                        makros: localData.makros || [],
+                        savedSessions: localData.savedSessions || []
+                    }
                 };
                 const blob = new Blob([JSON.stringify(totalBackup, null, 2)], { type: "application/json" });
                 const url = URL.createObjectURL(blob);
@@ -3813,8 +3836,14 @@ document.getElementById('backupFileInput').addEventListener('change', (e) => {
             const backup = JSON.parse(event.target.result);
             if (backup && backup.syncStorage) {
                 if (confirm("Achtung! Das Einspielen überschreibt alle aktuellen Daten. Fortfahren?")) {
-                    const syncToSet = backup.syncStorage || {};
-                    const localToSet = (backup.localStorage && backup.localStorage.tabCustomIcons) ? backup.localStorage : { tabCustomIcons: {} };
+                    const syncToSet = Object.assign({}, backup.syncStorage || {});
+                    delete syncToSet.makros;
+                    delete syncToSet.savedSessions;
+                    const localToSet = {
+                        tabCustomIcons: (backup.localStorage && backup.localStorage.tabCustomIcons) || {},
+                        makros: (backup.localStorage && backup.localStorage.makros) || (backup.syncStorage && backup.syncStorage.makros) || [],
+                        savedSessions: (backup.localStorage && backup.localStorage.savedSessions) || (backup.syncStorage && backup.syncStorage.savedSessions) || []
+                    };
                     chrome.storage.sync.clear(() => {
                         chrome.storage.sync.set(syncToSet, () => {
                             chrome.storage.local.set(localToSet, () => {
@@ -3872,7 +3901,7 @@ document.getElementById('saveCurrentSessionBtn').addEventListener('click', () =>
                 updatedCollapsed[parseInt(k) + 1] = collapsedSessions[k];
             });
             collapsedSessions = updatedCollapsed;
-            chrome.storage.sync.set({ savedSessions });
+            chrome.storage.local.set({ savedSessions });
         }
     });
 });
