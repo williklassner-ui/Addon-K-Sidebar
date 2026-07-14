@@ -84,6 +84,11 @@ const providerIcons = {
     'none': ''
 };
 
+function fmtDate(ts) {
+    if (!ts) return '';
+    return new Date(ts).toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric' });
+}
+
 function getEffectiveProviderIcons() {
     const merged = Object.assign({}, providerIcons);
     customProviders.forEach(cp => { merged[cp.name] = cp.icon; });
@@ -558,6 +563,7 @@ function getCardHtml(p, i) {
                 <div class="prompt-info" data-action="copy-insert" data-index="${i}">
                     ${showIcon ? `<span class="provider-icon" title="${p.provider === 'none' ? 'Keins' : (p.provider || 'Anbieter')}">${icon}</span>` : ''}
                     <span class="prompt-title">${p.title || 'Unbenannt'}</span>
+                    ${(p.createdAt || p.updatedAt) ? `<div style="font-size:10px; color:#fff; font-style:italic; margin-top:2px; opacity:0.7;">${p.createdAt ? '📅 ' + fmtDate(p.createdAt) : ''}${p.updatedAt && p.updatedAt !== p.createdAt ? ' · ✏️ ' + fmtDate(p.updatedAt) : ''}</div>` : ''}
                 </div>
                 <div class="card-actions">
                     <button class="btn-icon" data-action="toggle" data-index="${i}" title="Vorschau">👁</button>
@@ -657,6 +663,7 @@ function getNoteCardHtml(n, i) {
             <div class="card-header">
                 <div class="note-info" data-note-action="toggle-view" data-index="${i}">
                     <span class="note-title" style="font-weight:bold; color:${tileColor}; cursor:pointer;" data-note-copy-idx="${i}">${n.pinned ? '📌 ' : ''}${n.icon ? '<span class="note-card-icon">' + n.icon + '</span> ' : ''}${n.title || 'Unbenannte Notiz'}</span>
+                    ${(n.createdAt || n.updatedAt) ? `<div style="font-size:10px; color:#fff; font-style:italic; margin-top:2px; opacity:0.7;">${n.createdAt ? '📅 ' + fmtDate(n.createdAt) : ''}${n.updatedAt && n.updatedAt !== n.createdAt ? ' · ✏️ ' + fmtDate(n.updatedAt) : ''}</div>` : ''}
                 </div>
                 <div class="card-actions">
                     <button class="btn-icon" data-note-action="toggle-view" data-index="${i}" title="Vorschau">👁</button>
@@ -792,8 +799,11 @@ function renderMakros() {
                 <div class="card-header">
                     <div class="makro-info" data-makro-action="run" data-index="${i}" title="Makro abspielen">
                         <span style="color: #4caf50; font-size:12px;">▶</span>
-                        <span class="makro-title" style="font-weight:600;">${m.title || 'Unbenanntes Makro'}</span>
-                        <span style="font-size:10px; opacity:0.5;">(${stepsCount} Schritte)${(m.repeat && m.repeat > 1) ? ` <span style="color:#ff8c00;">${m.repeat}×</span>` : ''}${m.domain ? ` <span title="Aufgenommen auf ${m.domain}">🌐</span>` : ''}${m.method === 1 ? ` <span style="color:#4caf50; font-weight:700; font-size:9px; background:rgba(76,175,80,0.15); padding:1px 4px; border-radius:3px;">M1</span>` : ''}</span>
+                        <div style="display:flex; flex-direction:column; flex:1; overflow:hidden;">
+                            <span class="makro-title" style="font-weight:600;">${m.title || 'Unbenanntes Makro'}</span>
+                            <span style="font-size:10px; opacity:0.5;">(${stepsCount} Schritte)${(m.repeat && m.repeat > 1) ? ` <span style="color:#ff8c00;">${m.repeat}×</span>` : ''}${m.domain ? ` <span title="Aufgenommen auf ${m.domain}">🌐</span>` : ''}${m.method === 1 ? ` <span style="color:#4caf50; font-weight:700; font-size:9px; background:rgba(76,175,80,0.15); padding:1px 4px; border-radius:3px;">M1</span>` : ''}</span>
+                            ${(m.createdAt || m.updatedAt) ? `<div style="font-size:10px; color:#fff; font-style:italic; margin-top:2px; opacity:0.7;">${m.createdAt ? '📅 ' + fmtDate(m.createdAt) : ''}${m.updatedAt && m.updatedAt !== m.createdAt ? ' · ✏️ ' + fmtDate(m.updatedAt) : ''}</div>` : ''}
+                        </div>
                     </div>
                     <div class="card-actions">
                         <button class="btn-icon" data-makro-action="step" data-index="${i}" title="Einzelschritt-Wiedergabe">▶|</button>
@@ -904,9 +914,10 @@ function renderSessions() {
                     <div class="session-title-row" data-session-action="toggle-collapse">
                         <div class="session-title">
                             <span>${s.name || 'Unbenannte Session'}</span>
-                            <span class="session-meta">(${totalTabsCount} Tabs)</span>
+                            <span class="session-meta" style="color:orange;">${totalTabsCount} Tabs</span>
                             <span style="font-size:10px; padding-left:4px;">${isCollapsed ? '►' : '▼'}</span>
                         </div>
+                        ${(s.timestamp || s.updatedAt) ? `<div style="font-size:10px; color:#fff; font-style:italic; margin-top:2px; opacity:0.7;">${s.timestamp ? '📅 ' + fmtDate(s.timestamp) : ''}${s.updatedAt && s.updatedAt !== s.timestamp ? ' · ✏️ ' + fmtDate(s.updatedAt) : ''}</div>` : ''}
                     </div>
                     <div class="session-actions-sub">
                         <button class="btn-icon" data-session-action="update-current" title="Mit aktuellen Browser-Tabs überschreiben">🔄</button>
@@ -1528,7 +1539,9 @@ document.getElementById('recordMakroBtn').addEventListener('click', () => {
                             speedDelay: 700,
                             scrollToEnd: true,
                             domain: recDomain,
-                            method: recordingMethod
+                            method: recordingMethod,
+                            createdAt: Date.now(),
+                            updatedAt: Date.now()
                         };
                         makros.push(newMakro);
                         chrome.storage.local.set({ makros }, renderMakros);
@@ -2686,10 +2699,13 @@ document.getElementById('saveMakroBtn').addEventListener('click', () => {
             scrollToEnd: document.getElementById('makroScrollToEndInput').checked,
             lockScroll: document.getElementById('makroLockScrollInput').checked,
             domain: existingDomain,
-            method: parseInt(document.getElementById('makroMethodInput').value) || 2
+            method: parseInt(document.getElementById('makroMethodInput').value) || 2,
+            createdAt: Date.now(),
+            updatedAt: Date.now()
         };
 
         if (editIdx !== "") {
+            newMakro.createdAt = makros[parseInt(editIdx)].createdAt || Date.now();
             makros[parseInt(editIdx)] = newMakro;
         } else {
             makros.push(newMakro);
@@ -2727,6 +2743,9 @@ document.getElementById('saveMakroBtn').addEventListener('click', () => {
 document.addEventListener('click', (e) => {
     if (!e.target.closest('#tabContextMenu')) {
         document.getElementById('tabContextMenu').style.display = 'none';
+    }
+    if (!e.target.closest('#sessionContextMenu')) {
+        document.getElementById('sessionContextMenu').style.display = 'none';
     }
 
     const tabBtn = e.target.closest('.tab-btn');
@@ -3340,10 +3359,13 @@ document.getElementById('saveNoteBtn').addEventListener('click', () => {
         pinned: pinned,
         group: finalGroup,
         todos: currentEditorTodos,
-        icon: document.getElementById('noteIconInput').value.trim()
+        icon: document.getElementById('noteIconInput').value.trim(),
+        createdAt: Date.now(),
+        updatedAt: Date.now()
     };
 
     if (i !== "") {
+        newNote.createdAt = notes[parseInt(i)].createdAt || Date.now();
         notes[parseInt(i)] = newNote;
     } else {
         notes.push(newNote);
@@ -3397,6 +3419,7 @@ document.getElementById('sessionsView').addEventListener('click', (e) => {
         const newName = prompt("Sitzungs-Name ändern:", session.name || "");
         if (newName !== null) {
             session.name = newName.trim() || "Unbenannte Session";
+            session.updatedAt = Date.now();
             chrome.storage.local.set({ savedSessions });
         }
         return;
@@ -3444,8 +3467,9 @@ document.getElementById('sessionsView').addEventListener('click', (e) => {
                 return;
             }
             session.windows = savedWindows;
+            session.updatedAt = Date.now();
             if (session.tabs) delete session.tabs;
-            chrome.storage.local.set({ savedSessions }, () => { 
+            chrome.storage.local.set({ savedSessions }, () => {
                 alert("Session erfolgreich für alle geöffneten Fenster aktualisiert!");
             });
         });
@@ -3710,10 +3734,13 @@ document.getElementById('saveBtn').addEventListener('click', () => {
         color: selectedColor,
         shortcut: document.getElementById('shortcutInput').value,
         provider: document.getElementById('aiProvider').value,
-        group: finalGroup
+        group: finalGroup,
+        createdAt: Date.now(),
+        updatedAt: Date.now()
     };
 
     if (i !== "") {
+        newP.createdAt = promts[parseInt(i)].createdAt || Date.now();
         promts[parseInt(i)] = newP;
     } else {
         promts.push(newP);
@@ -3979,6 +4006,66 @@ document.addEventListener('contextmenu', (e) => {
         }
         return;
     }
+});
+
+// Session-Kontextmenü
+document.getElementById('sessionList').addEventListener('contextmenu', (e) => {
+    const card = e.target.closest('.session-card');
+    if (!card) return;
+    e.preventDefault();
+    const idx = parseInt(card.dataset.sessionIndex);
+    const menu = document.getElementById('sessionContextMenu');
+    menu.dataset.index = idx;
+    menu.style.visibility = 'hidden';
+    menu.style.left = '0px';
+    menu.style.top = '0px';
+    menu.style.display = 'block';
+    requestAnimationFrame(() => {
+        const rect = menu.getBoundingClientRect();
+        let x = Math.max(5, Math.min(e.clientX, window.innerWidth - rect.width - 5));
+        let y = Math.max(5, Math.min(e.clientY, window.innerHeight - rect.height - 5));
+        menu.style.left = x + 'px';
+        menu.style.top = y + 'px';
+        menu.style.visibility = 'visible';
+    });
+});
+
+document.getElementById('ctxMoveSessionUp').addEventListener('click', () => {
+    const menu = document.getElementById('sessionContextMenu');
+    const idx = parseInt(menu.dataset.index);
+    menu.style.display = 'none';
+    if (isNaN(idx) || idx <= 0) return;
+    [savedSessions[idx - 1], savedSessions[idx]] = [savedSessions[idx], savedSessions[idx - 1]];
+    renderSessions();
+    chrome.storage.local.set({ savedSessions });
+});
+
+document.getElementById('ctxMoveSessionDown').addEventListener('click', () => {
+    const menu = document.getElementById('sessionContextMenu');
+    const idx = parseInt(menu.dataset.index);
+    menu.style.display = 'none';
+    if (isNaN(idx) || idx >= savedSessions.length - 1) return;
+    [savedSessions[idx], savedSessions[idx + 1]] = [savedSessions[idx + 1], savedSessions[idx]];
+    renderSessions();
+    chrome.storage.local.set({ savedSessions });
+});
+
+document.getElementById('sortSessionsAZBtn').addEventListener('click', () => {
+    savedSessions.sort((a, b) => (a.name || '').localeCompare(b.name || '', 'de'));
+    renderSessions();
+    chrome.storage.local.set({ savedSessions });
+});
+
+document.getElementById('sortSessionsZABtn').addEventListener('click', () => {
+    savedSessions.sort((a, b) => (b.name || '').localeCompare(a.name || '', 'de'));
+    renderSessions();
+    chrome.storage.local.set({ savedSessions });
+});
+
+document.getElementById('sortSessionsDateBtn').addEventListener('click', () => {
+    savedSessions.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+    renderSessions();
+    chrome.storage.local.set({ savedSessions });
 });
 
 document.getElementById('ctxMovePromptUp').addEventListener('click', () => {

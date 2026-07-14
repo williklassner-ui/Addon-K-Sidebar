@@ -35,8 +35,11 @@
     </div>
 
     <div id="sessionsView" class="tab-view" style="display:none;">
-      <div class="session-actions-top">
-        <button id="saveCurrentSessionBtn" class="primary-btn" style="width:100%;">💾 geöffnete Session sichern</button>
+      <div class="session-actions-top" style="display:flex; gap:6px; align-items:center;">
+        <button id="saveCurrentSessionBtn" class="primary-btn" style="flex:1;">💾 geöffnete Session sichern</button>
+        <button id="sortSessionsAZBtn" class="btn-icon-elegant" title="A-Z sortieren" style="padding:6px 8px;">🔤</button>
+        <button id="sortSessionsZABtn" class="btn-icon-elegant" title="Z-A sortieren" style="padding:6px 8px;">🔃</button>
+        <button id="sortSessionsDateBtn" class="btn-icon-elegant" title="Nach Datum sortieren" style="padding:6px 8px;">📅</button>
       </div>
 
       <div class="session-split">
@@ -781,6 +784,11 @@
       <button id="stepPlaybackSkipBtn" class="btn-icon-elegant" style="flex:1;">⏭ Überspringen</button>
       <button id="stepPlaybackRunBtn" class="primary-btn" style="flex:1;">▶ Ausführen</button>
     </div>
+  </div>
+
+  <div id="sessionContextMenu" class="context-menu" style="display:none; position:fixed; z-index:99999; width:170px; gap:4px;">
+    <button id="ctxMoveSessionUp"   class="btn-icon-elegant" style="width:100%; text-align:left; padding:9px 10px; font-size:12px;">▲ Nach oben</button>
+    <button id="ctxMoveSessionDown" class="btn-icon-elegant" style="width:100%; text-align:left; padding:9px 10px; font-size:12px;">▼ Nach unten</button>
   </div>
 
   <div id="promptContextMenu" class="context-menu" style="display:none; position:fixed; z-index:99999; width:170px; gap:4px;">
