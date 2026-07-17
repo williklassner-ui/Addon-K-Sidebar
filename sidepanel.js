@@ -565,11 +565,6 @@ function getCardHtml(p, i) {
                     <span class="prompt-title">${p.title || 'Unbenannt'}</span>
                     ${(p.createdAt || p.updatedAt) ? `<div style="font-size:10px; color:#fff; font-style:italic; margin-top:2px; opacity:0.7;">${p.createdAt ? '📅 ' + fmtDate(p.createdAt) : ''}${p.updatedAt && p.updatedAt !== p.createdAt ? ' · ✏️ ' + fmtDate(p.updatedAt) : ''}</div>` : ''}
                 </div>
-                <div class="card-actions">
-                    <button class="btn-icon" data-action="toggle" data-index="${i}" title="Vorschau">👁</button>
-                    <button class="btn-icon" data-action="edit" data-index="${i}" title="Bearbeiten">✎</button>
-                    <button class="btn-icon" data-action="delete" data-index="${i}" title="Löschen">✕</button>
-                </div>
             </div>
             <div id="content-${i}" class="content-box">${p.text || ''}</div>
         </div>
@@ -665,11 +660,6 @@ function getNoteCardHtml(n, i) {
                     <span class="note-title" style="font-weight:bold; color:${tileColor}; cursor:pointer;" data-note-copy-idx="${i}">${n.pinned ? '📌 ' : ''}${n.icon ? '<span class="note-card-icon">' + n.icon + '</span> ' : ''}${n.title || 'Unbenannte Notiz'}</span>
                     ${(n.createdAt || n.updatedAt) ? `<div style="font-size:10px; color:#fff; font-style:italic; margin-top:2px; opacity:0.7;">${n.createdAt ? '📅 ' + fmtDate(n.createdAt) : ''}${n.updatedAt && n.updatedAt !== n.createdAt ? ' · ✏️ ' + fmtDate(n.updatedAt) : ''}</div>` : ''}
                 </div>
-                <div class="card-actions">
-                    <button class="btn-icon" data-note-action="toggle-view" data-index="${i}" title="Vorschau">👁</button>
-                    <button class="btn-icon" data-note-action="edit" data-index="${i}" title="Bearbeiten">✎</button>
-                    <button class="btn-icon" data-note-action="delete" data-index="${i}" title="Löschen">✕</button>
-                </div>
             </div>
             <div id="note-content-${i}" class="content-box" style="display:none; background:rgba(0,0,0,0.3);">
                 <div style="white-space: pre-wrap;">${n.text || ''}</div>
@@ -750,11 +740,6 @@ function getBookmarkCardHtml(b, i) {
                     <span class="bookmark-favicon-wrap" style="display:inline-flex; width:16px; height:16px; align-items:center; justify-content:center; flex-shrink:0;">${favicon ? `<img class="bookmark-favicon" src="${favicon}" data-fallback="🔖" style="width:14px; height:14px; object-fit:contain;">` : '🔖'}</span>
                     <span class="prompt-title">${b.title || 'Unbenanntes Lesezeichen'}</span>
                 </div>
-                <div class="card-actions">
-                    <button class="btn-icon" data-bookmark-action="toggle" data-index="${i}" title="Vorschau">👁</button>
-                    <button class="btn-icon" data-bookmark-action="edit" data-index="${i}" title="Bearbeiten">✎</button>
-                    <button class="btn-icon" data-bookmark-action="delete" data-index="${i}" title="Löschen">✕</button>
-                </div>
             </div>
             <div id="bookmark-content-${i}" class="content-box">${b.url || ''}</div>
         </div>
@@ -804,12 +789,6 @@ function renderMakros() {
                             <span style="font-size:10px; opacity:0.5;">(${stepsCount} Schritte)${(m.repeat && m.repeat > 1) ? ` <span style="color:#ff8c00;">${m.repeat}×</span>` : ''}${m.domain ? ` <span title="Aufgenommen auf ${m.domain}">🌐</span>` : ''}${m.method === 1 ? ` <span style="color:#4caf50; font-weight:700; font-size:9px; background:rgba(76,175,80,0.15); padding:1px 4px; border-radius:3px;">M1</span>` : ''}</span>
                             ${(m.createdAt || m.updatedAt) ? `<div style="font-size:10px; color:#fff; font-style:italic; margin-top:2px; opacity:0.7;">${m.createdAt ? '📅 ' + fmtDate(m.createdAt) : ''}${m.updatedAt && m.updatedAt !== m.createdAt ? ' · ✏️ ' + fmtDate(m.updatedAt) : ''}</div>` : ''}
                         </div>
-                    </div>
-                    <div class="card-actions">
-                        <button class="btn-icon" data-makro-action="step" data-index="${i}" title="Einzelschritt-Wiedergabe">▶|</button>
-                        <button class="btn-icon" data-makro-action="toggle-steps" data-index="${i}" title="Schritte anzeigen">👁</button>
-                        <button class="btn-icon" data-makro-action="edit" data-index="${i}" title="Bearbeiten">✎</button>
-                        <button class="btn-icon" data-makro-action="delete" data-index="${i}" title="Löschen">✕</button>
                     </div>
                 </div>
                 <div id="makro-content-${i}" class="content-box" style="display:none; padding:4px;">${stepsHtml}</div>
@@ -2747,6 +2726,9 @@ document.addEventListener('click', (e) => {
     if (!e.target.closest('#sessionContextMenu')) {
         document.getElementById('sessionContextMenu').style.display = 'none';
     }
+    if (!e.target.closest('#makroContextMenu')) {
+        document.getElementById('makroContextMenu').style.display = 'none';
+    }
 
     const tabBtn = e.target.closest('.tab-btn');
     if (tabBtn) {
@@ -3933,14 +3915,36 @@ document.getElementById('saveCurrentSessionBtn').addEventListener('click', () =>
     });
 });
 
-// Kontextmenü-Trigger für Rechtsklick auf Prompts, Notizen, Lesezeichen und Gruppen
+// Kontextmenü-Trigger für Rechtsklick auf Prompts, Notizen, Lesezeichen, Makros und Gruppen
 document.addEventListener('contextmenu', (e) => {
     const promptCard = e.target.closest('.prompt-card');
     const noteCard = e.target.closest('.note-card');
     const bookmarkCard = e.target.closest('.bookmark-card');
+    const makroCard = e.target.closest('.makro-card');
     const groupHeader = e.target.closest('.group-header[data-group]');
     const noteGroupHeader = e.target.closest('.group-header[data-notegroup]');
     const bookmarkGroupHeader = e.target.closest('.group-header[data-bookmarkgroup]');
+
+    if (makroCard) {
+        e.preventDefault();
+        const actionEl = makroCard.querySelector('[data-index]');
+        const idx = actionEl ? parseInt(actionEl.dataset.index) : -1;
+        const menu = document.getElementById('makroContextMenu');
+        menu.dataset.index = idx;
+        menu.style.visibility = 'hidden';
+        menu.style.left = '0px';
+        menu.style.top = '0px';
+        menu.style.display = 'block';
+        requestAnimationFrame(() => {
+            const rect = menu.getBoundingClientRect();
+            let x = Math.max(5, Math.min(e.clientX, window.innerWidth - rect.width - 5));
+            let y = Math.max(5, Math.min(e.clientY, window.innerHeight - rect.height - 5));
+            menu.style.left = x + 'px';
+            menu.style.top = y + 'px';
+            menu.style.visibility = 'visible';
+        });
+        return;
+    }
 
     if (promptCard || noteCard || bookmarkCard || groupHeader || noteGroupHeader || bookmarkGroupHeader) {
         e.preventDefault();
@@ -3949,6 +3953,7 @@ document.addEventListener('contextmenu', (e) => {
         document.getElementById('noteContextMenu').style.display = 'none';
         document.getElementById('bookmarkContextMenu').style.display = 'none';
         document.getElementById('groupContextMenu').style.display = 'none';
+        document.getElementById('makroContextMenu').style.display = 'none';
 
         const positionMenu = (menu) => {
             menu.style.visibility = 'hidden';
@@ -4188,6 +4193,189 @@ document.getElementById('ctxDeleteBookmark').addEventListener('click', () => {
     if (isNaN(idx) || !bookmarks[idx]) return;
     bookmarks.splice(idx, 1);
     chrome.storage.sync.set({ bookmarks }, renderBookmarks);
+});
+
+// Neue Prompt-Kontextmenü-Aktionen
+document.getElementById('ctxTogglePrompt').addEventListener('click', () => {
+    const menu = document.getElementById('promptContextMenu');
+    const idx = parseInt(menu.dataset.index);
+    menu.style.display = 'none';
+    if (isNaN(idx)) return;
+    const box = document.getElementById('content-' + idx);
+    if (box) box.style.display = box.style.display === 'block' ? 'none' : 'block';
+});
+
+document.getElementById('ctxEditPrompt').addEventListener('click', () => {
+    const menu = document.getElementById('promptContextMenu');
+    const idx = parseInt(menu.dataset.index);
+    menu.style.display = 'none';
+    if (isNaN(idx) || !promts[idx]) return;
+    const p = promts[idx];
+    document.getElementById('editIndex').value = idx;
+    document.getElementById('titleInput').value = p.title || '';
+    document.getElementById('textInput').value = p.text || '';
+    document.getElementById('promptColor').value = p.color || '#ff8c00';
+    document.getElementById('shortcutInput').value = p.shortcut || '';
+    populateProviderDropdowns();
+    document.getElementById('aiProvider').value = p.provider || 'ChatGPT';
+    populateGroupDropdowns();
+    const textInput = document.getElementById('groupInput');
+    if (p.group && p.group.trim() !== '') {
+        document.getElementById('groupSelectOptions').value = p.group;
+    } else {
+        document.getElementById('groupSelectOptions').value = '';
+    }
+    textInput.style.display = 'none';
+    textInput.value = '';
+    document.getElementById('mainContainer').style.display = 'none';
+    document.getElementById('inputGroup').style.display = 'flex';
+    autoResizeTextInput();
+    renderRecentColors();
+});
+
+// Neue Notiz-Kontextmenü-Aktionen
+document.getElementById('ctxToggleNote').addEventListener('click', () => {
+    const menu = document.getElementById('noteContextMenu');
+    const idx = parseInt(menu.dataset.index);
+    menu.style.display = 'none';
+    if (isNaN(idx)) return;
+    const box = document.getElementById('note-content-' + idx);
+    if (box) box.style.display = box.style.display === 'block' ? 'none' : 'block';
+});
+
+document.getElementById('ctxEditNote').addEventListener('click', () => {
+    const menu = document.getElementById('noteContextMenu');
+    const idx = parseInt(menu.dataset.index);
+    menu.style.display = 'none';
+    if (isNaN(idx) || !notes[idx]) return;
+    const n = notes[idx];
+    document.getElementById('editNoteIndex').value = idx;
+    document.getElementById('noteTitleInput').value = n.title || '';
+    document.getElementById('noteTextInput').value = n.text || '';
+    document.getElementById('noteColor').value = n.color || '#ff8c00';
+    document.getElementById('notePinnedInput').checked = n.pinned || false;
+    currentEditorTodos = JSON.parse(JSON.stringify(n.todos || []));
+    renderEditorTodos();
+    populateGroupDropdowns();
+    const textInput = document.getElementById('noteGroupInput');
+    if (n.group && n.group.trim() !== '') {
+        document.getElementById('noteGroupSelectOptions').value = n.group;
+    } else {
+        document.getElementById('noteGroupSelectOptions').value = '';
+    }
+    textInput.style.display = 'none';
+    textInput.value = '';
+    document.getElementById('noteIconInput').value = n.icon || '';
+    document.getElementById('mainContainer').style.display = 'none';
+    document.getElementById('noteInputGroup').style.display = 'flex';
+    renderRecentColors();
+});
+
+// Neue Lesezeichen-Kontextmenü-Aktion
+document.getElementById('ctxToggleBookmark').addEventListener('click', () => {
+    const menu = document.getElementById('bookmarkContextMenu');
+    const idx = parseInt(menu.dataset.index);
+    menu.style.display = 'none';
+    if (isNaN(idx)) return;
+    const box = document.getElementById('bookmark-content-' + idx);
+    if (box) box.style.display = box.style.display === 'block' ? 'none' : 'block';
+});
+
+// Makro-Kontextmenü-Aktionen
+document.getElementById('ctxRunMakro').addEventListener('click', () => {
+    const menu = document.getElementById('makroContextMenu');
+    const idx = parseInt(menu.dataset.index);
+    menu.style.display = 'none';
+    if (isNaN(idx)) return;
+    const m = makros[idx];
+    if (m && m.steps) {
+        chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+            if (!tabs[0]) return;
+            if (m.domain) {
+                let currentDomain = '';
+                try { currentDomain = new URL(tabs[0].url).hostname; } catch(e) {}
+                if (currentDomain && m.domain !== currentDomain) {
+                    const ok = confirm(`⚠️ Dieses Makro wurde auf „${m.domain}" aufgenommen.\nAktueller Tab: „${currentDomain}".\nTrotzdem ausführen?`);
+                    if (!ok) return;
+                }
+            }
+            if (m.askRepeatBeforePlay) {
+                document.getElementById('makroRepeatAskInput').value = m.repeat || 1;
+                document.getElementById('mainContainer').style.display = 'none';
+                document.getElementById('makroRepeatAskDialog').style.display = 'block';
+                window._pendingPlayTabId = tabs[0].id;
+                window._pendingPlayMakro = m;
+                return;
+            }
+            playMakroFull(tabs[0].id, m, m.steps);
+        });
+    }
+});
+
+document.getElementById('ctxStepMakro').addEventListener('click', () => {
+    const menu = document.getElementById('makroContextMenu');
+    const idx = parseInt(menu.dataset.index);
+    menu.style.display = 'none';
+    if (isNaN(idx)) return;
+    openStepPlayback(idx);
+});
+
+document.getElementById('ctxToggleMakro').addEventListener('click', () => {
+    const menu = document.getElementById('makroContextMenu');
+    const idx = parseInt(menu.dataset.index);
+    menu.style.display = 'none';
+    if (isNaN(idx)) return;
+    const box = document.getElementById('makro-content-' + idx);
+    if (box) box.style.display = box.style.display === 'block' ? 'none' : 'block';
+});
+
+document.getElementById('ctxEditMakro').addEventListener('click', () => {
+    const menu = document.getElementById('makroContextMenu');
+    const idx = parseInt(menu.dataset.index);
+    menu.style.display = 'none';
+    if (isNaN(idx)) return;
+    const m = makros[idx];
+    if (m) {
+        document.getElementById('editMakroIndex').value = idx;
+        document.getElementById('makroTitleInput').value = m.title || '';
+        document.getElementById('makroStepsInput').value = JSON.stringify(m.steps, null, 2);
+        document.getElementById('makroColor').value = m.color || '#ff8c00';
+        document.getElementById('makroRepeatInput').value = m.repeat || 1;
+        const sd = (m.speedDelay !== undefined) ? m.speedDelay : 700;
+        const speedActive = sd > 0;
+        document.getElementById('makroSpeedToggle').checked = speedActive;
+        document.getElementById('makroSpeedInput').value = speedActive ? sd : 700;
+        document.getElementById('makroSpeedRow').style.display = speedActive ? 'flex' : 'none';
+        document.getElementById('makroAskRepeatInput').checked = !!m.askRepeatBeforePlay;
+        document.getElementById('makroScrollToStartInput').checked = !!m.scrollToStart;
+        document.getElementById('makroScrollToEndInput').checked = !!m.scrollToEnd;
+        document.getElementById('makroLockScrollInput').checked = !!m.lockScroll;
+        const mMethod = m.method || 2;
+        document.getElementById('makroMethodInput').value = mMethod;
+        ['1','2','3','4'].forEach(n => document.getElementById('methodBtn' + n).classList.remove('active'));
+        document.getElementById('methodBtn' + mMethod).classList.add('active');
+        document.getElementById('makroRepeatDelayInput').value = m.repeatDelay || 0;
+        document.getElementById('makroWaitReloadInput').checked = !!m.waitReloadBetweenRepeats;
+        document.getElementById('mainContainer').style.display = 'none';
+        document.getElementById('makroInputGroup').style.display = 'flex';
+        renderRecentColors();
+        chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+            if (!tabs[0]) return;
+            chrome.scripting.executeScript({ target: { tabId: tabs[0].id }, func: injectEditMarkersFunc, args: [m.steps] });
+            document.getElementById('showStepsOnPageBtn').style.display = 'none';
+            document.getElementById('applyPageEditsBtn').style.display = 'flex';
+            document.getElementById('cancelPageEditsBtn').style.display = 'flex';
+        });
+    }
+});
+
+document.getElementById('ctxDeleteMakro').addEventListener('click', () => {
+    const menu = document.getElementById('makroContextMenu');
+    const idx = parseInt(menu.dataset.index);
+    menu.style.display = 'none';
+    if (isNaN(idx)) return;
+    makros.splice(idx, 1);
+    chrome.storage.local.set({ makros }, renderMakros);
 });
 
 document.getElementById('ctxMoveGroupUp').addEventListener('click', () => {
