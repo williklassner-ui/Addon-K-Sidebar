@@ -242,28 +242,37 @@ function checkSyncStatus() {
     const statusBox = document.getElementById('syncStatusText');
     if (!statusBox) return;
     try {
-        chrome.storage.sync.getBytesInUse(null, (bytes) => {
+        const testKey = '_syncTest_' + Date.now();
+        const testVal = Math.random().toString(36).slice(2);
+        chrome.storage.sync.set({ [testKey]: testVal }, () => {
             if (chrome.runtime.lastError) {
-                statusBox.innerText = "❌ Synchronisierung inaktiv (Account fehlt oder Offline)";
-                statusBox.style.color = "#cf6679";
+                statusBox.innerHTML = `❌ Synchronisierung nicht verfügbar<br><small style="opacity:0.8;font-weight:normal;">${chrome.runtime.lastError.message}<br>Prüfe: Chrome-Account angemeldet + Chrome-Sync aktiviert</small>`;
+                statusBox.style.color = '#cf6679';
                 return;
             }
-            const kb = Math.round(bytes / 1024 * 10) / 10;
-            const pct = Math.round(bytes / 102400 * 100);
-            if (bytes > 92160) {
-                statusBox.innerText = `⚠️ Kritisch: ${kb} KB / 100 KB (${pct}%) — Sync gefährdet`;
-                statusBox.style.color = "#cf6679";
-            } else if (bytes > 71680) {
-                statusBox.innerText = `⚠️ ${kb} KB / 100 KB (${pct}%) — Speicher fast voll`;
-                statusBox.style.color = "#ffaa44";
-            } else {
-                statusBox.innerText = `✅ Aktiv — ${kb} KB / 100 KB (${pct}%) verwendet`;
-                statusBox.style.color = "#4caf50";
-            }
+            chrome.storage.sync.get({ [testKey]: null }, (res) => {
+                chrome.storage.sync.remove(testKey);
+                if (chrome.runtime.lastError || res[testKey] !== testVal) {
+                    statusBox.innerHTML = `⚠️ Sync-API erreichbar, Schreiben fehlgeschlagen<br><small style="opacity:0.8;font-weight:normal;">Prüfe: Chrome-Account angemeldet + Chrome-Sync → Erweiterungen aktiviert</small>`;
+                    statusBox.style.color = '#ffaa44';
+                    return;
+                }
+                chrome.storage.sync.getBytesInUse(null, (bytes) => {
+                    const kb = Math.round(bytes / 1024 * 10) / 10;
+                    const pct = Math.round(bytes / 102400 * 100);
+                    let color = '#4caf50', warn = '';
+                    if (bytes > 92160) { color = '#cf6679'; warn = ' ⚠️ Kritisch'; }
+                    else if (bytes > 71680) { color = '#ffaa44'; warn = ' ⚠️ Fast voll'; }
+                    statusBox.innerHTML = `✅ Sync aktiv${warn} — ${kb} KB / 100 KB (${pct}%)<br>`
+                        + `<small style="opacity:0.8;font-weight:normal;">Synchronisiert: Prompts · Notizen · Lesezeichen · Tab-Einstellungen<br>`
+                        + `Nur lokal (dieses Gerät): Makros · Sessions</small>`;
+                    statusBox.style.color = color;
+                });
+            });
         });
     } catch (e) {
-        statusBox.innerText = "❌ Fehler";
-        statusBox.style.color = "#cf6679";
+        statusBox.innerHTML = `❌ Fehler: ${e.message}`;
+        statusBox.style.color = '#cf6679';
     }
 }
 
@@ -3795,6 +3804,11 @@ document.getElementById('emptyTrashBtn').addEventListener('click', () => {
 document.getElementById('backupToggleBtn').addEventListener('click', () => {
     document.getElementById('mainContainer').style.display = 'none';
     document.getElementById('backupOverlay').style.display = 'flex';
+    checkSyncStatus();
+});
+
+document.getElementById('syncRefreshBtn').addEventListener('click', () => {
+    loadData();
     checkSyncStatus();
 });
 
