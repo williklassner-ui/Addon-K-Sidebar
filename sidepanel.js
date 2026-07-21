@@ -100,59 +100,150 @@ let currentEditorTodos = [];
 const _versionLabel = document.getElementById('addonVersionLabel');
 if (_versionLabel) _versionLabel.textContent = 'v' + chrome.runtime.getManifest().version;
 
-function saveSessions(cb) {
-    const json = JSON.stringify(savedSessions);
-    const CHUNK = 7000;
-    const chunks = [];
-    for (let i = 0; i < json.length; i += CHUNK) chunks.push(json.slice(i, i + CHUNK));
-    if (chunks.length === 0) chunks.push('[]');
-    chrome.storage.sync.get({ _ss_n: 0 }, (old) => {
-        const oldN = old._ss_n || 0;
-        const toSet = { _ss_n: chunks.length };
-        chunks.forEach((c, i) => { toSet[`_ss_${i}`] = c; });
+// --- Chunked Sync Storage ---
+// chrome.storage.sync begrenzt jeden EINZELNEN Key auf 8.192 Bytes. Arrays wie
+// promts/notes/bookmarks/makros überschreiten dieses Limit schnell, wodurch
+// chrome.storage.sync.set() für den betroffenen Key stillschweigend fehlschlägt
+// (kein Error, Daten syncen einfach nicht). Deshalb wird jeder Wert in Stücke
+// à 6.000 Zeichen aufgeteilt und unter `_ck_<key>_n` (Anzahl) + `_ck_<key>_0..n`
+// (Fragmente) gespeichert - das umgeht das Pro-Key-Limit vollständig.
+const SYNC_CHUNK_SIZE = 6000;
+
+function syncSet(obj, cb) {
+    const keys = Object.keys(obj);
+    if (keys.length === 0) { if (cb) cb(); return; }
+    const countDefaults = {};
+    keys.forEach(k => { countDefaults[`_ck_${k}_n`] = 0; });
+    chrome.storage.sync.get(countDefaults, (old) => {
+        const toSet = {};
+        const toRemove = [];
+        keys.forEach(k => {
+            const json = JSON.stringify(obj[k] === undefined ? null : obj[k]);
+            const chunks = [];
+            for (let i = 0; i < json.length; i += SYNC_CHUNK_SIZE) chunks.push(json.slice(i, i + SYNC_CHUNK_SIZE));
+            if (chunks.length === 0) chunks.push(json);
+            toSet[`_ck_${k}_n`] = chunks.length;
+            chunks.forEach((c, i) => { toSet[`_ck_${k}_${i}`] = c; });
+            const oldN = old[`_ck_${k}_n`] || 0;
+            for (let i = chunks.length; i < oldN; i++) toRemove.push(`_ck_${k}_${i}`);
+            // Altes unchunked Plain-Key (Legacy-Daten von vor dem Chunking) aufräumen
+            toRemove.push(k);
+        });
         chrome.storage.sync.set(toSet, () => {
-            if (chrome.runtime.lastError) { if (cb) cb(); return; }
-            const toRemove = [];
-            for (let i = chunks.length; i < oldN; i++) toRemove.push(`_ss_${i}`);
+            const hadError = !!chrome.runtime.lastError;
             if (toRemove.length) chrome.storage.sync.remove(toRemove);
-            if (cb) cb();
+            if (cb) cb(hadError);
         });
     });
 }
 
+function syncGet(defaults, cb) {
+    const keys = Object.keys(defaults);
+    const countDefaults = {};
+    keys.forEach(k => { countDefaults[`_ck_${k}_n`] = -1; });
+    chrome.storage.sync.get(countDefaults, (counts) => {
+        // Legacy: Werte, die noch als unchunked Plain-Key gespeichert sind (vor dem Update)
+        const legacyDefaults = {};
+        keys.forEach(k => { if (!(counts[`_ck_${k}_n`] > 0)) legacyDefaults[k] = undefined; });
+        chrome.storage.sync.get(legacyDefaults, (legacyVals) => {
+            const chunkKeys = {};
+            keys.forEach(k => {
+                const n = counts[`_ck_${k}_n`];
+                if (n > 0) { for (let i = 0; i < n; i++) chunkKeys[`_ck_${k}_${i}`] = ''; }
+            });
+            chrome.storage.sync.get(chunkKeys, (chunkVals) => {
+                const result = {};
+                keys.forEach(k => {
+                    const n = counts[`_ck_${k}_n`];
+                    if (n > 0) {
+                        try {
+                            const json = Array.from({ length: n }, (_, i) => chunkVals[`_ck_${k}_${i}`] || '').join('');
+                            const parsed = JSON.parse(json);
+                            result[k] = parsed === null ? defaults[k] : parsed;
+                        } catch (e) {
+                            result[k] = defaults[k];
+                        }
+                    } else if (legacyVals[k] !== undefined) {
+                        result[k] = legacyVals[k];
+                    } else {
+                        result[k] = defaults[k];
+                    }
+                });
+                cb(result);
+            });
+        });
+    });
+}
+
+function saveSessions(cb) {
+    syncSet({ savedSessions }, cb);
+}
+
+const SYNC_LOAD_DEFAULTS = {
+    promts: [],
+    notes: [],
+    makros: [],
+    bookmarks: [],
+    deletedPromts: [],
+    recentColors: [],
+    groupMetadata: {},
+    bookmarkGroupMetadata: {},
+    tabColors: {},
+    tabTextColors: {},
+    tabIcons: {},
+    tabIconOnly: {},
+    tabLabels: {},
+    tabOrder: ['prompts', 'sessions', 'notes', 'makros', 'bookmarks'],
+    customProviders: [],
+    groupOrder: [],
+    noteGroupOrder: [],
+    bookmarkGroupOrder: [],
+    savedSessions: []
+};
+
 function loadData() {
-    chrome.storage.sync.get({
-        promts: [],
-        notes: [],
-        makros: null,
-        bookmarks: [],
-        deletedPromts: [],
-        recentColors: [],
-        groupMetadata: {},
-        bookmarkGroupMetadata: {},
-        tabColors: {},
-        tabTextColors: {},
-        tabIcons: {},
-        tabIconOnly: {},
-        tabLabels: {},
-        tabOrder: ['prompts', 'sessions', 'notes', 'makros', 'bookmarks'],
-        customProviders: [],
-        groupOrder: [],
-        noteGroupOrder: [],
-        bookmarkGroupOrder: [],
-        _ss_n: 0
-    }, (syncRes) => {
+    syncGet(SYNC_LOAD_DEFAULTS, (syncRes) => {
         chrome.storage.local.get({ makros: [], tabCustomIcons: {}, savedSessions: [] }, (localRes) => {
-            // Migration: makros lagen früher in sync → nach local umziehen
-            if (syncRes.makros && syncRes.makros.length > 0 && localRes.makros.length === 0) {
-                chrome.storage.local.set({ makros: syncRes.makros });
-                chrome.storage.sync.remove('makros');
-                localRes.makros = syncRes.makros;
+            // Migration: makros/savedSessions lagen früher in local → nach sync (gechunkt) umziehen
+            let needsMigrationSave = {};
+            if ((!syncRes.makros || syncRes.makros.length === 0) && localRes.makros && localRes.makros.length > 0) {
+                syncRes.makros = localRes.makros;
+                needsMigrationSave.makros = localRes.makros;
             }
+            if ((!syncRes.savedSessions || syncRes.savedSessions.length === 0) && localRes.savedSessions && localRes.savedSessions.length > 0) {
+                syncRes.savedSessions = localRes.savedSessions;
+                needsMigrationSave.savedSessions = localRes.savedSessions;
+            }
+            if (Object.keys(needsMigrationSave).length > 0) {
+                syncSet(needsMigrationSave, () => {
+                    chrome.storage.local.remove(['makros', 'savedSessions']);
+                });
+            }
+
+            // Migration: altes Sessions-Chunking-Format aus v1.8.2 (_ss_n / _ss_0..) übernehmen
+            chrome.storage.sync.get({ _ss_n: 0 }, (oldSess) => {
+                if (oldSess._ss_n > 0 && (!syncRes.savedSessions || syncRes.savedSessions.length === 0)) {
+                    const keys = {};
+                    for (let i = 0; i < oldSess._ss_n; i++) keys[`_ss_${i}`] = '';
+                    chrome.storage.sync.get(keys, (chunks) => {
+                        try {
+                            const json = Array.from({ length: oldSess._ss_n }, (_, i) => chunks[`_ss_${i}`] || '').join('');
+                            const oldSessions = JSON.parse(json) || [];
+                            if (oldSessions.length > 0) {
+                                savedSessions = oldSessions;
+                                saveSessions();
+                            }
+                        } catch (e) { /* ignore */ }
+                        const toRemove = ['_ss_n'];
+                        for (let i = 0; i < oldSess._ss_n; i++) toRemove.push(`_ss_${i}`);
+                        chrome.storage.sync.remove(toRemove);
+                    });
+                }
+            });
 
             promts = syncRes.promts || [];
             notes = syncRes.notes || [];
-            makros = localRes.makros || [];
+            makros = syncRes.makros || [];
             bookmarks = syncRes.bookmarks || [];
             deletedPromts = syncRes.deletedPromts || [];
             recentColors = syncRes.recentColors || [];
@@ -169,10 +260,11 @@ function loadData() {
             groupOrder = syncRes.groupOrder || [];
             noteGroupOrder = syncRes.noteGroupOrder || [];
             bookmarkGroupOrder = syncRes.bookmarkGroupOrder || [];
+            savedSessions = syncRes.savedSessions || [];
 
             if (!tabOrder.includes('bookmarks')) {
                 tabOrder.push('bookmarks');
-                chrome.storage.sync.set({ tabOrder });
+                syncSet({ tabOrder });
             }
 
             // Migration: bestehende Lesezeichen-Gruppen (früher in gemeinsamer groupMetadata) nach bookmarkGroupMetadata übernehmen
@@ -183,56 +275,30 @@ function loadData() {
                     bgmMigrated = true;
                 }
             });
-            if (bgmMigrated) chrome.storage.sync.set({ bookmarkGroupMetadata });
+            if (bgmMigrated) syncSet({ bookmarkGroupMetadata });
 
-            const finishLoad = (sessions) => {
-                savedSessions = sessions;
-                savedSessions.forEach((_, idx) => {
-                    if (collapsedSessions[idx] === undefined) {
-                        collapsedSessions[idx] = true;
-                    }
-                });
-                renderTabsNavigation();
-                applyTabColors();
-                render();
-                renderNotes();
-                renderMakros();
-                renderBookmarks();
-                renderTrash();
-                renderRecentColors();
-                renderSessions();
-                populateGroupDropdowns();
-                populateProviderDropdowns();
-                checkSyncStatus();
-                initGroupDragDrop(document.getElementById('promptList'), false);
-                initGroupDragDrop(document.getElementById('notesList'), true);
-                initGroupDragDrop(document.getElementById('bookmarksList'), 'bookmark');
-                initBookmarkItemDragDrop(document.getElementById('bookmarksList'));
-            };
-
-            const numChunks = syncRes._ss_n || 0;
-            if (numChunks === 0) {
-                // Migration: sessions noch lokal vorhanden → nach sync (chunks) umziehen
-                if (localRes.savedSessions && localRes.savedSessions.length > 0) {
-                    savedSessions = localRes.savedSessions;
-                    saveSessions();
-                    chrome.storage.local.remove('savedSessions');
-                    finishLoad(localRes.savedSessions);
-                } else {
-                    finishLoad([]);
+            savedSessions.forEach((_, idx) => {
+                if (collapsedSessions[idx] === undefined) {
+                    collapsedSessions[idx] = true;
                 }
-            } else {
-                const chunkDefaults = {};
-                for (let i = 0; i < numChunks; i++) chunkDefaults[`_ss_${i}`] = '';
-                chrome.storage.sync.get(chunkDefaults, (chunks) => {
-                    try {
-                        const json = Array.from({ length: numChunks }, (_, i) => chunks[`_ss_${i}`] || '').join('');
-                        finishLoad(JSON.parse(json) || []);
-                    } catch (e) {
-                        finishLoad([]);
-                    }
-                });
-            }
+            });
+
+            renderTabsNavigation();
+            applyTabColors();
+            render();
+            renderNotes();
+            renderMakros();
+            renderBookmarks();
+            renderTrash();
+            renderRecentColors();
+            renderSessions();
+            populateGroupDropdowns();
+            populateProviderDropdowns();
+            checkSyncStatus();
+            initGroupDragDrop(document.getElementById('promptList'), false);
+            initGroupDragDrop(document.getElementById('notesList'), true);
+            initGroupDragDrop(document.getElementById('bookmarksList'), 'bookmark');
+            initBookmarkItemDragDrop(document.getElementById('bookmarksList'));
         });
     });
 }
@@ -304,8 +370,7 @@ function checkSyncStatus() {
                     if (bytes > 92160) { color = '#cf6679'; warn = ' ⚠️ Kritisch'; }
                     else if (bytes > 71680) { color = '#ffaa44'; warn = ' ⚠️ Fast voll'; }
                     statusBox.innerHTML = `✅ Sync aktiv${warn} — ${kb} KB / 100 KB (${pct}%)<br>`
-                        + `<small style="opacity:0.8;font-weight:normal;">Synchronisiert: Prompts · Notizen · Lesezeichen · Sessions · Tab-Einstellungen<br>`
-                        + `Nur lokal (dieses Gerät): Makros</small>`;
+                        + `<small style="opacity:0.8;font-weight:normal;">Synchronisiert: Prompts · Notizen · Lesezeichen · Sessions · Makros · Tab-Einstellungen</small>`;
                     statusBox.style.color = color;
                 });
             });
@@ -464,13 +529,13 @@ function initGroupDragDrop(containerEl, isNotes) {
 
         if (isNotes === 'bookmark') {
             bookmarkGroupOrder = newOrder;
-            chrome.storage.sync.set({ bookmarkGroupOrder }, renderBookmarks);
+            syncSet({ bookmarkGroupOrder }, renderBookmarks);
         } else if (isNotes) {
             noteGroupOrder = newOrder;
-            chrome.storage.sync.set({ noteGroupOrder }, renderNotes);
+            syncSet({ noteGroupOrder }, renderNotes);
         } else {
             groupOrder = newOrder;
-            chrome.storage.sync.set({ groupOrder }, render);
+            syncSet({ groupOrder }, render);
         }
     });
 }
@@ -527,7 +592,7 @@ function initBookmarkItemDragDrop(containerEl) {
         const newTargetIndex = bookmarks.indexOf(targetBookmark);
         bookmarks.splice(newTargetIndex, 0, moved);
         dragSrcIndex = null;
-        chrome.storage.sync.set({ bookmarks }, renderBookmarks);
+        syncSet({ bookmarks }, renderBookmarks);
     });
 }
 
@@ -885,7 +950,7 @@ function updateRecentColors(color) {
     recentColors = recentColors.filter(c => c !== color);
     recentColors.unshift(color);
     if (recentColors.length > 10) recentColors.pop();
-    chrome.storage.sync.set({ recentColors });
+    syncSet({ recentColors });
 }
 
 function renderSessions() {
@@ -1034,7 +1099,7 @@ document.getElementById('makrosList').addEventListener('click', (e) => {
     }
     else if (action === 'delete') {
         makros.splice(i, 1);
-        chrome.storage.local.set({ makros }, renderMakros);
+        syncSet({ makros }, renderMakros);
     }
     else if (action === 'edit') {
         if (m) {
@@ -1130,7 +1195,7 @@ document.getElementById('makrosList').addEventListener('drop', (e) => {
     const steps = makros[mi].steps;
     const moved = steps.splice(stepDragSrc.si, 1)[0];
     steps.splice(si, 0, moved);
-    chrome.storage.local.set({ makros }, renderMakros);
+    syncSet({ makros }, renderMakros);
 });
 
 // Recorder-Injektion (wird bei Start und nach jedem Reload/Navigation neu aufgerufen)
@@ -1572,7 +1637,7 @@ document.getElementById('recordMakroBtn').addEventListener('click', () => {
                             updatedAt: Date.now()
                         };
                         makros.push(newMakro);
-                        chrome.storage.local.set({ makros }, renderMakros);
+                        syncSet({ makros }, renderMakros);
                     }
                 } else {
                     alert("Es wurden keine Klicks oder Eingaben während der Aufnahme registriert.");
@@ -1773,7 +1838,7 @@ function syncMarkerPositions(cb) {
                         target._py = s._py;
                     }
                 });
-                chrome.storage.local.set({ makros });
+                syncSet({ makros });
             }
             if (cb) cb();
         });
@@ -1834,11 +1899,11 @@ document.getElementById('stepPlaybackRunBtn').addEventListener('click', () => {
         const dur = parseInt(document.getElementById('stepEditWaitDuration').value);
         if (!isNaN(dur)) step.duration = dur;
         document.getElementById('stepPlaybackDesc').textContent = `⏱ Warte ${step.duration||1000}ms…`;
-        setTimeout(() => { chrome.storage.local.set({ makros }); advanceStep(); }, step.duration || 1000);
+        setTimeout(() => { syncSet({ makros }); advanceStep(); }, step.duration || 1000);
         return;
     } else if (step.type === 'waitForReload') {
         document.getElementById('stepPlaybackDesc').textContent = '🔄 Warte auf Seitenneuladen…';
-        chrome.storage.local.set({ makros });
+        syncSet({ makros });
         advanceStep();
         return;
     } else if (step.type === 'navigate') {
@@ -1977,7 +2042,7 @@ document.getElementById('stepPlaybackRunBtn').addEventListener('click', () => {
             },
             args: [step]
         });
-        chrome.storage.local.set({ makros });
+        syncSet({ makros });
         advanceStep();
     });
 });
@@ -2019,7 +2084,7 @@ document.getElementById('stepEditSaveBtn').addEventListener('click', () => {
     } else if (['doubleclick','rightclick','hover'].includes(step.type)) {
         step.selector = document.getElementById('stepEditSelector').value;
     }
-    chrome.storage.local.set({ makros }, () => {
+    syncSet({ makros }, () => {
         const btn = document.getElementById('stepEditSaveBtn');
         btn.textContent = '✓ Gespeichert!';
         setTimeout(() => { if (btn) btn.textContent = '💾 Schritt speichern'; }, 1500);
@@ -2740,7 +2805,7 @@ document.getElementById('saveMakroBtn').addEventListener('click', () => {
         }
 
         updateRecentColors(selectedColor);
-        chrome.storage.local.set({ makros }, () => {
+        syncSet({ makros }, () => {
             closeMakroEditMode();
             renderMakros();
         });
@@ -2864,7 +2929,7 @@ document.getElementById('promptList').addEventListener('click', (e) => {
     else if (action === 'delete') {
         const removed = promts.splice(i, 1)[0];
         deletedPromts.push(removed);
-        chrome.storage.sync.set({ promts, deletedPromts });
+        syncSet({ promts, deletedPromts });
     }
 });
 
@@ -2883,7 +2948,7 @@ function handleNotesViewClicks(e) {
         const tIdx = parseInt(e.target.dataset.todoIdx);
         if (notes[nIdx] && notes[nIdx].todos && notes[nIdx].todos[tIdx]) {
             notes[nIdx].todos[tIdx].done = e.target.checked;
-            chrome.storage.sync.set({ notes });
+            syncSet({ notes });
         }
         return;
     }
@@ -2899,7 +2964,7 @@ function handleNotesViewClicks(e) {
     }
     else if (action === 'delete') {
         notes.splice(i, 1);
-        chrome.storage.sync.set({ notes });
+        syncSet({ notes });
     }
     else if (action === 'edit') {
         const n = notes[i];
@@ -2963,7 +3028,7 @@ document.getElementById('saveNoteGroupBtn').addEventListener('click', () => {
         icon: document.getElementById('noteGroupIconInput').value || '📁',
         color: document.getElementById('noteGroupColorInput').value || '#ff8c00'
     };
-    chrome.storage.sync.set({ groupMetadata }, () => {
+    syncSet({ groupMetadata }, () => {
         document.getElementById('noteGroupEditPopup').style.display = 'none';
         renderNotes();
     });
@@ -3037,7 +3102,7 @@ function handleBookmarksViewClicks(e) {
     }
     else if (action === 'delete') {
         bookmarks.splice(i, 1);
-        chrome.storage.sync.set({ bookmarks }, renderBookmarks);
+        syncSet({ bookmarks }, renderBookmarks);
     }
     else if (action === 'edit') {
         openBookmarkEditor(i);
@@ -3089,7 +3154,7 @@ document.getElementById('saveBookmarkGroupBtn').addEventListener('click', () => 
         icon: document.getElementById('bookmarkGroupIconInput').value || '🔖',
         color: document.getElementById('bookmarkGroupColorInput').value || '#ff8c00'
     };
-    chrome.storage.sync.set({ bookmarkGroupMetadata }, () => {
+    syncSet({ bookmarkGroupMetadata }, () => {
         document.getElementById('bookmarkGroupEditPopup').style.display = 'none';
         renderBookmarks();
     });
@@ -3134,7 +3199,7 @@ document.getElementById('saveBookmarkBtn').addEventListener('click', () => {
     }
 
     updateRecentColors(selectedColor);
-    chrome.storage.sync.set({ bookmarks }, () => {
+    syncSet({ bookmarks }, () => {
         closeBookmarkEditMode();
         renderBookmarks();
     });
@@ -3180,7 +3245,7 @@ document.getElementById('bookmarkFolderPickerList').addEventListener('click', (e
         const groupName = folderName || 'Importierter Ordner';
         links.forEach(c => bookmarks.push({ title: c.title || c.url, url: c.url, color: '#ff8c00', group: groupName }));
         if (!bookmarkGroupMetadata[groupName]) bookmarkGroupMetadata[groupName] = { color: '#ff8c00', icon: '📁' };
-        chrome.storage.sync.set({ bookmarks, bookmarkGroupMetadata }, () => {
+        syncSet({ bookmarks, bookmarkGroupMetadata }, () => {
             renderBookmarks();
             document.getElementById('bookmarkFolderPickerOverlay').style.display = 'none';
             document.getElementById('mainContainer').style.display = 'block';
@@ -3196,7 +3261,7 @@ function sortBookmarksInScope(groupName) {
     if (scoped.length < 2) return;
     const sortedItems = scoped.map(s => s.b).slice().sort((a, b) => (a.title || '').localeCompare(b.title || '', undefined, { sensitivity: 'base' }));
     scoped.forEach((s, idx) => { bookmarks[s.i] = sortedItems[idx]; });
-    chrome.storage.sync.set({ bookmarks }, renderBookmarks);
+    syncSet({ bookmarks }, renderBookmarks);
 }
 
 document.getElementById('sortBookmarksBtn').addEventListener('click', () => sortBookmarksInScope(''));
@@ -3290,7 +3355,7 @@ bookmarksViewEl.addEventListener('drop', (e) => {
     newGroupNames.forEach(gName => {
         bookmarkGroupMetadata[gName] = { color: '#ff8c00', icon: '🔖' };
     });
-    chrome.storage.sync.set({ bookmarks, bookmarkGroupMetadata }, renderBookmarks);
+    syncSet({ bookmarks, bookmarkGroupMetadata }, renderBookmarks);
 });
 
 // Clipboard-Copy via Event-Delegation (Listener muss auf dem DOM-Element sein, nicht auf outerHTML)
@@ -3403,7 +3468,7 @@ document.getElementById('saveNoteBtn').addEventListener('click', () => {
     }
 
     updateRecentColors(selectedColor);
-    chrome.storage.sync.set({ notes }, () => {
+    syncSet({ notes }, () => {
         closeNoteEditMode();
     });
 });
@@ -3637,7 +3702,7 @@ document.getElementById('saveGroupBtn').addEventListener('click', () => {
     }
     groupMetadata[newName] = { color, icon, groupProvider };
     updateRecentColors(color);
-    chrome.storage.sync.set({ promts, notes, groupMetadata, groupOrder, noteGroupOrder }, () => {
+    syncSet({ promts, notes, groupMetadata, groupOrder, noteGroupOrder }, () => {
         closeGroupEditMode();
     });
 });
@@ -3662,7 +3727,7 @@ document.getElementById('addCustomProviderBtn').addEventListener('click', () => 
     customProviders.push({ name, icon });
     nameIn.value = '';
     iconIn.value = '';
-    chrome.storage.sync.set({ customProviders }, populateProviderDropdowns);
+    syncSet({ customProviders }, populateProviderDropdowns);
 });
 
 document.getElementById('customProviderList').addEventListener('click', (e) => {
@@ -3670,7 +3735,7 @@ document.getElementById('customProviderList').addEventListener('click', (e) => {
     if (!btn) return;
     const idx = parseInt(btn.dataset.index);
     customProviders.splice(idx, 1);
-    chrome.storage.sync.set({ customProviders }, populateProviderDropdowns);
+    syncSet({ customProviders }, populateProviderDropdowns);
 });
 
 document.addEventListener('click', (e) => {
@@ -3699,11 +3764,11 @@ document.getElementById('trashList').addEventListener('click', (e) => {
     if (action === 'restore') {
         const restored = deletedPromts.splice(i, 1)[0];
         promts.push(restored);
-        chrome.storage.sync.set({ promts, deletedPromts });
+        syncSet({ promts, deletedPromts });
     } 
     else if (action === 'perma-delete') {
         deletedPromts.splice(i, 1);
-        chrome.storage.sync.set({ deletedPromts });
+        syncSet({ deletedPromts });
     }
 });
 
@@ -3781,7 +3846,7 @@ document.getElementById('saveBtn').addEventListener('click', () => {
     }
 
     updateRecentColors(selectedColor);
-    chrome.storage.sync.set({ promts }, () => {
+    syncSet({ promts }, () => {
         closeEditMode();
     });
 });
@@ -3840,7 +3905,7 @@ document.getElementById('closeTrashBtn').addEventListener('click', () => {
 document.getElementById('emptyTrashBtn').addEventListener('click', () => {
     if(confirm("Möchtest du den Papierkorb unwiderruflich leeren?")) {
         deletedPromts = [];
-        chrome.storage.sync.set({ deletedPromts });
+        syncSet({ deletedPromts });
     }
 });
 
@@ -3862,19 +3927,14 @@ document.getElementById('closeBackupBtn').addEventListener('click', () => {
 
 document.getElementById('btnExecuteBackupExport').addEventListener('click', () => {
     if(confirm("Möchtest du jetzt ein vollständiges Backup erstellen und den Speicherort festlegen?")) {
-        chrome.storage.sync.get(null, (syncData) => {
-            chrome.storage.local.get({ tabCustomIcons: {}, makros: [] }, (localData) => {
-                const { makros: _m, savedSessions: _s, _ss_n: _n, ...cleanSyncData } = syncData;
-                // remove chunk keys from cleanSyncData
-                Object.keys(cleanSyncData).forEach(k => { if (k.startsWith('_ss_')) delete cleanSyncData[k]; });
+        syncGet(SYNC_LOAD_DEFAULTS, (syncData) => {
+            chrome.storage.local.get({ tabCustomIcons: {} }, (localData) => {
                 const totalBackup = {
-                    K_SIDEBAR_BACKUP_VERSION: "1.0.18",
+                    K_SIDEBAR_BACKUP_VERSION: "1.0.19",
                     timestamp: Date.now(),
-                    syncStorage: cleanSyncData,
+                    syncStorage: syncData,
                     localStorage: {
-                        tabCustomIcons: localData.tabCustomIcons || {},
-                        makros: localData.makros || [],
-                        savedSessions: savedSessions || []
+                        tabCustomIcons: localData.tabCustomIcons || {}
                     }
                 };
                 const blob = new Blob([JSON.stringify(totalBackup, null, 2)], { type: "application/json" });
@@ -3904,24 +3964,23 @@ document.getElementById('backupFileInput').addEventListener('change', (e) => {
             const backup = JSON.parse(event.target.result);
             if (backup && backup.syncStorage) {
                 if (confirm("Achtung! Das Einspielen überschreibt alle aktuellen Daten. Fortfahren?")) {
-                    const syncToSet = Object.assign({}, backup.syncStorage || {});
-                    delete syncToSet.makros;
-                    delete syncToSet.savedSessions;
-                    Object.keys(syncToSet).forEach(k => { if (k === '_ss_n' || k.startsWith('_ss_')) delete syncToSet[k]; });
+                    // Alte Backup-Formate (< v1.0.19) hatten makros/savedSessions in localStorage
+                    const syncToSet = Object.assign({}, SYNC_LOAD_DEFAULTS, backup.syncStorage || {});
+                    if (backup.localStorage && backup.localStorage.makros && backup.localStorage.makros.length > 0) {
+                        syncToSet.makros = backup.localStorage.makros;
+                    }
+                    if (backup.localStorage && backup.localStorage.savedSessions && backup.localStorage.savedSessions.length > 0) {
+                        syncToSet.savedSessions = backup.localStorage.savedSessions;
+                    }
                     const localToSet = {
-                        tabCustomIcons: (backup.localStorage && backup.localStorage.tabCustomIcons) || {},
-                        makros: (backup.localStorage && backup.localStorage.makros) || (backup.syncStorage && backup.syncStorage.makros) || []
+                        tabCustomIcons: (backup.localStorage && backup.localStorage.tabCustomIcons) || {}
                     };
-                    const restoredSessions = (backup.localStorage && backup.localStorage.savedSessions) || (backup.syncStorage && backup.syncStorage.savedSessions) || [];
                     chrome.storage.sync.clear(() => {
-                        chrome.storage.sync.set(syncToSet, () => {
+                        syncSet(syncToSet, () => {
                             chrome.storage.local.set(localToSet, () => {
-                                savedSessions = restoredSessions;
-                                saveSessions(() => {
-                                    alert("System-Backup erfolgreich eingespielt!");
-                                    document.getElementById('backupOverlay').style.display = 'none';
-                                    document.getElementById('mainContainer').style.display = 'block';
-                                });
+                                alert("System-Backup erfolgreich eingespielt!");
+                                document.getElementById('backupOverlay').style.display = 'none';
+                                document.getElementById('mainContainer').style.display = 'block';
                             });
                         });
                     });
@@ -4143,7 +4202,7 @@ document.getElementById('ctxMovePromptUp').addEventListener('click', () => {
     if (isNaN(idx) || idx <= 0) return;
     [promts[idx - 1], promts[idx]] = [promts[idx], promts[idx - 1]];
     render();
-    chrome.storage.sync.set({ promts });
+    syncSet({ promts });
 });
 
 document.getElementById('ctxMovePromptDown').addEventListener('click', () => {
@@ -4153,7 +4212,7 @@ document.getElementById('ctxMovePromptDown').addEventListener('click', () => {
     if (isNaN(idx) || idx >= promts.length - 1) return;
     [promts[idx], promts[idx + 1]] = [promts[idx + 1], promts[idx]];
     render();
-    chrome.storage.sync.set({ promts });
+    syncSet({ promts });
 });
 
 document.getElementById('ctxDuplicatePrompt').addEventListener('click', () => {
@@ -4164,7 +4223,7 @@ document.getElementById('ctxDuplicatePrompt').addEventListener('click', () => {
     const orig = promts[idx];
     const copy = Object.assign({}, orig, { title: orig.title + ' (Kopie)' });
     promts.splice(idx + 1, 0, copy);
-    chrome.storage.sync.set({ promts }, render);
+    syncSet({ promts }, render);
 });
 
 document.getElementById('ctxDuplicateGroup').addEventListener('click', () => {
@@ -4188,7 +4247,7 @@ document.getElementById('ctxDuplicateGroup').addEventListener('click', () => {
     const lastIdx = promts.reduce((acc, p, i) => p.group === gName ? i : acc, -1);
     promts.splice(lastIdx + 1, 0, ...copies);
     groupOrder.push(newName);
-    chrome.storage.sync.set({ promts, groupMetadata, groupOrder }, render);
+    syncSet({ promts, groupMetadata, groupOrder }, render);
 });
 
 document.getElementById('ctxRenamePrompt').addEventListener('click', () => {
@@ -4201,7 +4260,7 @@ document.getElementById('ctxRenamePrompt').addEventListener('click', () => {
     const trimmed = newTitle.trim();
     if (!trimmed) return;
     promts[idx].title = trimmed;
-    chrome.storage.sync.set({ promts }, render);
+    syncSet({ promts }, render);
 });
 
 document.getElementById('ctxDeletePrompt').addEventListener('click', () => {
@@ -4211,7 +4270,7 @@ document.getElementById('ctxDeletePrompt').addEventListener('click', () => {
     if (isNaN(idx) || !promts[idx]) return;
     const removed = promts.splice(idx, 1)[0];
     deletedPromts.push(removed);
-    chrome.storage.sync.set({ promts, deletedPromts }, render);
+    syncSet({ promts, deletedPromts }, render);
 });
 
 document.getElementById('ctxRenameNote').addEventListener('click', () => {
@@ -4224,7 +4283,7 @@ document.getElementById('ctxRenameNote').addEventListener('click', () => {
     const trimmed = newTitle.trim();
     if (!trimmed) return;
     notes[idx].title = trimmed;
-    chrome.storage.sync.set({ notes }, renderNotes);
+    syncSet({ notes }, renderNotes);
 });
 
 document.getElementById('ctxDeleteNote').addEventListener('click', () => {
@@ -4233,7 +4292,7 @@ document.getElementById('ctxDeleteNote').addEventListener('click', () => {
     menu.style.display = 'none';
     if (isNaN(idx) || !notes[idx]) return;
     notes.splice(idx, 1);
-    chrome.storage.sync.set({ notes }, renderNotes);
+    syncSet({ notes }, renderNotes);
 });
 
 document.getElementById('ctxAddCurrentPageBookmark').addEventListener('click', () => {
@@ -4255,7 +4314,7 @@ document.getElementById('ctxDeleteBookmark').addEventListener('click', () => {
     menu.style.display = 'none';
     if (isNaN(idx) || !bookmarks[idx]) return;
     bookmarks.splice(idx, 1);
-    chrome.storage.sync.set({ bookmarks }, renderBookmarks);
+    syncSet({ bookmarks }, renderBookmarks);
 });
 
 // Neue Prompt-Kontextmenü-Aktionen
@@ -4438,7 +4497,7 @@ document.getElementById('ctxDeleteMakro').addEventListener('click', () => {
     menu.style.display = 'none';
     if (isNaN(idx)) return;
     makros.splice(idx, 1);
-    chrome.storage.local.set({ makros }, renderMakros);
+    syncSet({ makros }, renderMakros);
 });
 
 document.getElementById('ctxMoveGroupUp').addEventListener('click', () => {
@@ -4449,13 +4508,13 @@ document.getElementById('ctxMoveGroupUp').addEventListener('click', () => {
     if (!gName) return;
     if (type === 'prompt') {
         const idx = groupOrder.indexOf(gName);
-        if (idx > 0) { [groupOrder[idx - 1], groupOrder[idx]] = [groupOrder[idx], groupOrder[idx - 1]]; chrome.storage.sync.set({ groupOrder }, renderPromts); }
+        if (idx > 0) { [groupOrder[idx - 1], groupOrder[idx]] = [groupOrder[idx], groupOrder[idx - 1]]; syncSet({ groupOrder }, renderPromts); }
     } else if (type === 'note') {
         const idx = noteGroupOrder.indexOf(gName);
-        if (idx > 0) { [noteGroupOrder[idx - 1], noteGroupOrder[idx]] = [noteGroupOrder[idx], noteGroupOrder[idx - 1]]; chrome.storage.sync.set({ noteGroupOrder }, renderNotes); }
+        if (idx > 0) { [noteGroupOrder[idx - 1], noteGroupOrder[idx]] = [noteGroupOrder[idx], noteGroupOrder[idx - 1]]; syncSet({ noteGroupOrder }, renderNotes); }
     } else if (type === 'bookmark') {
         const idx = bookmarkGroupOrder.indexOf(gName);
-        if (idx > 0) { [bookmarkGroupOrder[idx - 1], bookmarkGroupOrder[idx]] = [bookmarkGroupOrder[idx], bookmarkGroupOrder[idx - 1]]; chrome.storage.sync.set({ bookmarkGroupOrder }, renderBookmarks); }
+        if (idx > 0) { [bookmarkGroupOrder[idx - 1], bookmarkGroupOrder[idx]] = [bookmarkGroupOrder[idx], bookmarkGroupOrder[idx - 1]]; syncSet({ bookmarkGroupOrder }, renderBookmarks); }
     }
 });
 
@@ -4467,13 +4526,13 @@ document.getElementById('ctxMoveGroupDown').addEventListener('click', () => {
     if (!gName) return;
     if (type === 'prompt') {
         const idx = groupOrder.indexOf(gName);
-        if (idx >= 0 && idx < groupOrder.length - 1) { [groupOrder[idx], groupOrder[idx + 1]] = [groupOrder[idx + 1], groupOrder[idx]]; chrome.storage.sync.set({ groupOrder }, renderPromts); }
+        if (idx >= 0 && idx < groupOrder.length - 1) { [groupOrder[idx], groupOrder[idx + 1]] = [groupOrder[idx + 1], groupOrder[idx]]; syncSet({ groupOrder }, renderPromts); }
     } else if (type === 'note') {
         const idx = noteGroupOrder.indexOf(gName);
-        if (idx >= 0 && idx < noteGroupOrder.length - 1) { [noteGroupOrder[idx], noteGroupOrder[idx + 1]] = [noteGroupOrder[idx + 1], noteGroupOrder[idx]]; chrome.storage.sync.set({ noteGroupOrder }, renderNotes); }
+        if (idx >= 0 && idx < noteGroupOrder.length - 1) { [noteGroupOrder[idx], noteGroupOrder[idx + 1]] = [noteGroupOrder[idx + 1], noteGroupOrder[idx]]; syncSet({ noteGroupOrder }, renderNotes); }
     } else if (type === 'bookmark') {
         const idx = bookmarkGroupOrder.indexOf(gName);
-        if (idx >= 0 && idx < bookmarkGroupOrder.length - 1) { [bookmarkGroupOrder[idx], bookmarkGroupOrder[idx + 1]] = [bookmarkGroupOrder[idx + 1], bookmarkGroupOrder[idx]]; chrome.storage.sync.set({ bookmarkGroupOrder }, renderBookmarks); }
+        if (idx >= 0 && idx < bookmarkGroupOrder.length - 1) { [bookmarkGroupOrder[idx], bookmarkGroupOrder[idx + 1]] = [bookmarkGroupOrder[idx + 1], bookmarkGroupOrder[idx]]; syncSet({ bookmarkGroupOrder }, renderBookmarks); }
     }
 });
 
@@ -4495,7 +4554,7 @@ document.getElementById('ctxRenameGroup').addEventListener('click', () => {
         bookmarks.forEach(b => { if (b.group === gName) b.group = trimmed; });
         const oi = bookmarkGroupOrder.indexOf(gName);
         if (oi !== -1) bookmarkGroupOrder[oi] = trimmed;
-        chrome.storage.sync.set({ bookmarks, bookmarkGroupMetadata, bookmarkGroupOrder }, renderBookmarks);
+        syncSet({ bookmarks, bookmarkGroupMetadata, bookmarkGroupOrder }, renderBookmarks);
         return;
     }
     if (groupMetadata[gName]) {
@@ -4506,12 +4565,12 @@ document.getElementById('ctxRenameGroup').addEventListener('click', () => {
         notes.forEach(n => { if (n.group === gName) n.group = trimmed; });
         const oi = noteGroupOrder.indexOf(gName);
         if (oi !== -1) noteGroupOrder[oi] = trimmed;
-        chrome.storage.sync.set({ notes, groupMetadata, noteGroupOrder }, renderNotes);
+        syncSet({ notes, groupMetadata, noteGroupOrder }, renderNotes);
     } else {
         promts.forEach(p => { if (p.group === gName) p.group = trimmed; });
         const oi = groupOrder.indexOf(gName);
         if (oi !== -1) groupOrder[oi] = trimmed;
-        chrome.storage.sync.set({ promts, groupMetadata, groupOrder }, render);
+        syncSet({ promts, groupMetadata, groupOrder }, render);
     }
 });
 
@@ -4540,7 +4599,7 @@ function finishGroupDelete(alsoDeleteItems) {
             bookmarks.forEach(b => { if (b.group === gName) b.group = ''; });
         }
         bookmarkGroupOrder = bookmarkGroupOrder.filter(g => g !== gName);
-        chrome.storage.sync.set({ bookmarks, bookmarkGroupMetadata, bookmarkGroupOrder }, renderBookmarks);
+        syncSet({ bookmarks, bookmarkGroupMetadata, bookmarkGroupOrder }, renderBookmarks);
         return;
     }
     delete groupMetadata[gName];
@@ -4551,7 +4610,7 @@ function finishGroupDelete(alsoDeleteItems) {
             notes.forEach(n => { if (n.group === gName) n.group = ''; });
         }
         noteGroupOrder = noteGroupOrder.filter(g => g !== gName);
-        chrome.storage.sync.set({ notes, groupMetadata, noteGroupOrder }, renderNotes);
+        syncSet({ notes, groupMetadata, noteGroupOrder }, renderNotes);
     } else {
         if (alsoDeleteItems) {
             const removedPrompts = promts.filter(p => p.group === gName);
@@ -4561,7 +4620,7 @@ function finishGroupDelete(alsoDeleteItems) {
             promts.forEach(p => { if (p.group === gName) p.group = ''; });
         }
         groupOrder = groupOrder.filter(g => g !== gName);
-        chrome.storage.sync.set({ promts, deletedPromts, groupMetadata, groupOrder }, render);
+        syncSet({ promts, deletedPromts, groupMetadata, groupOrder }, render);
     }
 }
 
@@ -4615,7 +4674,7 @@ document.getElementById('tabColorPicker').addEventListener('input', (e) => {
     const key = document.getElementById('tabContextMenu').dataset.activeKey;
     if (key) {
         tabColors[key] = e.target.value;
-        chrome.storage.sync.set({ tabColors });
+        syncSet({ tabColors });
         applyTabColors();
     }
 });
@@ -4624,7 +4683,7 @@ document.getElementById('resetTabColorBtn').addEventListener('click', () => {
     const key = document.getElementById('tabContextMenu').dataset.activeKey;
     if (key) {
         delete tabColors[key];
-        chrome.storage.sync.set({ tabColors });
+        syncSet({ tabColors });
         applyTabColors();
         document.getElementById('tabContextMenu').style.display = 'none';
     }
@@ -4639,7 +4698,7 @@ document.getElementById('tabRenameApplyBtn').addEventListener('click', () => {
     } else {
         tabLabels[key] = newLabel;
     }
-    chrome.storage.sync.set({ tabLabels }, () => {
+    syncSet({ tabLabels }, () => {
         renderTabsNavigation();
         applyTabColors();
         document.getElementById('tabContextMenu').style.display = 'none';
@@ -4652,7 +4711,7 @@ document.getElementById('tabIconInput').addEventListener('input', (e) => {
     const icon = e.target.value.trim();
     if (icon) tabIcons[key] = icon; else delete tabIcons[key];
     delete tabCustomIcons[key];
-    chrome.storage.sync.set({ tabIcons }, () => {
+    syncSet({ tabIcons }, () => {
         chrome.storage.local.set({ tabCustomIcons }, () => {
             renderTabsNavigation();
             applyTabColors();
@@ -4668,7 +4727,7 @@ document.getElementById('tabIconQuickPick').addEventListener('click', (e) => {
     tabIcons[key] = btn.dataset.icon;
     delete tabCustomIcons[key];
     document.getElementById('tabIconInput').value = btn.dataset.icon;
-    chrome.storage.sync.set({ tabIcons }, () => {
+    syncSet({ tabIcons }, () => {
         chrome.storage.local.set({ tabCustomIcons }, () => {
             renderTabsNavigation();
             applyTabColors();
@@ -4692,7 +4751,7 @@ document.getElementById('tabIconFileInput').addEventListener('change', (e) => {
         delete tabIcons[key];
         document.getElementById('tabIconInput').value = '';
         chrome.storage.local.set({ tabCustomIcons }, () => {
-            chrome.storage.sync.set({ tabIcons }, () => {
+            syncSet({ tabIcons }, () => {
                 renderTabsNavigation();
                 applyTabColors();
             });
@@ -4707,7 +4766,7 @@ document.getElementById('tabIconClearBtn').addEventListener('click', () => {
     delete tabIcons[key];
     delete tabCustomIcons[key];
     document.getElementById('tabIconInput').value = '';
-    chrome.storage.sync.set({ tabIcons }, () => {
+    syncSet({ tabIcons }, () => {
         chrome.storage.local.set({ tabCustomIcons }, () => {
             renderTabsNavigation();
             applyTabColors();
@@ -4719,7 +4778,7 @@ document.getElementById('tabIconOnlyInput').addEventListener('change', (e) => {
     const key = document.getElementById('tabContextMenu').dataset.activeKey;
     if (!key) return;
     if (e.target.checked) tabIconOnly[key] = true; else delete tabIconOnly[key];
-    chrome.storage.sync.set({ tabIconOnly }, () => {
+    syncSet({ tabIconOnly }, () => {
         renderTabsNavigation();
         applyTabColors();
     });
@@ -4732,7 +4791,7 @@ document.getElementById('moveTabLeftBtn').addEventListener('click', () => {
     if (index > 0) {
         tabOrder[index] = tabOrder[index - 1];
         tabOrder[index - 1] = key;
-        chrome.storage.sync.set({ tabOrder }, () => {
+        syncSet({ tabOrder }, () => {
             renderTabsNavigation();
             applyTabColors();
             document.getElementById('tabContextMenu').style.display = 'none';
@@ -4747,7 +4806,7 @@ document.getElementById('moveTabRightBtn').addEventListener('click', () => {
     if (index !== -1 && index < tabOrder.length - 1) {
         tabOrder[index] = tabOrder[index + 1];
         tabOrder[index + 1] = key;
-        chrome.storage.sync.set({ tabOrder }, () => {
+        syncSet({ tabOrder }, () => {
             renderTabsNavigation();
             applyTabColors();
             document.getElementById('tabContextMenu').style.display = 'none';
@@ -4802,7 +4861,7 @@ function initTabTextColorPicker() {
         const key = document.getElementById('tabContextMenu').dataset.activeKey;
         if (!key) return;
         tabTextColors[key] = sw.dataset.color;
-        chrome.storage.sync.set({ tabTextColors });
+        syncSet({ tabTextColors });
         applyTabColors();
     });
 }
@@ -4812,7 +4871,7 @@ document.getElementById('resetTabTextColorBtn').addEventListener('click', () => 
     const key = document.getElementById('tabContextMenu').dataset.activeKey;
     if (!key) return;
     delete tabTextColors[key];
-    chrome.storage.sync.set({ tabTextColors });
+    syncSet({ tabTextColors });
     applyTabColors();
     document.getElementById('tabContextMenu').style.display = 'none';
 });
@@ -4833,7 +4892,7 @@ document.getElementById('renameTabBtn').addEventListener('click', () => {
         if (!tabs || !tabs[0]) return;
         _renameTabId = tabs[0].id;
         _renameTabUrl = tabs[0].url || null;
-        chrome.storage.sync.get({ tabTitleOverrides: {} }, ({ tabTitleOverrides }) => {
+        syncGet({ tabTitleOverrides: {} }, ({ tabTitleOverrides }) => {
             const saved = _renameTabUrl && tabTitleOverrides[_renameTabUrl];
             document.getElementById('renameTabInput').value = saved || tabs[0].title || '';
             const overlay = document.getElementById('renameTabOverlay');
@@ -4856,9 +4915,9 @@ function applyRenameTab() {
         args: [newTitle]
     });
     if (_renameTabUrl) {
-        chrome.storage.sync.get({ tabTitleOverrides: {} }, ({ tabTitleOverrides }) => {
+        syncGet({ tabTitleOverrides: {} }, ({ tabTitleOverrides }) => {
             tabTitleOverrides[_renameTabUrl] = newTitle;
-            chrome.storage.sync.set({ tabTitleOverrides });
+            syncSet({ tabTitleOverrides });
         });
     }
     document.getElementById('renameTabOverlay').style.display = 'none';
@@ -4868,9 +4927,9 @@ function applyRenameTab() {
 
 function resetRenameTab() {
     if (!_renameTabUrl) { document.getElementById('renameTabOverlay').style.display = 'none'; return; }
-    chrome.storage.sync.get({ tabTitleOverrides: {} }, ({ tabTitleOverrides }) => {
+    syncGet({ tabTitleOverrides: {} }, ({ tabTitleOverrides }) => {
         delete tabTitleOverrides[_renameTabUrl];
-        chrome.storage.sync.set({ tabTitleOverrides });
+        syncSet({ tabTitleOverrides });
         if (_renameTabId !== null) chrome.tabs.reload(_renameTabId);
         document.getElementById('renameTabOverlay').style.display = 'none';
         _renameTabId = null;
