@@ -60,7 +60,7 @@ const tabNames = {
     'sessions': 'Sessions',
     'notes': 'Notizen',
     'makros': 'Makros',
-    'bookmarks': 'Lesezeichen'
+    'bookmarks': 'Sites'
 };
 
 const providerIcons = {
@@ -294,7 +294,6 @@ function loadData() {
             renderSessions();
             populateGroupDropdowns();
             populateProviderDropdowns();
-            checkSyncStatus();
             initGroupDragDrop(document.getElementById('promptList'), false);
             initGroupDragDrop(document.getElementById('notesList'), true);
             initGroupDragDrop(document.getElementById('bookmarksList'), 'bookmark');
@@ -370,7 +369,7 @@ function checkSyncStatus() {
                     if (bytes > 92160) { color = '#cf6679'; warn = ' ⚠️ Kritisch'; }
                     else if (bytes > 71680) { color = '#ffaa44'; warn = ' ⚠️ Fast voll'; }
                     statusBox.innerHTML = `✅ Sync aktiv${warn} — ${kb} KB / 100 KB (${pct}%)<br>`
-                        + `<small style="opacity:0.8;font-weight:normal;">Synchronisiert: Prompts · Notizen · Lesezeichen · Sessions · Makros · Tab-Einstellungen</small>`;
+                        + `<small style="opacity:0.8;font-weight:normal;">Synchronisiert: Prompts · Notizen · Sites · Sessions · Makros · Tab-Einstellungen</small>`;
                     statusBox.style.color = color;
                 });
             });
@@ -381,9 +380,11 @@ function checkSyncStatus() {
     }
 }
 
+let _loadDebounceTimer = null;
 chrome.storage.onChanged.addListener((changes, areaName) => {
     if (areaName === 'sync') {
-        loadData();
+        clearTimeout(_loadDebounceTimer);
+        _loadDebounceTimer = setTimeout(loadData, 2000);
     }
 });
 
@@ -828,7 +829,7 @@ function renderBookmarks() {
     if (unassigned.length > 0) {
         html += unassigned.map(bObj => getBookmarkCardHtml(bObj.item, bObj.index)).join('');
     } else if (html === "") {
-        html = '<p style="font-size:12px; opacity:0.5; margin:0;">Keine Lesezeichen vorhanden.</p>';
+        html = '<p style="font-size:12px; opacity:0.5; margin:0;">Keine Sites vorhanden.</p>';
     }
 
     bList.innerHTML = html;
@@ -852,7 +853,7 @@ function getBookmarkCardHtml(b, i) {
             <div class="card-header">
                 <div class="prompt-info" data-bookmark-action="open" data-index="${i}" title="In neuem Tab öffnen">
                     <span class="bookmark-favicon-wrap" style="display:inline-flex; width:16px; height:16px; align-items:center; justify-content:center; flex-shrink:0;">${favicon ? `<img class="bookmark-favicon" src="${favicon}" data-fallback="🔖" style="width:14px; height:14px; object-fit:contain;">` : '🔖'}</span>
-                    <span class="prompt-title">${b.title || 'Unbenanntes Lesezeichen'}</span>
+                    <span class="prompt-title">${b.title || 'Unbenannte Site'}</span>
                 </div>
             </div>
             <div id="bookmark-content-${i}" class="content-box">${b.url || ''}</div>
@@ -3981,6 +3982,7 @@ document.getElementById('backupFileInput').addEventListener('change', (e) => {
                                 alert("System-Backup erfolgreich eingespielt!");
                                 document.getElementById('backupOverlay').style.display = 'none';
                                 document.getElementById('mainContainer').style.display = 'block';
+                                loadData();
                             });
                         });
                     });

@@ -92,10 +92,10 @@
 
     <div id="bookmarksView" class="tab-view" style="display:none;">
       <div class="header">
-        <input type="text" id="searchBookmarksInput" placeholder="⌕ Lesezeichen durchsuchen...">
-        <button id="sortBookmarksBtn" class="btn-icon" title="Lesezeichen ohne Gruppe A-Z sortieren">🔤</button>
-        <button id="importBookmarkFolderBtn" class="btn-icon" title="Ordner aus Lesezeichen importieren">📁</button>
-        <button id="addBookmarkToggleBtn" class="btn-icon" title="Lesezeichen hinzufügen">＋</button>
+        <input type="text" id="searchBookmarksInput" placeholder="⌕ Sites durchsuchen...">
+        <button id="sortBookmarksBtn" class="btn-icon" title="Sites ohne Gruppe A-Z sortieren">🔤</button>
+        <button id="importBookmarkFolderBtn" class="btn-icon" title="Ordner aus Sites importieren">📁</button>
+        <button id="addBookmarkToggleBtn" class="btn-icon" title="Site hinzufügen">＋</button>
       </div>
       <div id="bookmarksList"></div>
     </div>
@@ -105,7 +105,7 @@
       <button id="navSessions" class="tab-btn" data-tab="sessions">Sessions</button>
       <button id="navNotes" class="tab-btn" data-tab="notes">Notizen</button>
       <button id="navMakros" class="tab-btn" data-tab="makros">Makros</button>
-      <button id="navBookmarks" class="tab-btn" data-tab="bookmarks">Lesezeichen</button>
+      <button id="navBookmarks" class="tab-btn" data-tab="bookmarks">Sites</button>
     </div>
   </div>
 
@@ -355,7 +355,7 @@
 
   <div id="bookmarkInputGroup" style="display:none;">
     <div class="input-header">
-      <h3>🔖 Lesezeichen bearbeiten</h3>
+      <h3>🔖 Site bearbeiten</h3>
     </div>
     <input type="hidden" id="editBookmarkIndex" value="">
 
@@ -660,12 +660,9 @@
         <div id="syncStatusText" style="margin-top:6px; font-size:13px; font-weight:bold; line-height:1.5;">Prüfe Verbindung...</div>
         <div style="font-size:10px; color:var(--text-muted); margin-top:6px; line-height:1.4;">Voraussetzung: Chrome mit Google-Account angemeldet + Chrome-Sync aktiviert (Chrome-Einstellungen → Synchronisierung → Erweiterungen)</div>
       </div>
-      <p style="font-size:13px; opacity:0.8; line-height:1.4; margin-bottom:20px;">
-        Verwalte deine Daten-Backups und stelle sicher, dass die Google-Synchronisierung aktiv ist.
-      </p>
       <div style="display:flex; flex-direction:column; gap:12px;">
-        <button id="btnExecuteBackupExport" class="primary-btn">📥 Backup erstellen</button>
-        <button id="btnExecuteBackupImport" class="btn-icon-elegant" style="padding:12px; font-size:13px;">📤 Backup wiederherstellen</button>
+        <button id="btnExecuteBackupExport" class="primary-btn">📥 Backup</button>
+        <button id="btnExecuteBackupImport" class="btn-icon-elegant" style="padding:12px; font-size:13px;">📤 Recover</button>
         <input type="file" id="backupFileInput" style="display:none;" accept=".json">
       </div>
     </div>
