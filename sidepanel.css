@@ -17,7 +17,7 @@
 
 body { font-family: system-ui, -apple-system, sans-serif; margin: 0; display: flex; flex-direction: column; height: 100vh; background-color: var(--bg-color); color: var(--text-color); box-sizing: border-box; overflow: hidden; position: relative; }
 
-.context-menu { background: var(--card-bg); padding: 10px; border: 1px solid var(--input-border); border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.4); width: 120px; display: flex; flex-direction: column; gap: 10px; }
+.context-menu { background: var(--card-bg); padding: 10px; border: 1px solid var(--input-border); border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.4); width: 120px; display: flex; flex-direction: column; gap: 20px; }
 
 .btn-icon, .btn-icon-elegant, .primary-btn, .danger-btn {
   border: 1px solid rgba(255, 255, 255, 0.15) !important;
