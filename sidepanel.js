@@ -679,7 +679,7 @@ function getCardHtml(p, i) {
                 </div>
             </div>
             <div id="content-${i}" class="content-box">${p.text || ''}</div>
-            ${(p.createdAt || p.updatedAt) ? `<div style="font-size:10px; color:var(--text-muted); font-style:italic; margin-top:4px; padding:0 2px;">${p.createdAt ? '📅 ' + fmtDate(p.createdAt) : ''}${p.updatedAt && fmtDate(p.updatedAt) !== fmtDate(p.createdAt) ? ' · ✏️ ' + fmtDate(p.updatedAt) : ''}</div>` : ''}
+            ${(p.createdAt || p.updatedAt) ? `<div style="font-size:10px; color:var(--text-muted); font-style:italic; margin-top:4px; padding:0 2px; text-align:right;">${p.createdAt ? '📅 ' + fmtDate(p.createdAt) : ''}${p.updatedAt && fmtDate(p.updatedAt) !== fmtDate(p.createdAt) ? ' · ✏️ ' + fmtDate(p.updatedAt) : ''}</div>` : ''}
         </div>
     `;
 }
@@ -777,7 +777,7 @@ function getNoteCardHtml(n, i) {
                 <div style="white-space: pre-wrap;">${n.text || ''}</div>
                 ${todoHtml}
             </div>
-            ${(n.createdAt || n.updatedAt) ? `<div style="font-size:10px; color:var(--text-muted); font-style:italic; margin-top:4px; padding:0 2px;">${n.createdAt ? '📅 ' + fmtDate(n.createdAt) : ''}${n.updatedAt && fmtDate(n.updatedAt) !== fmtDate(n.createdAt) ? ' · ✏️ ' + fmtDate(n.updatedAt) : ''}</div>` : ''}
+            ${(n.createdAt || n.updatedAt) ? `<div style="font-size:10px; color:var(--text-muted); font-style:italic; margin-top:4px; padding:0 2px; text-align:right;">${n.createdAt ? '📅 ' + fmtDate(n.createdAt) : ''}${n.updatedAt && fmtDate(n.updatedAt) !== fmtDate(n.createdAt) ? ' · ✏️ ' + fmtDate(n.updatedAt) : ''}</div>` : ''}
     `;
     return noteCardEl.outerHTML;
 }
@@ -855,7 +855,7 @@ function getBookmarkCardHtml(b, i) {
                 </div>
             </div>
             <div id="bookmark-content-${i}" class="content-box">${b.url || ''}</div>
-            ${(b.createdAt || b.updatedAt) ? `<div style="font-size:10px; color:var(--text-muted); font-style:italic; margin-top:4px; padding:0 2px;">${b.createdAt ? '📅 ' + fmtDate(b.createdAt) : ''}${b.updatedAt && fmtDate(b.updatedAt) !== fmtDate(b.createdAt) ? ' · ✏️ ' + fmtDate(b.updatedAt) : ''}</div>` : ''}
+            ${(b.createdAt || b.updatedAt) ? `<div style="font-size:10px; color:var(--text-muted); font-style:italic; margin-top:4px; padding:0 2px; text-align:right;">${b.createdAt ? '📅 ' + fmtDate(b.createdAt) : ''}${b.updatedAt && fmtDate(b.updatedAt) !== fmtDate(b.createdAt) ? ' · ✏️ ' + fmtDate(b.updatedAt) : ''}</div>` : ''}
         </div>
     `;
 }
@@ -905,7 +905,7 @@ function renderMakros() {
                     </div>
                 </div>
                 <div id="makro-content-${i}" class="content-box" style="display:none; padding:4px;">${stepsHtml}</div>
-                ${(m.createdAt || m.updatedAt) ? `<div style="font-size:10px; color:var(--text-muted); font-style:italic; margin-top:4px; padding:0 2px;">${m.createdAt ? '📅 ' + fmtDate(m.createdAt) : ''}${m.updatedAt && fmtDate(m.updatedAt) !== fmtDate(m.createdAt) ? ' · ✏️ ' + fmtDate(m.updatedAt) : ''}</div>` : ''}
+                ${(m.createdAt || m.updatedAt) ? `<div style="font-size:10px; color:var(--text-muted); font-style:italic; margin-top:4px; padding:0 2px; text-align:right;">${m.createdAt ? '📅 ' + fmtDate(m.createdAt) : ''}${m.updatedAt && fmtDate(m.updatedAt) !== fmtDate(m.createdAt) ? ' · ✏️ ' + fmtDate(m.updatedAt) : ''}</div>` : ''}
             </div>
         `;
     }).join('');
