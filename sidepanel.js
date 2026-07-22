@@ -126,12 +126,10 @@ function syncSet(obj, cb) {
             chunks.forEach((c, i) => { toSet[`_ck_${k}_${i}`] = c; });
             const oldN = old[`_ck_${k}_n`] || 0;
             for (let i = chunks.length; i < oldN; i++) toRemove.push(`_ck_${k}_${i}`);
-            // Altes unchunked Plain-Key (Legacy-Daten von vor dem Chunking) aufräumen
-            toRemove.push(k);
         });
         chrome.storage.sync.set(toSet, () => {
             const hadError = !!chrome.runtime.lastError;
-            if (toRemove.length) chrome.storage.sync.remove(toRemove);
+            if (toRemove.length) chrome.storage.sync.remove(toRemove, () => { chrome.runtime.lastError; });
             if (cb) cb(hadError);
         });
     });
