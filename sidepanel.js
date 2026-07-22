@@ -852,6 +852,7 @@ function getBookmarkCardHtml(b, i) {
                 <div class="prompt-info" data-bookmark-action="open" data-index="${i}" title="In neuem Tab öffnen">
                     <span class="bookmark-favicon-wrap" style="display:inline-flex; width:16px; height:16px; align-items:center; justify-content:center; flex-shrink:0;">${favicon ? `<img class="bookmark-favicon" src="${favicon}" data-fallback="🔖" style="width:14px; height:14px; object-fit:contain;">` : '🔖'}</span>
                     <span class="prompt-title">${b.title || 'Unbenannte Site'}</span>
+                    ${(b.createdAt || b.updatedAt) ? `<div style="font-size:10px; color:#fff; font-style:italic; margin-top:2px; opacity:0.7;">${b.createdAt ? '📅 ' + fmtDate(b.createdAt) : ''}${b.updatedAt && b.updatedAt !== b.createdAt ? ' · ✏️ ' + fmtDate(b.updatedAt) : ''}</div>` : ''}
                 </div>
             </div>
             <div id="bookmark-content-${i}" class="content-box">${b.url || ''}</div>
@@ -3184,11 +3185,14 @@ document.getElementById('saveBookmarkBtn').addEventListener('click', () => {
         finalGroup = dropdownValue;
     }
 
+    const existingBookmark = i !== "" ? bookmarks[parseInt(i)] : null;
     const newBookmark = {
         title: document.getElementById('bookmarkTitleInput').value,
         url: document.getElementById('bookmarkUrlInput').value.trim(),
         color: selectedColor,
-        group: finalGroup
+        group: finalGroup,
+        createdAt: existingBookmark ? (existingBookmark.createdAt || Date.now()) : Date.now(),
+        updatedAt: Date.now()
     };
 
     if (i !== "") {
@@ -3242,7 +3246,7 @@ document.getElementById('bookmarkFolderPickerList').addEventListener('click', (e
         const links = (children || []).filter(c => c.url);
         if (links.length === 0) { alert('Dieser Ordner enthält keine Lesezeichen.'); return; }
         const groupName = folderName || 'Importierter Ordner';
-        links.forEach(c => bookmarks.push({ title: c.title || c.url, url: c.url, color: '#ff8c00', group: groupName }));
+        links.forEach(c => bookmarks.push({ title: c.title || c.url, url: c.url, color: '#ff8c00', group: groupName, createdAt: Date.now(), updatedAt: Date.now() }));
         if (!bookmarkGroupMetadata[groupName]) bookmarkGroupMetadata[groupName] = { color: '#ff8c00', icon: '📁' };
         syncSet({ bookmarks, bookmarkGroupMetadata }, () => {
             renderBookmarks();
@@ -3349,7 +3353,7 @@ bookmarksViewEl.addEventListener('drop', (e) => {
     const newGroupNames = new Set();
     links.forEach(l => {
         if (l.group && !bookmarkGroupMetadata[l.group]) newGroupNames.add(l.group);
-        bookmarks.push({ title: l.title, url: l.url, color: '#ff8c00', group: l.group });
+        bookmarks.push({ title: l.title, url: l.url, color: '#ff8c00', group: l.group, createdAt: Date.now(), updatedAt: Date.now() });
     });
     newGroupNames.forEach(gName => {
         bookmarkGroupMetadata[gName] = { color: '#ff8c00', icon: '🔖' };
@@ -3917,6 +3921,10 @@ document.getElementById('backupToggleBtn').addEventListener('click', () => {
 document.getElementById('syncRefreshBtn').addEventListener('click', () => {
     loadData();
     checkSyncStatus();
+});
+
+document.getElementById('openSyncSettingsBtn').addEventListener('click', () => {
+    chrome.tabs.create({ url: 'chrome://settings/syncSetup/advanced' });
 });
 
 document.getElementById('closeBackupBtn').addEventListener('click', () => {

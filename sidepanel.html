@@ -649,16 +649,16 @@
   <div id="backupOverlay" style="display:none;">
     <div class="input-header">
       <h3>🛡️ Backup & Sync Manager</h3>
-      <button id="closeBackupBtn" class="btn-icon">✕</button>
+      <button id="closeBackupBtn" class="btn-icon">←</button>
     </div>
     <div class="backup-box-content">
       <div id="syncStatusBox" class="prompt-card" style="margin-bottom:15px; border-left: 3px solid #ff8c00; background:rgba(0,0,0,0.2);">
         <div style="display:flex; align-items:center; justify-content:space-between; gap:8px;">
-          <div class="field-label" style="margin:0;">Status der Google Synchronisierung</div>
-          <button id="syncRefreshBtn" class="btn-icon-elegant" style="font-size:11px; padding:4px 8px; flex-shrink:0;">🔄 Neu laden</button>
+          <div class="field-label" style="margin:0;">Status</div>
+          <button id="syncRefreshBtn" class="btn-icon-elegant" style="font-size:11px; padding:4px 8px; flex-shrink:0;" title="Neu laden">🔄</button>
         </div>
         <div id="syncStatusText" style="margin-top:6px; font-size:13px; font-weight:bold; line-height:1.5;">Prüfe Verbindung...</div>
-        <div style="font-size:10px; color:var(--text-muted); margin-top:6px; line-height:1.4;">Voraussetzung: Chrome mit Google-Account angemeldet + Chrome-Sync aktiviert (Chrome-Einstellungen → Synchronisierung → Erweiterungen)</div>
+        <button id="openSyncSettingsBtn" class="btn-icon-elegant" style="font-size:10px; padding:4px 6px; margin-top:6px; text-align:left; line-height:1.4; width:100%;">⚙️ Chrome Sync-Einstellungen öffnen</button>
       </div>
       <div style="display:flex; flex-direction:column; gap:12px;">
         <button id="btnExecuteBackupExport" class="primary-btn">📥 Backup</button>
