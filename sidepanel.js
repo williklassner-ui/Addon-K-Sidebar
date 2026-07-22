@@ -676,7 +676,7 @@ function getCardHtml(p, i) {
                 <div class="prompt-info" data-action="copy-insert" data-index="${i}">
                     ${showIcon ? `<span class="provider-icon" title="${p.provider === 'none' ? 'Keins' : (p.provider || 'Anbieter')}">${icon}</span>` : ''}
                     <span class="prompt-title">${p.title || 'Unbenannt'}</span>
-                    ${(p.createdAt || p.updatedAt) ? `<div style="font-size:10px; color:#fff; font-style:italic; margin-top:2px; opacity:0.7;">${p.createdAt ? '📅 ' + fmtDate(p.createdAt) : ''}${p.updatedAt && p.updatedAt !== p.createdAt ? ' · ✏️ ' + fmtDate(p.updatedAt) : ''}</div>` : ''}
+                    ${(p.createdAt || p.updatedAt) ? `<div style="font-size:10px; color:#fff; font-style:italic; margin-top:2px; opacity:0.7;">${p.createdAt ? '📅 ' + fmtDate(p.createdAt) : ''}${p.updatedAt && fmtDate(p.updatedAt) !== fmtDate(p.createdAt) ? ' · ✏️ ' + fmtDate(p.updatedAt) : ''}</div>` : ''}
                 </div>
             </div>
             <div id="content-${i}" class="content-box">${p.text || ''}</div>
@@ -771,7 +771,7 @@ function getNoteCardHtml(n, i) {
             <div class="card-header">
                 <div class="note-info" data-note-action="toggle-view" data-index="${i}">
                     <span class="note-title" style="font-weight:bold; color:${tileColor}; cursor:pointer;" data-note-copy-idx="${i}">${n.pinned ? '📌 ' : ''}${n.icon ? '<span class="note-card-icon">' + n.icon + '</span> ' : ''}${n.title || 'Unbenannte Notiz'}</span>
-                    ${(n.createdAt || n.updatedAt) ? `<div style="font-size:10px; color:#fff; font-style:italic; margin-top:2px; opacity:0.7;">${n.createdAt ? '📅 ' + fmtDate(n.createdAt) : ''}${n.updatedAt && n.updatedAt !== n.createdAt ? ' · ✏️ ' + fmtDate(n.updatedAt) : ''}</div>` : ''}
+                    ${(n.createdAt || n.updatedAt) ? `<div style="font-size:10px; color:#fff; font-style:italic; margin-top:2px; opacity:0.7;">${n.createdAt ? '📅 ' + fmtDate(n.createdAt) : ''}${n.updatedAt && fmtDate(n.updatedAt) !== fmtDate(n.createdAt) ? ' · ✏️ ' + fmtDate(n.updatedAt) : ''}</div>` : ''}
                 </div>
             </div>
             <div id="note-content-${i}" class="content-box" style="display:none; background:rgba(0,0,0,0.3);">
@@ -852,7 +852,7 @@ function getBookmarkCardHtml(b, i) {
                 <div class="prompt-info" data-bookmark-action="open" data-index="${i}" title="In neuem Tab öffnen">
                     <span class="bookmark-favicon-wrap" style="display:inline-flex; width:16px; height:16px; align-items:center; justify-content:center; flex-shrink:0;">${favicon ? `<img class="bookmark-favicon" src="${favicon}" data-fallback="🔖" style="width:14px; height:14px; object-fit:contain;">` : '🔖'}</span>
                     <span class="prompt-title">${b.title || 'Unbenannte Site'}</span>
-                    ${(b.createdAt || b.updatedAt) ? `<div style="font-size:10px; color:#fff; font-style:italic; margin-top:2px; opacity:0.7;">${b.createdAt ? '📅 ' + fmtDate(b.createdAt) : ''}${b.updatedAt && b.updatedAt !== b.createdAt ? ' · ✏️ ' + fmtDate(b.updatedAt) : ''}</div>` : ''}
+                    ${(b.createdAt || b.updatedAt) ? `<div style="font-size:10px; color:#fff; font-style:italic; margin-top:2px; opacity:0.7;">${b.createdAt ? '📅 ' + fmtDate(b.createdAt) : ''}${b.updatedAt && fmtDate(b.updatedAt) !== fmtDate(b.createdAt) ? ' · ✏️ ' + fmtDate(b.updatedAt) : ''}</div>` : ''}
                 </div>
             </div>
             <div id="bookmark-content-${i}" class="content-box">${b.url || ''}</div>
@@ -901,7 +901,7 @@ function renderMakros() {
                         <div style="display:flex; flex-direction:column; flex:1; overflow:hidden;">
                             <span class="makro-title" style="font-weight:600;">${m.title || 'Unbenanntes Makro'}</span>
                             <span style="font-size:10px; opacity:0.5;">(${stepsCount} Schritte)${(m.repeat && m.repeat > 1) ? ` <span style="color:#ff8c00;">${m.repeat}×</span>` : ''}${m.domain ? ` <span title="Aufgenommen auf ${m.domain}">🌐</span>` : ''}${m.method === 1 ? ` <span style="color:#4caf50; font-weight:700; font-size:9px; background:rgba(76,175,80,0.15); padding:1px 4px; border-radius:3px;">M1</span>` : ''}</span>
-                            ${(m.createdAt || m.updatedAt) ? `<div style="font-size:10px; color:#fff; font-style:italic; margin-top:2px; opacity:0.7;">${m.createdAt ? '📅 ' + fmtDate(m.createdAt) : ''}${m.updatedAt && m.updatedAt !== m.createdAt ? ' · ✏️ ' + fmtDate(m.updatedAt) : ''}</div>` : ''}
+                            ${(m.createdAt || m.updatedAt) ? `<div style="font-size:10px; color:#fff; font-style:italic; margin-top:2px; opacity:0.7;">${m.createdAt ? '📅 ' + fmtDate(m.createdAt) : ''}${m.updatedAt && fmtDate(m.updatedAt) !== fmtDate(m.createdAt) ? ' · ✏️ ' + fmtDate(m.updatedAt) : ''}</div>` : ''}
                         </div>
                     </div>
                 </div>
