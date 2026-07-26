@@ -105,32 +105,69 @@ if (_versionLabel) _versionLabel.textContent = 'v' + chrome.runtime.getManifest(
 // promts/notes/bookmarks/makros überschreiten dieses Limit schnell, wodurch
 // chrome.storage.sync.set() für den betroffenen Key stillschweigend fehlschlägt
 // (kein Error, Daten syncen einfach nicht). Deshalb wird jeder Wert in Stücke
-// à 6.000 Zeichen aufgeteilt und unter `_ck_<key>_n` (Anzahl) + `_ck_<key>_0..n`
+// à max. 6.000 BYTES aufgeteilt und unter `_ck_<key>_n` (Anzahl) + `_ck_<key>_0..n`
 // (Fragmente) gespeichert - das umgeht das Pro-Key-Limit vollständig.
 const SYNC_CHUNK_SIZE = 6000;
+
+// Zeichenbasiertes Slicen reicht nicht: mehrbytige UTF-8-Zeichen (Umlaute, Emojis)
+// lassen einen "6000-Zeichen"-Chunk real über die 8192-Byte-Grenze wachsen, wodurch
+// chrome.storage.sync.set() für diesen Chunk stillschweigend fehlschlägt. Deshalb wird
+// hier die tatsächliche UTF-8-Byte-Länge jedes Chunks gemessen und die Grenze bei Bedarf
+// zurückgenommen.
+function splitIntoByteChunks(str, maxBytes) {
+    const chunks = [];
+    let i = 0;
+    const encoder = new TextEncoder();
+    while (i < str.length) {
+        let end = Math.min(i + maxBytes, str.length);
+        let slice = str.slice(i, end);
+        while (encoder.encode(slice).length > maxBytes && end > i + 1) {
+            end--;
+            slice = str.slice(i, end);
+        }
+        chunks.push(slice);
+        i = end;
+    }
+    if (chunks.length === 0) chunks.push('');
+    return chunks;
+}
+
+let _pendingSyncWrites = 0;
 
 function syncSet(obj, cb) {
     const keys = Object.keys(obj);
     if (keys.length === 0) { if (cb) cb(); return; }
     const countDefaults = {};
     keys.forEach(k => { countDefaults[`_ck_${k}_n`] = 0; });
+    _pendingSyncWrites++;
     chrome.storage.sync.get(countDefaults, (old) => {
         const toSet = {};
         const toRemove = [];
         keys.forEach(k => {
             const json = JSON.stringify(obj[k] === undefined ? null : obj[k]);
-            const chunks = [];
-            for (let i = 0; i < json.length; i += SYNC_CHUNK_SIZE) chunks.push(json.slice(i, i + SYNC_CHUNK_SIZE));
-            if (chunks.length === 0) chunks.push(json);
+            const chunks = splitIntoByteChunks(json, SYNC_CHUNK_SIZE);
             toSet[`_ck_${k}_n`] = chunks.length;
             chunks.forEach((c, i) => { toSet[`_ck_${k}_${i}`] = c; });
             const oldN = old[`_ck_${k}_n`] || 0;
             for (let i = chunks.length; i < oldN; i++) toRemove.push(`_ck_${k}_${i}`);
         });
-        chrome.storage.sync.set(toSet, () => {
-            const hadError = !!chrome.runtime.lastError;
+        const finish = (hadError) => {
             if (toRemove.length) chrome.storage.sync.remove(toRemove, () => { chrome.runtime.lastError; });
+            _pendingSyncWrites--;
             if (cb) cb(hadError);
+        };
+        chrome.storage.sync.set(toSet, () => {
+            if (chrome.runtime.lastError) {
+                // Einmaliger Retry deckt transiente Fehler (z.B. kurzzeitige Schreib-Drosselung) ab
+                setTimeout(() => {
+                    chrome.storage.sync.set(toSet, () => {
+                        if (chrome.runtime.lastError) console.error('K-Sidebar Sync-Fehler:', chrome.runtime.lastError.message);
+                        finish(!!chrome.runtime.lastError);
+                    });
+                }, 300);
+                return;
+            }
+            finish(false);
         });
     });
 }
@@ -379,10 +416,19 @@ function checkSyncStatus() {
 }
 
 let _loadDebounceTimer = null;
+function _scheduleLoadDataReload() {
+    if (_pendingSyncWrites > 0) {
+        // Ein eigener Schreibvorgang läuft noch - Reload verschieben, damit er nicht
+        // mit veralteten Daten den gerade erstellten/bearbeiteten Eintrag überschreibt
+        _loadDebounceTimer = setTimeout(_scheduleLoadDataReload, 500);
+        return;
+    }
+    loadData();
+}
 chrome.storage.onChanged.addListener((changes, areaName) => {
     if (areaName === 'sync') {
         clearTimeout(_loadDebounceTimer);
-        _loadDebounceTimer = setTimeout(loadData, 2000);
+        _loadDebounceTimer = setTimeout(_scheduleLoadDataReload, 2000);
     }
 });
 

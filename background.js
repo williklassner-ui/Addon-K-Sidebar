@@ -6,10 +6,28 @@ if (chrome.sidePanel && typeof chrome.sidePanel.setPanelBehavior === 'function')
   console.log("Mobilgerät oder SidePanel nicht unterstützt. Nutze Popup-Modus.");
 }
 
+// tabTitleOverrides liegt im Sidepanel gechunkt unter `_ck_tabTitleOverrides_n` (Anzahl) +
+// `_ck_tabTitleOverrides_0..n` (Fragmente), da chrome.storage.sync einzelne Keys auf 8.192
+// Bytes begrenzt. Deshalb hier dieselbe Reassemblierung statt eines nie beschriebenen Plain-Keys.
+function readSyncedTabTitleOverrides(cb) {
+    chrome.storage.sync.get({ '_ck_tabTitleOverrides_n': 0 }, (countRes) => {
+        const n = countRes['_ck_tabTitleOverrides_n'] || 0;
+        if (n <= 0) { cb({}); return; }
+        const keys = {};
+        for (let i = 0; i < n; i++) keys[`_ck_tabTitleOverrides_${i}`] = '';
+        chrome.storage.sync.get(keys, (chunkVals) => {
+            try {
+                const json = Array.from({ length: n }, (_, i) => chunkVals[`_ck_tabTitleOverrides_${i}`] || '').join('');
+                cb(JSON.parse(json) || {});
+            } catch (e) { cb({}); }
+        });
+    });
+}
+
 // Persistente Tab-Titel-Überschreibung
 function applyTabTitleOverride(tabId, url) {
     if (!url || url.startsWith('chrome://') || url.startsWith('edge://') || url.startsWith('about:') || url.startsWith('chrome-extension://')) return;
-    chrome.storage.sync.get({ tabTitleOverrides: {} }, ({ tabTitleOverrides }) => {
+    readSyncedTabTitleOverrides((tabTitleOverrides) => {
         const customTitle = tabTitleOverrides[url];
         if (!customTitle) return;
         chrome.scripting.executeScript({
