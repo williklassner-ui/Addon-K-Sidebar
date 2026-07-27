@@ -665,6 +665,16 @@
         <button id="btnExecuteBackupImport" class="btn-icon-elegant" style="padding:12px; font-size:13px;">📤 Recover</button>
         <input type="file" id="backupFileInput" style="display:none;" accept=".json">
       </div>
+      <div style="border-top:1px solid var(--input-border); margin-top:10px; padding-top:10px; display:flex; flex-direction:column; gap:8px;">
+        <label style="font-size:12px; display:flex; align-items:center; gap:8px; cursor:pointer;">
+          <input type="checkbox" id="syncFileEnabledInput" class="toggle-switch-input">
+          📁 Syncdatei aktivieren (deaktiviert die normale Sync-Methode)
+        </label>
+        <div id="syncFileConfigBox" style="display:none; flex-direction:column; gap:8px;">
+          <div id="syncFileStatusText" style="font-size:11px; opacity:0.8;"></div>
+          <button id="chooseSyncFileFolderBtn" class="btn-icon-elegant">📂 Google-Drive-Ordner wählen</button>
+        </div>
+      </div>
     </div>
   </div>
 

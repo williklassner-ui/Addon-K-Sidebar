@@ -134,13 +134,23 @@ function splitIntoByteChunks(str, maxBytes) {
 
 let _pendingSyncWrites = 0;
 
+// Wenn die Syncdatei-Funktion aktiv ist, wird die normale chrome.storage.sync-Synchronisierung
+// abgeschaltet - alle syncSet/syncGet-Aufrufe zielen dann stattdessen auf chrome.storage.local,
+// und die Syncdatei selbst übernimmt den geräteübergreifenden Abgleich (siehe writeSyncFile/
+// readSyncFileIfNewer weiter unten).
+let syncFileEnabled = false;
+function activeArea() {
+    return syncFileEnabled ? chrome.storage.local : chrome.storage.sync;
+}
+
 function syncSet(obj, cb) {
     const keys = Object.keys(obj);
     if (keys.length === 0) { if (cb) cb(); return; }
     const countDefaults = {};
     keys.forEach(k => { countDefaults[`_ck_${k}_n`] = 0; });
     _pendingSyncWrites++;
-    chrome.storage.sync.get(countDefaults, (old) => {
+    const area = activeArea();
+    area.get(countDefaults, (old) => {
         const toSet = {};
         const toRemove = [];
         keys.forEach(k => {
@@ -152,15 +162,16 @@ function syncSet(obj, cb) {
             for (let i = chunks.length; i < oldN; i++) toRemove.push(`_ck_${k}_${i}`);
         });
         const finish = (hadError) => {
-            if (toRemove.length) chrome.storage.sync.remove(toRemove, () => { chrome.runtime.lastError; });
+            if (toRemove.length) area.remove(toRemove, () => { chrome.runtime.lastError; });
             _pendingSyncWrites--;
             if (cb) cb(hadError);
+            if (!hadError && syncFileEnabled) scheduleSyncFileAutoWrite();
         };
-        chrome.storage.sync.set(toSet, () => {
+        area.set(toSet, () => {
             if (chrome.runtime.lastError) {
                 // Einmaliger Retry deckt transiente Fehler (z.B. kurzzeitige Schreib-Drosselung) ab
                 setTimeout(() => {
-                    chrome.storage.sync.set(toSet, () => {
+                    area.set(toSet, () => {
                         if (chrome.runtime.lastError) console.error('K-Sidebar Sync-Fehler:', chrome.runtime.lastError.message);
                         finish(!!chrome.runtime.lastError);
                     });
@@ -174,19 +185,20 @@ function syncSet(obj, cb) {
 
 function syncGet(defaults, cb) {
     const keys = Object.keys(defaults);
+    const area = activeArea();
     const countDefaults = {};
     keys.forEach(k => { countDefaults[`_ck_${k}_n`] = -1; });
-    chrome.storage.sync.get(countDefaults, (counts) => {
+    area.get(countDefaults, (counts) => {
         // Legacy: Werte, die noch als unchunked Plain-Key gespeichert sind (vor dem Update)
         const legacyDefaults = {};
         keys.forEach(k => { if (!(counts[`_ck_${k}_n`] > 0)) legacyDefaults[k] = undefined; });
-        chrome.storage.sync.get(legacyDefaults, (legacyVals) => {
+        area.get(legacyDefaults, (legacyVals) => {
             const chunkKeys = {};
             keys.forEach(k => {
                 const n = counts[`_ck_${k}_n`];
                 if (n > 0) { for (let i = 0; i < n; i++) chunkKeys[`_ck_${k}_${i}`] = ''; }
             });
-            chrome.storage.sync.get(chunkKeys, (chunkVals) => {
+            area.get(chunkKeys, (chunkVals) => {
                 const result = {};
                 keys.forEach(k => {
                     const n = counts[`_ck_${k}_n`];
@@ -415,6 +427,167 @@ function checkSyncStatus() {
     }
 }
 
+// --- Syncdatei (Datei-basierte Synchronisierung über einen lokalen Ordner, z.B. Google Drive
+// für Desktop) --- Das Verzeichnis-Handle der File System Access API ist nicht serialisierbar
+// über chrome.storage, daher wird es in IndexedDB gespeichert (Standard-Pattern für persistente
+// Handle-Berechtigungen).
+const SYNC_FILE_NAME = 'k_sidebar_syncfile.json';
+let _syncFileDirHandle = null;
+
+function _syncFileDb() {
+    return new Promise((resolve, reject) => {
+        const req = indexedDB.open('k_sidebar_syncfile_db', 1);
+        req.onupgradeneeded = () => { req.result.createObjectStore('handles'); };
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+    });
+}
+
+async function saveDirHandle(handle) {
+    const db = await _syncFileDb();
+    return new Promise((resolve, reject) => {
+        const tx = db.transaction('handles', 'readwrite');
+        tx.objectStore('handles').put(handle, 'syncFolder');
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+    });
+}
+
+async function loadDirHandle() {
+    const db = await _syncFileDb();
+    return new Promise((resolve) => {
+        const tx = db.transaction('handles', 'readonly');
+        const req = tx.objectStore('handles').get('syncFolder');
+        req.onsuccess = () => resolve(req.result || null);
+        req.onerror = () => resolve(null);
+    });
+}
+
+function isEmptyBackup(parsed) {
+    if (!parsed || !parsed.syncStorage || !parsed.timestamp) return true;
+    const s = parsed.syncStorage;
+    const hasContent = (s.promts && s.promts.length > 0) || (s.notes && s.notes.length > 0)
+        || (s.bookmarks && s.bookmarks.length > 0) || (s.makros && s.makros.length > 0)
+        || (s.savedSessions && s.savedSessions.length > 0);
+    return !hasContent;
+}
+
+async function writeSyncFile() {
+    if (!syncFileEnabled || !_syncFileDirHandle) return;
+    try {
+        const perm = await _syncFileDirHandle.queryPermission({ mode: 'readwrite' });
+        if (perm !== 'granted') return;
+        syncGet(SYNC_LOAD_DEFAULTS, async (syncData) => {
+            chrome.storage.local.get({ tabCustomIcons: {} }, async (localData) => {
+                const totalBackup = {
+                    K_SIDEBAR_BACKUP_VERSION: chrome.runtime.getManifest().version,
+                    timestamp: Date.now(),
+                    syncStorage: syncData,
+                    localStorage: { tabCustomIcons: localData.tabCustomIcons || {} }
+                };
+                if (isEmptyBackup(totalBackup)) return; // nie eine leere Syncdatei schreiben
+                try {
+                    const fileHandle = await _syncFileDirHandle.getFileHandle(SYNC_FILE_NAME, { create: true });
+                    const writable = await fileHandle.createWritable();
+                    await writable.write(JSON.stringify(totalBackup, null, 2));
+                    await writable.close();
+                    chrome.storage.local.set({ syncFileLastAppliedTimestamp: totalBackup.timestamp });
+                    const statusEl = document.getElementById('syncFileStatusText');
+                    if (statusEl) statusEl.textContent = `✅ Zuletzt geschrieben: ${new Date(totalBackup.timestamp).toLocaleString('de-DE')}`;
+                } catch (e) {
+                    console.error('K-Sidebar Syncdatei-Schreibfehler:', e.message);
+                }
+            });
+        });
+    } catch (e) {
+        console.error('K-Sidebar Syncdatei-Fehler:', e.message);
+    }
+}
+
+let _syncFileWriteTimer = null;
+function scheduleSyncFileAutoWrite() {
+    clearTimeout(_syncFileWriteTimer);
+    _syncFileWriteTimer = setTimeout(writeSyncFile, 3000);
+}
+
+async function readSyncFileIfNewer() {
+    if (!syncFileEnabled || !_syncFileDirHandle) return;
+    try {
+        const perm = await _syncFileDirHandle.queryPermission({ mode: 'readwrite' });
+        if (perm !== 'granted') {
+            const statusEl = document.getElementById('syncFileStatusText');
+            if (statusEl) statusEl.textContent = '⚠️ Zugriff auf den Ordner muss bestätigt werden (Button erneut klicken)';
+            return;
+        }
+        const fileHandle = await _syncFileDirHandle.getFileHandle(SYNC_FILE_NAME, { create: false }).catch(() => null);
+        if (!fileHandle) return; // Datei existiert noch nicht - nichts zu laden
+        const file = await fileHandle.getFile();
+        const text = await file.text();
+        const parsed = JSON.parse(text);
+        if (isEmptyBackup(parsed)) return; // Schutz: niemals ein leeres Backup laden
+        chrome.storage.local.get({ syncFileLastAppliedTimestamp: 0 }, (res) => {
+            if (parsed.timestamp <= res.syncFileLastAppliedTimestamp) return; // nichts Neueres
+            const syncToSet = Object.assign({}, SYNC_LOAD_DEFAULTS, parsed.syncStorage || {});
+            const localToSet = { tabCustomIcons: (parsed.localStorage && parsed.localStorage.tabCustomIcons) || {} };
+            syncSet(syncToSet, () => {
+                chrome.storage.local.set(Object.assign({}, localToSet, { syncFileLastAppliedTimestamp: parsed.timestamp }), () => {
+                    loadData();
+                });
+            });
+        });
+    } catch (e) {
+        console.error('K-Sidebar Syncdatei-Lesefehler:', e.message);
+    }
+}
+
+function updateSyncFileStatusUI() {
+    const box = document.getElementById('syncFileConfigBox');
+    const statusEl = document.getElementById('syncFileStatusText');
+    if (!box) return;
+    box.style.display = syncFileEnabled ? 'flex' : 'none';
+    if (!statusEl) return;
+    if (!syncFileEnabled) { statusEl.textContent = ''; return; }
+    statusEl.textContent = _syncFileDirHandle ? `📂 Ordner gewählt: ${_syncFileDirHandle.name}` : '⚠️ Noch kein Ordner gewählt';
+}
+
+document.getElementById('syncFileEnabledInput').addEventListener('change', async (e) => {
+    syncFileEnabled = e.target.checked;
+    chrome.storage.local.set({ syncFileEnabled });
+    updateSyncFileStatusUI();
+    if (syncFileEnabled && !_syncFileDirHandle) {
+        document.getElementById('chooseSyncFileFolderBtn').click();
+    } else if (syncFileEnabled) {
+        writeSyncFile();
+    }
+});
+
+document.getElementById('chooseSyncFileFolderBtn').addEventListener('click', async () => {
+    try {
+        const handle = await window.showDirectoryPicker({ mode: 'readwrite' });
+        _syncFileDirHandle = handle;
+        await saveDirHandle(handle);
+        updateSyncFileStatusUI();
+        writeSyncFile();
+    } catch (e) {
+        // User hat den Dialog abgebrochen - kein Fehler
+    }
+});
+
+async function initSyncFileFeature() {
+    return new Promise((resolve) => {
+        chrome.storage.local.get({ syncFileEnabled: false }, async (res) => {
+            syncFileEnabled = !!res.syncFileEnabled;
+            document.getElementById('syncFileEnabledInput').checked = syncFileEnabled;
+            if (syncFileEnabled) {
+                _syncFileDirHandle = await loadDirHandle();
+                updateSyncFileStatusUI();
+                await readSyncFileIfNewer();
+            }
+            resolve();
+        });
+    });
+}
+
 let _loadDebounceTimer = null;
 function _scheduleLoadDataReload() {
     if (_pendingSyncWrites > 0) {
@@ -426,7 +599,7 @@ function _scheduleLoadDataReload() {
     loadData();
 }
 chrome.storage.onChanged.addListener((changes, areaName) => {
-    if (areaName === 'sync') {
+    if (areaName === 'sync' && !syncFileEnabled) {
         clearTimeout(_loadDebounceTimer);
         _loadDebounceTimer = setTimeout(_scheduleLoadDataReload, 2000);
     }
@@ -5009,4 +5182,4 @@ document.getElementById('renameTabInput').addEventListener('keydown', (e) => {
     }
 });
 
-loadData();
+initSyncFileFeature().then(loadData);
