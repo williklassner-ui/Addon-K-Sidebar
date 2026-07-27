@@ -649,10 +649,15 @@
   <div id="backupOverlay" style="display:none;">
     <div class="input-header">
       <h3>🛡️ Backup & Sync Manager</h3>
-      <button id="closeBackupBtn" class="btn-icon">←</button>
+      <button id="closeBackupBtn" class="btn-icon btn-icon-accent">✕</button>
     </div>
     <div class="backup-box-content">
-      <div id="syncStatusBox" class="prompt-card" style="margin-bottom:15px; border-left: 3px solid #ff8c00; background:rgba(0,0,0,0.2);">
+      <div style="display:flex; flex-direction:column; gap:12px;">
+        <button id="btnExecuteBackupExport" class="primary-btn">📥 Backup</button>
+        <button id="btnExecuteBackupImport" class="btn-icon-elegant" style="padding:12px; font-size:13px;">📤 Recover</button>
+        <input type="file" id="backupFileInput" style="display:none;" accept=".json">
+      </div>
+      <div id="syncStatusBox" class="prompt-card" style="margin:15px 0; border-left: 3px solid #ff8c00; background:rgba(0,0,0,0.2);">
         <div style="display:flex; align-items:center; justify-content:space-between; gap:8px;">
           <div class="field-label" style="margin:0;">Status</div>
           <button id="syncRefreshBtn" class="btn-icon-elegant" style="font-size:11px; padding:4px 8px; flex-shrink:0;" title="Neu laden">🔄</button>
@@ -660,14 +665,9 @@
         <div id="syncStatusText" style="margin-top:6px; font-size:13px; font-weight:bold; line-height:1.5;">Prüfe Verbindung...</div>
         <button id="openSyncSettingsBtn" class="btn-icon-elegant" style="font-size:10px; padding:4px 6px; margin-top:6px; text-align:left; line-height:1.4; width:100%;">⚙️ Chrome Sync-Einstellungen öffnen</button>
       </div>
-      <div style="display:flex; flex-direction:column; gap:12px;">
-        <button id="btnExecuteBackupExport" class="primary-btn">📥 Backup</button>
-        <button id="btnExecuteBackupImport" class="btn-icon-elegant" style="padding:12px; font-size:13px;">📤 Recover</button>
-        <input type="file" id="backupFileInput" style="display:none;" accept=".json">
-      </div>
       <div style="border-top:1px solid var(--input-border); margin-top:10px; padding-top:10px; display:flex; flex-direction:column; gap:8px;">
         <button id="btnManualSyncNow" class="btn-icon-elegant">🔄 Jetzt synchronisieren</button>
-        <div id="syncLogBox" style="display:none; font-size:11px; font-family:monospace; background:rgba(0,0,0,0.25); border-radius:6px; padding:8px; max-height:160px; overflow-y:auto; white-space:pre-wrap;"></div>
+        <div id="syncLogBox" style="display:none; font-size:11px; font-family:monospace; background:rgba(0,0,0,0.25); border-radius:6px; padding:8px; white-space:pre-wrap;"></div>
       </div>
     </div>
   </div>
@@ -829,6 +829,7 @@
   </div>
 
   <div id="groupContextMenu" class="context-menu" style="display:none; position:fixed; z-index:99999; width:185px; gap:20px;">
+    <button id="ctxAddEntryToGroup" class="btn-icon-elegant" style="width:100%; text-align:left; padding:9px 10px; font-size:12px; margin-bottom:8px;">➕ Eintrag in Gruppe erstellen</button>
     <button id="ctxMoveGroupUp"   class="btn-icon-elegant" style="width:100%; text-align:left; padding:9px 10px; font-size:12px; margin-bottom:8px;">▲ Gruppe nach oben</button>
     <button id="ctxMoveGroupDown" class="btn-icon-elegant" style="width:100%; text-align:left; padding:9px 10px; font-size:12px; margin-bottom:8px;">▼ Gruppe nach unten</button>
     <button id="ctxDuplicateGroup" class="btn-icon-elegant" style="width:100%; text-align:left; padding:9px 10px; font-size:12px; margin-bottom:8px;">⧉ Gruppe duplizieren</button>

@@ -4246,18 +4246,21 @@ document.addEventListener('contextmenu', (e) => {
             menu.dataset.group = groupHeader.dataset.group;
             menu.dataset.type = 'prompt';
             document.getElementById('ctxDuplicateGroup').style.display = 'block';
+            document.getElementById('ctxAddEntryToGroup').style.display = 'block';
         } else if (noteGroupHeader) {
             const menu = document.getElementById('groupContextMenu');
             positionMenu(menu);
             menu.dataset.group = noteGroupHeader.dataset.notegroup;
             menu.dataset.type = 'note';
             document.getElementById('ctxDuplicateGroup').style.display = 'none';
+            document.getElementById('ctxAddEntryToGroup').style.display = 'none';
         } else if (bookmarkGroupHeader) {
             const menu = document.getElementById('groupContextMenu');
             positionMenu(menu);
             menu.dataset.group = bookmarkGroupHeader.dataset.bookmarkgroup;
             menu.dataset.type = 'bookmark';
             document.getElementById('ctxDuplicateGroup').style.display = 'none';
+            document.getElementById('ctxAddEntryToGroup').style.display = 'none';
         }
         return;
     }
@@ -4352,6 +4355,20 @@ document.getElementById('ctxDuplicatePrompt').addEventListener('click', () => {
     const copy = Object.assign({}, orig, { title: orig.title + ' (Kopie)' });
     promts.splice(idx + 1, 0, copy);
     syncSet({ promts }, render);
+});
+
+document.getElementById('ctxAddEntryToGroup').addEventListener('click', () => {
+    const menu = document.getElementById('groupContextMenu');
+    const gName = menu.dataset.group;
+    menu.style.display = 'none';
+    if (!gName || menu.dataset.type !== 'prompt') return;
+    document.getElementById('editIndex').value = "";
+    document.getElementById('mainContainer').style.display = 'none';
+    document.getElementById('inputGroup').style.display = 'flex';
+    populateGroupDropdowns();
+    renderRecentColors();
+    autoResizeTextInput();
+    document.getElementById('groupSelectOptions').value = gName;
 });
 
 document.getElementById('ctxDuplicateGroup').addEventListener('click', () => {
