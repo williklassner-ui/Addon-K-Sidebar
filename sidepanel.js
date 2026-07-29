@@ -569,9 +569,48 @@ document.getElementById('closeGhTokenBtn').addEventListener('click', () => {
     document.getElementById('mainContainer').style.display = 'block';
 });
 
+async function _cleanupActionsForRepo(owner, repo, token, appendLog) {
+    const headers = { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' };
+    let allRuns = [];
+    try {
+        let page = 1;
+        while (true) {
+            const res = await fetch(`https://api.github.com/repos/${owner}/${repo}/actions/runs?per_page=100&page=${page}`, { headers });
+            if (!res.ok) { appendLog(`❌ ${owner}/${repo}: HTTP ${res.status} ${res.statusText}`); return; }
+            const data = await res.json();
+            allRuns = allRuns.concat(data.workflow_runs || []);
+            if (!data.workflow_runs || data.workflow_runs.length < 100 || allRuns.length >= data.total_count) break;
+            page++;
+        }
+    } catch (e) {
+        appendLog(`❌ ${owner}/${repo}: Netzwerkfehler ${e.message}`);
+        return;
+    }
+    if (allRuns.length <= 1) {
+        appendLog(`ℹ️ Nur ${allRuns.length} Run(s) — nichts zu löschen.`);
+        return;
+    }
+    allRuns.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+    const [newest, ...toDelete] = allRuns;
+    appendLog(`  ✅ Behalten: #${newest.run_number} "${newest.display_title || newest.name}" (${new Date(newest.created_at).toLocaleString('de-DE')})`);
+    let ok = 0, fail = 0;
+    for (const run of toDelete) {
+        try {
+            const r = await fetch(`https://api.github.com/repos/${owner}/${repo}/actions/runs/${run.id}`, { method: 'DELETE', headers });
+            if (r.ok || r.status === 204) { ok++; } else { fail++; appendLog(`  ✗ #${run.run_number}: HTTP ${r.status}`); }
+        } catch (e) {
+            fail++;
+            appendLog(`  ✗ #${run.run_number}: ${e.message}`);
+        }
+    }
+    appendLog(`  → ${ok} gelöscht, ${fail} fehlgeschlagen.`);
+}
+
 async function cleanupGithubActions() {
     const logBox = document.getElementById('ghActionsLogBox');
+    const lines = [];
     const setLog = (text) => { if (logBox) { logBox.style.display = 'block'; logBox.textContent = text; } };
+    const appendLog = (line) => { lines.push(line); setLog(lines.join('\n')); };
 
     const tabs = await new Promise((resolve) => chrome.tabs.query({ active: true, currentWindow: true }, resolve));
     const url = tabs[0] && tabs[0].url;
@@ -589,58 +628,75 @@ async function cleanupGithubActions() {
         return;
     }
 
-    setLog(`⏳ Lade Workflow-Runs für ${owner}/${repo} …`);
+    appendLog(`⏳ Lade Workflow-Runs für ${owner}/${repo} …`);
+    appendLog(`🗑️ GitHub Actions aufgeräumt — ${new Date().toLocaleString('de-DE')}`);
+    await _cleanupActionsForRepo(owner, repo, token, appendLog);
+    appendLog('Fertig.');
+    chrome.tabs.reload(tabs[0].id);
+}
+
+async function cleanupAllGithubActions() {
+    const token = await decryptGithubToken();
+    if (!token) {
+        document.getElementById('mainContainer').style.display = 'none';
+        document.getElementById('ghTokenOverlay').style.display = 'flex';
+        return;
+    }
+    document.getElementById('mainContainer').style.display = 'none';
+    document.getElementById('ghCleanupAllOverlay').style.display = 'flex';
+    const repoList = document.getElementById('ghRepoList');
+    const logBox = document.getElementById('ghCleanupAllLogBox');
+    repoList.innerHTML = '<div style="opacity:0.7;">⏳ Lade Repos…</div>';
+    logBox.style.display = 'none'; logBox.textContent = '';
+
     const headers = { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' };
-    let allRuns = [];
+    let allRepos = [];
     try {
         let page = 1;
         while (true) {
-            const res = await fetch(`https://api.github.com/repos/${owner}/${repo}/actions/runs?per_page=100&page=${page}`, { headers });
-            if (!res.ok) { setLog(`❌ Fehler beim Laden der Runs: HTTP ${res.status} ${res.statusText}`); return; }
+            const res = await fetch(`https://api.github.com/user/repos?per_page=100&page=${page}&type=all`, { headers });
+            if (!res.ok) { repoList.innerHTML = `<div style="color:#cf6679">❌ HTTP ${res.status} ${res.statusText}</div>`; return; }
             const data = await res.json();
-            allRuns = allRuns.concat(data.workflow_runs || []);
-            if (!data.workflow_runs || data.workflow_runs.length < 100 || allRuns.length >= data.total_count) break;
+            allRepos = allRepos.concat(data);
+            if (data.length < 100) break;
             page++;
         }
     } catch (e) {
-        setLog(`❌ Netzwerkfehler beim Laden der Runs: ${e.message}`);
+        repoList.innerHTML = `<div style="color:#cf6679">❌ ${e.message}</div>`;
         return;
     }
-
-    if (allRuns.length <= 1) {
-        setLog(`ℹ️ Nur ${allRuns.length} Run(s) gefunden — nichts zu löschen.`);
-        return;
-    }
-
-    allRuns.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
-    const [newest, ...toDelete] = allRuns;
-
-    setLog(`⏳ Lösche ${toDelete.length} Run(s), behalte den neuesten (#${newest.run_number}, ${new Date(newest.created_at).toLocaleString('de-DE')}) …`);
-
-    const lines = [];
-    lines.push(`🗑️ GitHub Actions aufgeräumt — ${new Date().toLocaleString('de-DE')}`);
-    lines.push(`✅ Behalten: #${newest.run_number} "${newest.display_title || newest.name}" (${new Date(newest.created_at).toLocaleString('de-DE')})`);
-    let okCount = 0, failCount = 0;
-    for (const run of toDelete) {
-        try {
-            const res = await fetch(`https://api.github.com/repos/${owner}/${repo}/actions/runs/${run.id}`, { method: 'DELETE', headers });
-            if (res.ok || res.status === 204) {
-                okCount++;
-                lines.push(`  ✓ #${run.run_number} gelöscht`);
-            } else {
-                failCount++;
-                lines.push(`  ✗ #${run.run_number}: HTTP ${res.status}`);
-            }
-        } catch (e) {
-            failCount++;
-            lines.push(`  ✗ #${run.run_number}: ${e.message}`);
-        }
-        setLog(lines.join('\n'));
-    }
-    lines.push(`Fertig: ${okCount} gelöscht, ${failCount} fehlgeschlagen.`);
-    setLog(lines.join('\n'));
-    chrome.tabs.reload(tabs[0].id);
+    allRepos.sort((a, b) => a.full_name.localeCompare(b.full_name));
+    repoList.innerHTML = allRepos.map(r =>
+        `<label style="display:flex; align-items:center; gap:6px; cursor:pointer; padding:3px 0;">` +
+        `<input type="checkbox" class="gh-repo-checkbox" data-owner="${r.owner.login}" data-repo="${r.name}" checked>` +
+        `<span>${r.full_name}</span></label>`
+    ).join('');
 }
+
+document.getElementById('ghSelectAllReposBtn').addEventListener('click', () =>
+    document.querySelectorAll('.gh-repo-checkbox').forEach(cb => cb.checked = true));
+document.getElementById('ghDeselectAllReposBtn').addEventListener('click', () =>
+    document.querySelectorAll('.gh-repo-checkbox').forEach(cb => cb.checked = false));
+document.getElementById('closeGhCleanupAllBtn').addEventListener('click', () => {
+    document.getElementById('ghCleanupAllOverlay').style.display = 'none';
+    document.getElementById('mainContainer').style.display = 'block';
+});
+document.getElementById('ghStartCleanupAllBtn').addEventListener('click', async () => {
+    const token = await decryptGithubToken();
+    if (!token) return;
+    const logBox = document.getElementById('ghCleanupAllLogBox');
+    logBox.style.display = 'block'; logBox.textContent = '';
+    const appendLog = (line) => { logBox.textContent += line + '\n'; logBox.scrollTop = logBox.scrollHeight; };
+    const checked = document.querySelectorAll('.gh-repo-checkbox:checked');
+    if (!checked.length) { appendLog('ℹ️ Keine Repos ausgewählt.'); return; }
+    appendLog(`🗑️ Starte Aufräumen — ${new Date().toLocaleString('de-DE')}`);
+    for (const cb of checked) {
+        appendLog(`\n🗂️ ${cb.dataset.owner}/${cb.dataset.repo}`);
+        await _cleanupActionsForRepo(cb.dataset.owner, cb.dataset.repo, token, appendLog);
+    }
+    appendLog('\n✅ Fertig.');
+});
+document.getElementById('cleanupAllGhActionsBtn').addEventListener('click', cleanupAllGithubActions);
 
 document.getElementById('cleanupGhActionsBtn').addEventListener('click', cleanupGithubActions);
 
