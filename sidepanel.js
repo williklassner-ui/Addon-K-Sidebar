@@ -1261,7 +1261,7 @@ function renderMakros() {
     if (!mList) return;
 
     if (makros.length === 0) {
-        mList.innerHTML = '<p style="font-size:12px; opacity:0.5; margin:0;">Keine Makros vorhanden.</p>';
+        mList.innerHTML = '';
         return;
     }
 
