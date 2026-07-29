@@ -609,7 +609,7 @@ async function _cleanupActionsForRepo(owner, repo, token, appendLog) {
 async function cleanupGithubActions() {
     const logBox = document.getElementById('ghActionsLogBox');
     const lines = [];
-    const setLog = (text) => { if (logBox) { logBox.style.display = 'block'; logBox.textContent = text; } };
+    const setLog = (text) => { if (logBox) { logBox.style.display = 'block'; logBox.textContent = text; document.getElementById('clearGhActionsLogBtn').style.display = 'block'; } };
     const appendLog = (line) => { lines.push(line); setLog(lines.join('\n')); };
 
     const tabs = await new Promise((resolve) => chrome.tabs.query({ active: true, currentWindow: true }, resolve));
@@ -686,7 +686,7 @@ document.getElementById('ghStartCleanupAllBtn').addEventListener('click', async 
     if (!token) return;
     const logBox = document.getElementById('ghCleanupAllLogBox');
     logBox.style.display = 'block'; logBox.textContent = '';
-    const appendLog = (line) => { logBox.textContent += line + '\n'; logBox.scrollTop = logBox.scrollHeight; };
+    const appendLog = (line) => { logBox.textContent += line + '\n'; logBox.scrollTop = logBox.scrollHeight; document.getElementById('clearGhCleanupAllLogBtn').style.display = 'block'; };
     const checked = document.querySelectorAll('.gh-repo-checkbox:checked');
     if (!checked.length) { appendLog('ℹ️ Keine Repos ausgewählt.'); return; }
     appendLog(`🗑️ Starte Aufräumen — ${new Date().toLocaleString('de-DE')}`);
@@ -697,6 +697,18 @@ document.getElementById('ghStartCleanupAllBtn').addEventListener('click', async 
     appendLog('\n✅ Fertig.');
 });
 document.getElementById('cleanupAllGhActionsBtn').addEventListener('click', cleanupAllGithubActions);
+
+document.getElementById('clearGhActionsLogBtn').addEventListener('click', () => {
+    document.getElementById('ghActionsLogBox').style.display = 'none';
+    document.getElementById('ghActionsLogBox').textContent = '';
+    document.getElementById('clearGhActionsLogBtn').style.display = 'none';
+});
+
+document.getElementById('clearGhCleanupAllLogBtn').addEventListener('click', () => {
+    document.getElementById('ghCleanupAllLogBox').style.display = 'none';
+    document.getElementById('ghCleanupAllLogBox').textContent = '';
+    document.getElementById('clearGhCleanupAllLogBtn').style.display = 'none';
+});
 
 document.getElementById('cleanupGhActionsBtn').addEventListener('click', cleanupGithubActions);
 
