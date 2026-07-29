@@ -488,6 +488,162 @@ function runManualSync() {
 
 document.getElementById('btnManualSyncNow').addEventListener('click', runManualSync);
 
+// --- GitHub Actions Runs aufräumen ---
+// Der GitHub-Token wird verschlüsselt abgelegt: ein nicht-extrahierbarer AES-GCM-256-Schlüssel
+// liegt als CryptoKey-Objekt in IndexedDB (kann per Web-Crypto-API nur ver-/entschlüsseln, der
+// Rohschlüssel selbst ist aus dem Storage nicht auslesbar). Nur der Ciphertext landet in
+// chrome.storage.local.
+function _ghSecureDb() {
+    return new Promise((resolve, reject) => {
+        const req = indexedDB.open('k_sidebar_secure_db', 1);
+        req.onupgradeneeded = () => { req.result.createObjectStore('keys'); };
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+    });
+}
+
+async function getOrCreateCryptoKey() {
+    const db = await _ghSecureDb();
+    const existing = await new Promise((resolve) => {
+        const tx = db.transaction('keys', 'readonly');
+        const req = tx.objectStore('keys').get('ghTokenKey');
+        req.onsuccess = () => resolve(req.result || null);
+        req.onerror = () => resolve(null);
+    });
+    if (existing) return existing;
+    const key = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+    await new Promise((resolve, reject) => {
+        const tx = db.transaction('keys', 'readwrite');
+        tx.objectStore('keys').put(key, 'ghTokenKey');
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+    });
+    return key;
+}
+
+function _bufToBase64(buf) {
+    return btoa(String.fromCharCode(...new Uint8Array(buf)));
+}
+function _base64ToBuf(b64) {
+    return Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+}
+
+async function encryptGithubToken(token) {
+    const key = await getOrCreateCryptoKey();
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, new TextEncoder().encode(token));
+    chrome.storage.local.set({ githubActionsTokenEnc: { iv: _bufToBase64(iv), data: _bufToBase64(ciphertext) } });
+}
+
+async function decryptGithubToken() {
+    const res = await new Promise((resolve) => chrome.storage.local.get({ githubActionsTokenEnc: null }, resolve));
+    if (!res.githubActionsTokenEnc) return null;
+    try {
+        const key = await getOrCreateCryptoKey();
+        const iv = _base64ToBuf(res.githubActionsTokenEnc.iv);
+        const data = _base64ToBuf(res.githubActionsTokenEnc.data);
+        const plainBuf = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, data);
+        return new TextDecoder().decode(plainBuf);
+    } catch (e) {
+        return null; // Schlüssel/Ciphertext passen nicht zusammen (z.B. Extension neu installiert)
+    }
+}
+
+document.getElementById('openGhTokenPageBtn').addEventListener('click', () => {
+    chrome.tabs.create({ url: 'https://github.com/settings/tokens/new?description=K-Sidebar%20Actions%20Cleanup&scopes=repo' });
+});
+
+document.getElementById('saveGhTokenBtn').addEventListener('click', async () => {
+    const input = document.getElementById('ghTokenInput');
+    const token = input.value.trim();
+    if (!token) return;
+    await encryptGithubToken(token);
+    input.value = '';
+    document.getElementById('ghTokenOverlay').style.display = 'none';
+    document.getElementById('mainContainer').style.display = 'block';
+    alert('Token gespeichert (verschlüsselt). Klicke jetzt erneut auf "🗑️ GH Actions".');
+});
+
+document.getElementById('closeGhTokenBtn').addEventListener('click', () => {
+    document.getElementById('ghTokenOverlay').style.display = 'none';
+    document.getElementById('mainContainer').style.display = 'block';
+});
+
+async function cleanupGithubActions() {
+    const logBox = document.getElementById('ghActionsLogBox');
+    const setLog = (text) => { if (logBox) { logBox.style.display = 'block'; logBox.textContent = text; } };
+
+    const tabs = await new Promise((resolve) => chrome.tabs.query({ active: true, currentWindow: true }, resolve));
+    const url = tabs[0] && tabs[0].url;
+    const match = url && url.match(/^https:\/\/github\.com\/([^\/]+)\/([^\/]+)\/actions/);
+    if (!match) {
+        alert('Bitte auf einer GitHub-Actions-Seite eines Repos ausführen (z.B. https://github.com/owner/repo/actions).');
+        return;
+    }
+    const [, owner, repo] = match;
+
+    const token = await decryptGithubToken();
+    if (!token) {
+        document.getElementById('mainContainer').style.display = 'none';
+        document.getElementById('ghTokenOverlay').style.display = 'flex';
+        return;
+    }
+
+    setLog(`⏳ Lade Workflow-Runs für ${owner}/${repo} …`);
+    const headers = { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' };
+    let allRuns = [];
+    try {
+        let page = 1;
+        while (true) {
+            const res = await fetch(`https://api.github.com/repos/${owner}/${repo}/actions/runs?per_page=100&page=${page}`, { headers });
+            if (!res.ok) { setLog(`❌ Fehler beim Laden der Runs: HTTP ${res.status} ${res.statusText}`); return; }
+            const data = await res.json();
+            allRuns = allRuns.concat(data.workflow_runs || []);
+            if (!data.workflow_runs || data.workflow_runs.length < 100 || allRuns.length >= data.total_count) break;
+            page++;
+        }
+    } catch (e) {
+        setLog(`❌ Netzwerkfehler beim Laden der Runs: ${e.message}`);
+        return;
+    }
+
+    if (allRuns.length <= 1) {
+        setLog(`ℹ️ Nur ${allRuns.length} Run(s) gefunden — nichts zu löschen.`);
+        return;
+    }
+
+    allRuns.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+    const [newest, ...toDelete] = allRuns;
+
+    setLog(`⏳ Lösche ${toDelete.length} Run(s), behalte den neuesten (#${newest.run_number}, ${new Date(newest.created_at).toLocaleString('de-DE')}) …`);
+
+    const lines = [];
+    lines.push(`🗑️ GitHub Actions aufgeräumt — ${new Date().toLocaleString('de-DE')}`);
+    lines.push(`✅ Behalten: #${newest.run_number} "${newest.display_title || newest.name}" (${new Date(newest.created_at).toLocaleString('de-DE')})`);
+    let okCount = 0, failCount = 0;
+    for (const run of toDelete) {
+        try {
+            const res = await fetch(`https://api.github.com/repos/${owner}/${repo}/actions/runs/${run.id}`, { method: 'DELETE', headers });
+            if (res.ok || res.status === 204) {
+                okCount++;
+                lines.push(`  ✓ #${run.run_number} gelöscht`);
+            } else {
+                failCount++;
+                lines.push(`  ✗ #${run.run_number}: HTTP ${res.status}`);
+            }
+        } catch (e) {
+            failCount++;
+            lines.push(`  ✗ #${run.run_number}: ${e.message}`);
+        }
+        setLog(lines.join('\n'));
+    }
+    lines.push(`Fertig: ${okCount} gelöscht, ${failCount} fehlgeschlagen.`);
+    setLog(lines.join('\n'));
+    chrome.tabs.reload(tabs[0].id);
+}
+
+document.getElementById('cleanupGhActionsBtn').addEventListener('click', cleanupGithubActions);
+
 let _loadDebounceTimer = null;
 function _scheduleLoadDataReload() {
     if (_pendingSyncWrites > 0) {

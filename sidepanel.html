@@ -68,6 +68,10 @@
         <input type="text" id="searchMakrosInput" placeholder="⌕ Makros durchsuchen...">
         <button id="recordMakroBtn" class="record-btn" title="Makro live im aktiven Tab aufnehmen"><span class="record-dot"></span> REC</button>
       </div>
+      <div style="display:flex; flex-direction:column; gap:6px; margin-bottom:8px;">
+        <button id="cleanupGhActionsBtn" class="btn-icon-elegant" title="Alle GitHub-Actions-Runs bis auf den neuesten löschen">🗑️ GH Actions</button>
+        <div id="ghActionsLogBox" style="display:none; font-size:11px; font-family:monospace; background:rgba(0,0,0,0.25); border-radius:6px; padding:8px; white-space:pre-wrap;"></div>
+      </div>
       <div id="makroPlaybackBar" style="display:none; flex-direction:column; padding:8px 10px; border-bottom:1px solid #444; background:rgba(255,140,0,0.1); gap:6px; margin-bottom:2px;">
         <div style="display:flex; align-items:center; gap:8px;">
           <span id="makroPlaybackTitle" style="font-size:12px; flex:1; font-weight:600; opacity:0.9; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">Makro</span>
@@ -669,6 +673,24 @@
         <button id="btnManualSyncNow" class="btn-icon-elegant">🔄 Jetzt synchronisieren</button>
         <div id="syncLogBox" style="display:none; font-size:11px; font-family:monospace; background:rgba(0,0,0,0.25); border-radius:6px; padding:8px; white-space:pre-wrap;"></div>
       </div>
+    </div>
+  </div>
+
+  <div id="ghTokenOverlay" style="display:none;">
+    <div class="input-header">
+      <h3>🔑 GitHub Token einrichten</h3>
+      <button id="closeGhTokenBtn" class="btn-icon btn-icon-accent">✕</button>
+    </div>
+    <div style="display:flex; flex-direction:column; gap:12px; padding:15px;">
+      <p style="font-size:13px; line-height:1.5;">Für das automatische Löschen alter GitHub-Actions-Runs wird ein <b>Personal Access Token</b> benötigt (wird verschlüsselt lokal gespeichert).</p>
+      <ol style="font-size:12px; line-height:1.6; padding-left:18px;">
+        <li>Klicke unten auf "Token erstellen" — öffnet GitHub mit vorausgefülltem Scope (<code>repo</code>).</li>
+        <li>Gib dem Token einen Namen, bestätige unten auf der GitHub-Seite mit "Generate token".</li>
+        <li>Kopiere den angezeigten Token und füge ihn hier unten ein.</li>
+      </ol>
+      <button id="openGhTokenPageBtn" class="btn-icon-elegant">🔗 Token auf GitHub erstellen</button>
+      <input type="password" id="ghTokenInput" placeholder="ghp_..." style="width:100%; padding:8px;">
+      <button id="saveGhTokenBtn" class="primary-btn">💾 Token speichern</button>
     </div>
   </div>
 
