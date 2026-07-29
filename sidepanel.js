@@ -644,6 +644,27 @@ async function cleanupGithubActions() {
 
 document.getElementById('cleanupGhActionsBtn').addEventListener('click', cleanupGithubActions);
 
+document.getElementById('cleanupGhActionsBtn').addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+    const menu = document.getElementById('ghActionsContextMenu');
+    menu.style.visibility = 'hidden';
+    menu.style.left = '0px'; menu.style.top = '0px';
+    menu.style.display = 'block';
+    requestAnimationFrame(() => {
+        const rect = menu.getBoundingClientRect();
+        let x = Math.max(5, Math.min(e.clientX, window.innerWidth - rect.width - 5));
+        let y = Math.max(5, Math.min(e.clientY, window.innerHeight - rect.height - 5));
+        menu.style.left = x + 'px'; menu.style.top = y + 'px';
+        menu.style.visibility = 'visible';
+    });
+});
+
+document.getElementById('ctxChangeGhToken').addEventListener('click', () => {
+    document.getElementById('ghActionsContextMenu').style.display = 'none';
+    document.getElementById('mainContainer').style.display = 'none';
+    document.getElementById('ghTokenOverlay').style.display = 'flex';
+});
+
 let _loadDebounceTimer = null;
 function _scheduleLoadDataReload() {
     if (_pendingSyncWrites > 0) {
@@ -5182,6 +5203,7 @@ document.addEventListener('click', () => {
     document.getElementById('noteContextMenu').style.display = 'none';
     document.getElementById('bookmarkContextMenu').style.display = 'none';
     document.getElementById('groupContextMenu').style.display = 'none';
+    document.getElementById('ghActionsContextMenu').style.display = 'none';
 });
 
 // Browser-Tab umbenennen
