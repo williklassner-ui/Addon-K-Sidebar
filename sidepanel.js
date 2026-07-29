@@ -733,6 +733,38 @@ document.getElementById('ctxChangeGhToken').addEventListener('click', () => {
     document.getElementById('ghTokenOverlay').style.display = 'flex';
 });
 
+document.getElementById('ctxClearGhActionsLog').addEventListener('click', () => {
+    document.getElementById('ghActionsContextMenu').style.display = 'none';
+    document.getElementById('ghActionsLogBox').style.display = 'none';
+    document.getElementById('ghActionsLogBox').textContent = '';
+    document.getElementById('clearGhActionsLogBtn').style.display = 'none';
+});
+
+document.getElementById('cleanupAllGhActionsBtn').addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+    const menu = document.getElementById('ghActionsAllContextMenu');
+    menu.style.visibility = 'hidden'; menu.style.left = '0px'; menu.style.top = '0px'; menu.style.display = 'block';
+    requestAnimationFrame(() => {
+        const rect = menu.getBoundingClientRect();
+        let x = Math.max(5, Math.min(e.clientX, window.innerWidth - rect.width - 5));
+        let y = Math.max(5, Math.min(e.clientY, window.innerHeight - rect.height - 5));
+        menu.style.left = x + 'px'; menu.style.top = y + 'px'; menu.style.visibility = 'visible';
+    });
+});
+
+document.getElementById('ctxChangeGhTokenAll').addEventListener('click', () => {
+    document.getElementById('ghActionsAllContextMenu').style.display = 'none';
+    document.getElementById('mainContainer').style.display = 'none';
+    document.getElementById('ghTokenOverlay').style.display = 'flex';
+});
+
+document.getElementById('ctxClearGhCleanupAllLog').addEventListener('click', () => {
+    document.getElementById('ghActionsAllContextMenu').style.display = 'none';
+    document.getElementById('ghCleanupAllLogBox').style.display = 'none';
+    document.getElementById('ghCleanupAllLogBox').textContent = '';
+    document.getElementById('clearGhCleanupAllLogBtn').style.display = 'none';
+});
+
 let _loadDebounceTimer = null;
 function _scheduleLoadDataReload() {
     if (_pendingSyncWrites > 0) {
@@ -1229,7 +1261,7 @@ function renderMakros() {
     if (!mList) return;
 
     if (makros.length === 0) {
-        mList.innerHTML = '<p style="font-size:12px; opacity:0.5; margin:0;">Keine Makros vorhanden.</p>';
+        mList.innerHTML = '';
         return;
     }
 
@@ -5272,6 +5304,7 @@ document.addEventListener('click', () => {
     document.getElementById('bookmarkContextMenu').style.display = 'none';
     document.getElementById('groupContextMenu').style.display = 'none';
     document.getElementById('ghActionsContextMenu').style.display = 'none';
+    document.getElementById('ghActionsAllContextMenu').style.display = 'none';
 });
 
 // Browser-Tab umbenennen
