@@ -395,7 +395,15 @@ function renderTabsNavigation() {
         const displayText = (iconOnly && hasIcon) ? iconHtml : (hasIcon ? iconHtml + ' ' + label : label);
         return `<button id="nav${key.charAt(0).toUpperCase() + key.slice(1)}" class="tab-btn ${activeTabKey === key ? 'active' : ''}" data-tab="${key}" title="${label}">${displayText}</button>`;
     }).join('');
+    syncTabsNavHeight();
 }
+
+function syncTabsNavHeight() {
+    const nav = document.getElementById('tabsNavContainer');
+    if (!nav) return;
+    document.documentElement.style.setProperty('--tabs-nav-height', nav.getBoundingClientRect().height + 'px');
+}
+window.addEventListener('resize', syncTabsNavHeight);
 
 function applyTabColors() {
     document.querySelectorAll('.tab-btn').forEach(btn => {
@@ -679,7 +687,7 @@ async function cleanupAllGithubActions() {
     repoList.innerHTML = allRepos.map(r =>
         `<label style="display:flex; align-items:center; gap:6px; cursor:pointer; padding:3px 0;">` +
         `<input type="checkbox" class="gh-repo-checkbox" data-owner="${r.owner.login}" data-repo="${r.name}" checked>` +
-        `<span>${r.full_name}</span></label>`
+        `<span>${r.name}</span></label>`
     ).join('');
 }
 
@@ -773,9 +781,6 @@ async function openGhArtifactPicker() {
     document.getElementById('ghArtifactOverlay').style.display = 'flex';
     const repoList = document.getElementById('ghArtifactRepoList');
     const logBox = document.getElementById('ghArtifactLogBox');
-    _ghArtifactPending = null;
-    document.getElementById('ghArtifactConfirmBox').style.display = 'none';
-    repoList.style.display = 'flex';
     repoList.innerHTML = '<div style="opacity:0.7;">⏳ Lade Repos…</div>';
     logBox.style.display = 'none'; logBox.textContent = '';
 
@@ -797,52 +802,38 @@ async function openGhArtifactPicker() {
     }
     allRepos.sort((a, b) => a.full_name.localeCompare(b.full_name));
     repoList.innerHTML = allRepos.map(r =>
-        `<button class="btn-icon-elegant gh-artifact-repo-btn" data-owner="${r.owner.login}" data-repo="${r.name}" style="text-align:left; font-size:12px;">${r.full_name}</button>`
+        `<label style="display:flex; align-items:center; gap:6px; cursor:pointer; padding:3px 0;">` +
+        `<input type="checkbox" class="gh-artifact-repo-checkbox" data-owner="${r.owner.login}" data-repo="${r.name}">` +
+        `<span>${r.name}</span></label>`
     ).join('');
 }
 
 document.getElementById('ghArtifactDownloadBtn').addEventListener('click', openGhArtifactPicker);
 
-let _ghArtifactPending = null;
+document.getElementById('ghArtifactSelectAllBtn').addEventListener('click', () =>
+    document.querySelectorAll('.gh-artifact-repo-checkbox').forEach(cb => cb.checked = true));
+document.getElementById('ghArtifactDeselectAllBtn').addEventListener('click', () =>
+    document.querySelectorAll('.gh-artifact-repo-checkbox').forEach(cb => cb.checked = false));
 
-document.getElementById('ghArtifactRepoList').addEventListener('click', async (e) => {
-    const btn = e.target.closest('.gh-artifact-repo-btn');
-    if (!btn) return;
+document.getElementById('ghArtifactStartBtn').addEventListener('click', async () => {
     const token = await decryptGithubToken();
     if (!token) return;
     const logBox = document.getElementById('ghArtifactLogBox');
     logBox.style.display = 'block'; logBox.textContent = '';
     const appendLog = (line) => { logBox.textContent += line + '\n'; logBox.scrollTop = logBox.scrollHeight; document.getElementById('clearGhArtifactLogBtn').style.display = 'block'; };
-    const result = await findLatestArtifact(btn.dataset.owner, btn.dataset.repo, token, appendLog);
-    if (!result) return;
-    _ghArtifactPending = { chosen: result.chosen, token };
-    document.getElementById('ghArtifactConfirmName').textContent = result.chosen.name;
-    document.getElementById('ghArtifactConfirmVersion').textContent = result.release.tag_name || '–';
-    document.getElementById('ghArtifactConfirmDate').textContent = fmtDateTime(result.chosen.updated_at || result.chosen.created_at);
-    document.getElementById('ghArtifactRepoList').style.display = 'none';
-    document.getElementById('ghArtifactConfirmBox').style.display = 'flex';
-});
-
-document.getElementById('ghArtifactConfirmBackBtn').addEventListener('click', () => {
-    _ghArtifactPending = null;
-    document.getElementById('ghArtifactConfirmBox').style.display = 'none';
-    document.getElementById('ghArtifactRepoList').style.display = 'flex';
-});
-
-document.getElementById('ghArtifactConfirmOkBtn').addEventListener('click', () => {
-    if (!_ghArtifactPending) return;
-    const logBox = document.getElementById('ghArtifactLogBox');
-    const appendLog = (line) => { logBox.textContent += line + '\n'; logBox.scrollTop = logBox.scrollHeight; document.getElementById('clearGhArtifactLogBtn').style.display = 'block'; };
-    downloadArtifactAsset(_ghArtifactPending.chosen, _ghArtifactPending.token, appendLog);
-    document.getElementById('ghArtifactConfirmBox').style.display = 'none';
-    document.getElementById('ghArtifactRepoList').style.display = 'flex';
-    _ghArtifactPending = null;
+    const checked = document.querySelectorAll('.gh-artifact-repo-checkbox:checked');
+    if (!checked.length) { appendLog('ℹ️ Keine Repos ausgewählt.'); return; }
+    for (const cb of checked) {
+        const result = await findLatestArtifact(cb.dataset.owner, cb.dataset.repo, token, appendLog);
+        if (!result) continue;
+        appendLog(`✅ ${result.chosen.name} (${result.release.tag_name || '–'}, ${fmtDateTime(result.chosen.updated_at || result.chosen.created_at)})`);
+        downloadArtifactAsset(result.chosen, token, appendLog);
+    }
 });
 
 document.getElementById('closeGhArtifactBtn').addEventListener('click', () => {
     document.getElementById('ghArtifactOverlay').style.display = 'none';
     document.getElementById('mainContainer').style.display = 'block';
-    _ghArtifactPending = null;
 });
 
 document.getElementById('clearGhArtifactLogBtn').addEventListener('click', () => {
@@ -5273,6 +5264,13 @@ document.getElementById('tabRenameApplyBtn').addEventListener('click', () => {
         applyTabColors();
         document.getElementById('tabContextMenu').style.display = 'none';
     });
+});
+
+document.getElementById('tabRenameInput').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+        e.preventDefault();
+        document.getElementById('tabRenameApplyBtn').click();
+    }
 });
 
 document.getElementById('tabIconInput').addEventListener('input', (e) => {
