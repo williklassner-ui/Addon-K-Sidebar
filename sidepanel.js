@@ -874,6 +874,11 @@ document.getElementById('ctxChangeGhToken').addEventListener('click', () => {
     document.getElementById('ghTokenOverlay').style.display = 'flex';
 });
 
+document.getElementById('ghChangeTokenBtn').addEventListener('click', () => {
+    document.getElementById('mainContainer').style.display = 'none';
+    document.getElementById('ghTokenOverlay').style.display = 'flex';
+});
+
 document.getElementById('ctxClearGhActionsLog').addEventListener('click', () => {
     document.getElementById('ghActionsContextMenu').style.display = 'none';
     document.getElementById('ghActionsLogBox').style.display = 'none';
@@ -3383,9 +3388,11 @@ document.addEventListener('click', (e) => {
 
     const tabBtn = e.target.closest('.tab-btn');
     if (tabBtn) {
+        document.querySelectorAll('.overlay-page').forEach(o => o.style.display = 'none');
+        document.getElementById('mainContainer').style.display = 'block';
         document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
         document.querySelectorAll('.tab-view').forEach(v => v.style.display = 'none');
-        
+
         tabBtn.classList.add('active');
         const viewId = tabBtn.dataset.tab + 'View';
         const targetView = document.getElementById(viewId);

@@ -87,8 +87,9 @@ body { font-family: system-ui, -apple-system, sans-serif; margin: 0; display: fl
 
 #searchInput, #searchNotesInput, #searchMakrosInput, #searchBookmarksInput { flex: 1; padding: 10px; background-color: var(--input-bg); border: 1px solid var(--input-border); color: var(--text-color); border-radius: 6px; }
 
-#inputGroup, #noteInputGroup, #makroInputGroup, #bookmarkInputGroup, #groupEditorGroup, #trashOverlay, #backupOverlay, #bookmarkFolderPickerOverlay, #ghTokenOverlay, #ghCleanupAllOverlay, #ghArtifactOverlay, #tabVisibilityOverlay { display: flex; flex-direction: column; gap: 14px; padding: 20px; background: var(--bg-color); position: absolute; top: 0; left: 0; right: 0; bottom: 0; z-index: 2000; overflow-y: auto; box-sizing: border-box; }
-#stepPlaybackPanel, #makroPreRunPanel, #recordMethodDialog { display: flex; flex-direction: column; gap: 14px; padding: 20px; background: var(--bg-color); position: fixed; top: 0; left: 0; right: 0; bottom: 0; z-index: 9500; overflow-y: auto; }
+#inputGroup, #noteInputGroup, #makroInputGroup, #bookmarkInputGroup, #groupEditorGroup, #trashOverlay, #backupOverlay, #bookmarkFolderPickerOverlay, #ghTokenOverlay, #ghCleanupAllOverlay, #ghArtifactOverlay, #tabVisibilityOverlay { display: flex; flex-direction: column; gap: 14px; padding: 20px; background: var(--bg-color); position: absolute; top: 0; left: 0; right: 0; bottom: 55px; z-index: 2000; overflow-y: auto; box-sizing: border-box; }
+#stepPlaybackPanel, #makroPreRunPanel, #recordMethodDialog { display: flex; flex-direction: column; gap: 14px; padding: 20px; background: var(--bg-color); position: fixed; top: 0; left: 0; right: 0; bottom: 55px; z-index: 9500; overflow-y: auto; }
+.input-header .btn-back { order: -1; }
 .method-toggle { display: flex; flex-direction: column; gap: 8px; }
 .method-btn { display: flex; flex-direction: column; align-items: flex-start; text-align: left; padding: 8px 10px; font-size: 12px; background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.12); border-radius: 6px; color: var(--text-color); cursor: pointer; transition: all 0.15s; }
 .method-btn.active { background: rgba(255,140,0,0.18); border-color: var(--accent); color: var(--accent); font-weight: 600; }
