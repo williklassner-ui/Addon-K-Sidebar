@@ -1,9 +1,27 @@
-chrome.storage.sync.get({ prompts: [] }, (result) => {
-  let prompts = result.prompts;
+// Prompts liegen im Sidepanel gechunkt unter `_ck_promts_n` (Anzahl) + `_ck_promts_0..n`
+// (Fragmente), da chrome.storage.sync einzelne Keys auf 8.192 Bytes begrenzt. Deshalb hier
+// dieselbe Reassemblierung statt eines nie beschriebenen Plain-Keys.
+function readSyncedPrompts(cb) {
+  chrome.storage.sync.get({ '_ck_promts_n': 0 }, (countRes) => {
+    const n = countRes['_ck_promts_n'] || 0;
+    if (n <= 0) { cb([]); return; }
+    const keys = {};
+    for (let i = 0; i < n; i++) keys[`_ck_promts_${i}`] = '';
+    chrome.storage.sync.get(keys, (chunkVals) => {
+      try {
+        const json = Array.from({ length: n }, (_, i) => chunkVals[`_ck_promts_${i}`] || '').join('');
+        cb(JSON.parse(json) || []);
+      } catch (e) { cb([]); }
+    });
+  });
+}
+
+readSyncedPrompts((initialPrompts) => {
+  let prompts = initialPrompts;
 
   chrome.storage.onChanged.addListener((changes, area) => {
-    if (area === 'sync' && changes.prompts) {
-      prompts = changes.prompts.newValue;
+    if (area === 'sync' && Object.keys(changes).some(k => k.startsWith('_ck_promts_'))) {
+      readSyncedPrompts((updated) => { prompts = updated; });
     }
   });
 

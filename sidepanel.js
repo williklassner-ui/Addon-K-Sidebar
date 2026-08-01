@@ -1,25 +1,68 @@
 let promts = [];
-let notes = []; 
+let notes = [];
 let makros = [];
+let bookmarks = [];
 let deletedPromts = [];
 let recentColors = [];
 let collapsedGroups = {};
 let collapsedNoteGroups = {};
-let collapsedSessions = {}; 
+let collapsedBookmarkGroups = {};
+let collapsedSessions = {};
 let savedSessions = [];
-let groupMetadata = {}; 
+let groupMetadata = {};
+let bookmarkGroupMetadata = {};
 let tabColors = {};
-let tabOrder = ['prompts', 'sessions', 'notes', 'makros'];
+let tabTextColors = {};
+let tabIcons = {};
+let tabIconOnly = {};
+let tabLabels = {};
+let tabCustomIcons = {};
+let tabHidden = {};
+let customProviders = [];
+let groupOrder = [];
+let noteGroupOrder = [];
+let bookmarkGroupOrder = [];
+let tabOrder = ['prompts', 'sessions', 'notes', 'makros', 'bookmarks'];
 let isRecording = false;
 let stepPlaybackState = null;
 let recordingTabId = null;
 let recordingBuffer = [];
+let preRunMakroIdx = null;
+let recordingMethod = 2;
+let runningMakroState = null;
+// M4: verfolgt Tabs, die während einer Aufnahme besucht werden, damit Tab-/Seitenwechsel
+// als switchTab/newTab-Schritte aufgezeichnet und bei der Wiedergabe reproduziert werden können.
+let recordingTabIndexMap = {};
+let recordingNextTabIndex = 0;
+let recordingCreatedTabIds = new Set();
+
+function updatePlaybackBar() {
+    const bar = document.getElementById('makroPlaybackBar');
+    const counter = document.getElementById('makroPlaybackCounter');
+    const pauseBtn = document.getElementById('makroPlaybackPauseBtn');
+    const titleEl = document.getElementById('makroPlaybackTitle');
+    const fill = document.getElementById('makroPlaybackProgressFill');
+    if (!runningMakroState) {
+        bar.style.display = 'none';
+        return;
+    }
+    bar.style.display = 'flex';
+    const cur = (runningMakroState.current || 0) + 1;
+    const tot = runningMakroState.repeat || 1;
+    const paused = runningMakroState.paused;
+    counter.textContent = cur + ' / ' + tot;
+    pauseBtn.textContent = paused ? '▶' : '⏸';
+    if (titleEl) titleEl.textContent = (paused ? '⏸ ' : '⏵ ') + (runningMakroState.title || 'Makro');
+    if (fill) fill.style.width = Math.round(((cur - 1) / tot) * 100) + '%';
+}
 
 const tabNames = {
     'prompts': 'Promts',
     'sessions': 'Sessions',
     'notes': 'Notizen',
-    'makros': 'Makros'
+    'makros': 'Makros',
+    'bookmarks': 'Sites',
+    'github': 'Github'
 };
 
 const providerIcons = {
@@ -29,49 +72,307 @@ const providerIcons = {
     'Copilot': '✵',
     'Perplexity': '◈',
     'DeepL': '⚲',
+    'Grok': '𝕏',
+    'Humata': '📄',
+    'Grammarly': '✓',
+    'DeepSeek': '🐳',
+    'DataLab': '📊',
+    'Google Antigravity': '🪐',
+    'Cursor': '▲',
+    'GitHub Copilot': '🐙',
+    'Nano Banana': '🍌',
+    'ChatGPT-Image-2.0': '🖼️',
+    'NotebookLM': '📓',
     'none': ''
 };
 
+function fmtDate(ts) {
+    if (!ts) return '';
+    return new Date(ts).toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric' });
+}
+
+function getEffectiveProviderIcons() {
+    const merged = Object.assign({}, providerIcons);
+    customProviders.forEach(cp => { merged[cp.name] = cp.icon; });
+    return merged;
+}
+
 let currentEditorTodos = [];
 
-function loadData() {
-    chrome.storage.sync.get({ 
-        promts: [], 
-        notes: [], 
-        makros: [],
-        deletedPromts: [], 
-        recentColors: [], 
-        groupMetadata: {},
-        savedSessions: [],
-        tabColors: {},
-        tabOrder: ['prompts', 'sessions', 'notes', 'makros']
-    }, (res) => {
-        promts = res.promts || [];
-        notes = res.notes || [];
-        makros = res.makros || [];
-        deletedPromts = res.deletedPromts || [];
-        recentColors = res.recentColors || [];
-        groupMetadata = res.groupMetadata || {};
-        savedSessions = res.savedSessions || [];
-        tabColors = res.tabColors || {};
-        tabOrder = res.tabOrder || ['prompts', 'sessions', 'notes', 'makros'];
-        
-        savedSessions.forEach((_, idx) => {
-            if (collapsedSessions[idx] === undefined) {
-                collapsedSessions[idx] = true;
-            }
-        });
+const _versionLabel = document.getElementById('addonVersionLabel');
+if (_versionLabel) _versionLabel.textContent = 'v' + chrome.runtime.getManifest().version;
 
-        renderTabsNavigation();
-        applyTabColors();
-        render();
-        renderNotes();
-        renderMakros();
-        renderTrash();
-        renderRecentColors();
-        renderSessions();
-        populateGroupDropdowns();
-        checkSyncStatus();
+// --- Chunked Sync Storage ---
+// chrome.storage.sync begrenzt jeden EINZELNEN Key auf 8.192 Bytes. Arrays wie
+// promts/notes/bookmarks/makros überschreiten dieses Limit schnell, wodurch
+// chrome.storage.sync.set() für den betroffenen Key stillschweigend fehlschlägt
+// (kein Error, Daten syncen einfach nicht). Deshalb wird jeder Wert in Stücke
+// à max. 6.000 BYTES aufgeteilt und unter `_ck_<key>_n` (Anzahl) + `_ck_<key>_0..n`
+// (Fragmente) gespeichert - das umgeht das Pro-Key-Limit vollständig.
+const SYNC_CHUNK_SIZE = 6000;
+
+// Zeichenbasiertes Slicen reicht nicht: mehrbytige UTF-8-Zeichen (Umlaute, Emojis)
+// lassen einen "6000-Zeichen"-Chunk real über die 8192-Byte-Grenze wachsen, wodurch
+// chrome.storage.sync.set() für diesen Chunk stillschweigend fehlschlägt. Deshalb wird
+// hier die tatsächliche UTF-8-Byte-Länge jedes Chunks gemessen und die Grenze bei Bedarf
+// zurückgenommen.
+function splitIntoByteChunks(str, maxBytes) {
+    const chunks = [];
+    let i = 0;
+    const encoder = new TextEncoder();
+    while (i < str.length) {
+        let end = Math.min(i + maxBytes, str.length);
+        let slice = str.slice(i, end);
+        while (encoder.encode(slice).length > maxBytes && end > i + 1) {
+            end--;
+            slice = str.slice(i, end);
+        }
+        chunks.push(slice);
+        i = end;
+    }
+    if (chunks.length === 0) chunks.push('');
+    return chunks;
+}
+
+let _pendingSyncWrites = 0;
+
+function syncSet(obj, cb) {
+    const keys = Object.keys(obj);
+    if (keys.length === 0) { if (cb) cb(); return; }
+    const countDefaults = {};
+    keys.forEach(k => { countDefaults[`_ck_${k}_n`] = 0; });
+    _pendingSyncWrites++;
+    chrome.storage.sync.get(countDefaults, (old) => {
+        const toSet = {};
+        const toRemove = [];
+        keys.forEach(k => {
+            const json = JSON.stringify(obj[k] === undefined ? null : obj[k]);
+            const chunks = splitIntoByteChunks(json, SYNC_CHUNK_SIZE);
+            toSet[`_ck_${k}_n`] = chunks.length;
+            chunks.forEach((c, i) => { toSet[`_ck_${k}_${i}`] = c; });
+            const oldN = old[`_ck_${k}_n`] || 0;
+            for (let i = chunks.length; i < oldN; i++) toRemove.push(`_ck_${k}_${i}`);
+        });
+        const finish = (hadError) => {
+            if (toRemove.length) chrome.storage.sync.remove(toRemove, () => { chrome.runtime.lastError; });
+            _pendingSyncWrites--;
+            if (cb) cb(hadError);
+        };
+        chrome.storage.sync.set(toSet, () => {
+            if (chrome.runtime.lastError) {
+                // Einmaliger Retry deckt transiente Fehler (z.B. kurzzeitige Schreib-Drosselung) ab
+                setTimeout(() => {
+                    chrome.storage.sync.set(toSet, () => {
+                        if (chrome.runtime.lastError) console.error('K-Sidebar Sync-Fehler:', chrome.runtime.lastError.message);
+                        finish(!!chrome.runtime.lastError);
+                    });
+                }, 300);
+                return;
+            }
+            finish(false);
+        });
+    });
+}
+
+function syncGet(defaults, cb) {
+    const keys = Object.keys(defaults);
+    const countDefaults = {};
+    keys.forEach(k => { countDefaults[`_ck_${k}_n`] = -1; });
+    chrome.storage.sync.get(countDefaults, (counts) => {
+        // Legacy: Werte, die noch als unchunked Plain-Key gespeichert sind (vor dem Update)
+        const legacyDefaults = {};
+        keys.forEach(k => { if (!(counts[`_ck_${k}_n`] > 0)) legacyDefaults[k] = undefined; });
+        chrome.storage.sync.get(legacyDefaults, (legacyVals) => {
+            const chunkKeys = {};
+            keys.forEach(k => {
+                const n = counts[`_ck_${k}_n`];
+                if (n > 0) { for (let i = 0; i < n; i++) chunkKeys[`_ck_${k}_${i}`] = ''; }
+            });
+            chrome.storage.sync.get(chunkKeys, (chunkVals) => {
+                const result = {};
+                keys.forEach(k => {
+                    const n = counts[`_ck_${k}_n`];
+                    if (n > 0) {
+                        try {
+                            const json = Array.from({ length: n }, (_, i) => chunkVals[`_ck_${k}_${i}`] || '').join('');
+                            const parsed = JSON.parse(json);
+                            result[k] = parsed === null ? defaults[k] : parsed;
+                        } catch (e) {
+                            result[k] = defaults[k];
+                        }
+                    } else if (legacyVals[k] !== undefined) {
+                        result[k] = legacyVals[k];
+                    } else {
+                        result[k] = defaults[k];
+                    }
+                });
+                cb(result);
+            });
+        });
+    });
+}
+
+function saveSessions(cb) {
+    syncSet({ savedSessions }, cb);
+}
+
+const SYNC_LOAD_DEFAULTS = {
+    promts: [],
+    notes: [],
+    bookmarks: [],
+    deletedPromts: [],
+    recentColors: [],
+    groupMetadata: {},
+    bookmarkGroupMetadata: {},
+    tabColors: {},
+    tabTextColors: {},
+    tabIcons: {},
+    tabIconOnly: {},
+    tabLabels: {},
+    tabOrder: ['prompts', 'sessions', 'notes', 'makros', 'bookmarks'],
+    customProviders: [],
+    groupOrder: [],
+    noteGroupOrder: [],
+    bookmarkGroupOrder: [],
+    savedSessions: [],
+    tabHidden: {}
+};
+
+function saveMakros(cb) {
+    chrome.storage.local.set({ makros }, cb);
+}
+
+// Einmalige Rück-Migration: Makros lagen zwischenzeitlich gechunkt in chrome.storage.sync
+// (`_ck_makros_*`). Da Makros geräteabhängige Inhalte sind (Bildschirmkoordinaten etc.) und
+// nicht mehr synchronisiert werden sollen, werden vorhandene Sync-Chunks einmalig nach
+// chrome.storage.local übernommen (nur falls dort noch nichts liegt) und danach aus Sync entfernt,
+// um Sync-Quota freizugeben.
+function migrateMakrosOutOfSync(localMakros, cb) {
+    chrome.storage.sync.get({ '_ck_makros_n': 0 }, (countRes) => {
+        const n = countRes['_ck_makros_n'] || 0;
+        if (n <= 0) { cb(localMakros); return; }
+        const keys = {};
+        for (let i = 0; i < n; i++) keys[`_ck_makros_${i}`] = '';
+        chrome.storage.sync.get(keys, (chunkVals) => {
+            let migrated = localMakros;
+            try {
+                const json = Array.from({ length: n }, (_, i) => chunkVals[`_ck_makros_${i}`] || '').join('');
+                const parsedMakros = JSON.parse(json);
+                if ((!localMakros || localMakros.length === 0) && Array.isArray(parsedMakros) && parsedMakros.length > 0) {
+                    migrated = parsedMakros;
+                    chrome.storage.local.set({ makros: migrated });
+                }
+            } catch (e) { /* ignore */ }
+            const toRemove = ['_ck_makros_n'];
+            for (let i = 0; i < n; i++) toRemove.push(`_ck_makros_${i}`);
+            chrome.storage.sync.remove(toRemove, () => { chrome.runtime.lastError; cb(migrated); });
+        });
+    });
+}
+
+function loadData() {
+    syncGet(SYNC_LOAD_DEFAULTS, (syncRes) => {
+        chrome.storage.local.get({ makros: [], tabCustomIcons: {}, savedSessions: [] }, (localRes) => {
+            // Migration: savedSessions lag früher in local → nach sync (gechunkt) umziehen
+            let needsMigrationSave = {};
+            if ((!syncRes.savedSessions || syncRes.savedSessions.length === 0) && localRes.savedSessions && localRes.savedSessions.length > 0) {
+                syncRes.savedSessions = localRes.savedSessions;
+                needsMigrationSave.savedSessions = localRes.savedSessions;
+            }
+            if (Object.keys(needsMigrationSave).length > 0) {
+                syncSet(needsMigrationSave, () => {
+                    chrome.storage.local.remove(['savedSessions']);
+                });
+            }
+            migrateMakrosOutOfSync(localRes.makros, (migratedMakros) => {
+
+            // Migration: altes Sessions-Chunking-Format aus v1.8.2 (_ss_n / _ss_0..) übernehmen
+            chrome.storage.sync.get({ _ss_n: 0 }, (oldSess) => {
+                if (oldSess._ss_n > 0 && (!syncRes.savedSessions || syncRes.savedSessions.length === 0)) {
+                    const keys = {};
+                    for (let i = 0; i < oldSess._ss_n; i++) keys[`_ss_${i}`] = '';
+                    chrome.storage.sync.get(keys, (chunks) => {
+                        try {
+                            const json = Array.from({ length: oldSess._ss_n }, (_, i) => chunks[`_ss_${i}`] || '').join('');
+                            const oldSessions = JSON.parse(json) || [];
+                            if (oldSessions.length > 0) {
+                                savedSessions = oldSessions;
+                                saveSessions();
+                            }
+                        } catch (e) { /* ignore */ }
+                        const toRemove = ['_ss_n'];
+                        for (let i = 0; i < oldSess._ss_n; i++) toRemove.push(`_ss_${i}`);
+                        chrome.storage.sync.remove(toRemove);
+                    });
+                }
+            });
+
+            promts = syncRes.promts || [];
+            notes = syncRes.notes || [];
+            makros = migratedMakros || [];
+            bookmarks = syncRes.bookmarks || [];
+            deletedPromts = syncRes.deletedPromts || [];
+            recentColors = syncRes.recentColors || [];
+            groupMetadata = syncRes.groupMetadata || {};
+            bookmarkGroupMetadata = syncRes.bookmarkGroupMetadata || {};
+            tabCustomIcons = localRes.tabCustomIcons || {};
+            tabColors = syncRes.tabColors || {};
+            tabTextColors = syncRes.tabTextColors || {};
+            tabIcons = syncRes.tabIcons || {};
+            tabIconOnly = syncRes.tabIconOnly || {};
+            tabLabels = syncRes.tabLabels || {};
+            tabOrder = syncRes.tabOrder || ['prompts', 'sessions', 'notes', 'makros', 'bookmarks'];
+            customProviders = syncRes.customProviders || [];
+            groupOrder = syncRes.groupOrder || [];
+            noteGroupOrder = syncRes.noteGroupOrder || [];
+            bookmarkGroupOrder = syncRes.bookmarkGroupOrder || [];
+            savedSessions = syncRes.savedSessions || [];
+            tabHidden = syncRes.tabHidden || {};
+
+            if (!tabOrder.includes('bookmarks')) {
+                tabOrder.push('bookmarks');
+                syncSet({ tabOrder });
+            }
+
+            if (!tabOrder.includes('github')) {
+                tabOrder.push('github');
+                if (!tabIcons.github) tabIcons.github = '🐙';
+                syncSet({ tabOrder, tabIcons });
+            }
+
+            // Migration: bestehende Lesezeichen-Gruppen (früher in gemeinsamer groupMetadata) nach bookmarkGroupMetadata übernehmen
+            let bgmMigrated = false;
+            bookmarks.forEach(b => {
+                if (b.group && b.group.trim() !== "" && !bookmarkGroupMetadata[b.group] && groupMetadata[b.group]) {
+                    bookmarkGroupMetadata[b.group] = Object.assign({}, groupMetadata[b.group]);
+                    bgmMigrated = true;
+                }
+            });
+            if (bgmMigrated) syncSet({ bookmarkGroupMetadata });
+
+            savedSessions.forEach((_, idx) => {
+                if (collapsedSessions[idx] === undefined) {
+                    collapsedSessions[idx] = true;
+                }
+            });
+
+            renderTabsNavigation();
+            applyTabColors();
+            render();
+            renderNotes();
+            renderMakros();
+            renderBookmarks();
+            renderTrash();
+            renderRecentColors();
+            renderSessions();
+            populateGroupDropdowns();
+            populateProviderDropdowns();
+            initGroupDragDrop(document.getElementById('promptList'), false);
+            initGroupDragDrop(document.getElementById('notesList'), true);
+            initGroupDragDrop(document.getElementById('bookmarksList'), 'bookmark');
+            initBookmarkItemDragDrop(document.getElementById('bookmarksList'));
+            });
+        });
     });
 }
 
@@ -82,20 +383,44 @@ function renderTabsNavigation() {
     const activeBtn = navContainer.querySelector('.tab-btn.active');
     const activeTabKey = activeBtn ? activeBtn.dataset.tab : 'prompts';
 
-    navContainer.innerHTML = tabOrder.map(key => {
-        return `<button id="nav${key.charAt(0).toUpperCase() + key.slice(1)}" class="tab-btn ${activeTabKey === key ? 'active' : ''}" data-tab="${key}">${tabNames[key] || key}</button>`;
+    navContainer.innerHTML = tabOrder.filter(key => !tabHidden[key]).map(key => {
+        const label = tabLabels[key] || tabNames[key] || key;
+        const customIcon = tabCustomIcons[key] || '';
+        const emojiIcon = tabIcons[key] || '';
+        const iconOnly = !!tabIconOnly[key];
+        const iconHtml = customIcon
+            ? `<img src="${customIcon}" style="height:14px; width:14px; object-fit:contain; vertical-align:middle;">`
+            : (emojiIcon || '');
+        const hasIcon = !!(customIcon || emojiIcon);
+        const displayText = (iconOnly && hasIcon) ? iconHtml : (hasIcon ? iconHtml + ' ' + label : label);
+        return `<button id="nav${key.charAt(0).toUpperCase() + key.slice(1)}" class="tab-btn ${activeTabKey === key ? 'active' : ''}" data-tab="${key}" title="${label}">${displayText}</button>`;
     }).join('');
+    syncTabsNavHeight();
 }
+
+function syncTabsNavHeight() {
+    const nav = document.getElementById('tabsNavContainer');
+    if (!nav) return;
+    document.documentElement.style.setProperty('--tabs-nav-height', nav.getBoundingClientRect().height + 'px');
+}
+window.addEventListener('resize', syncTabsNavHeight);
 
 function applyTabColors() {
     document.querySelectorAll('.tab-btn').forEach(btn => {
         const tabKey = btn.dataset.tab;
         if (tabColors[tabKey]) {
-            btn.style.setProperty('background-color', tabColors[tabKey] + '33', 'important');
+            btn.style.setProperty('background-color', tabColors[tabKey], 'important');
             btn.style.setProperty('border-top', `3px solid ${tabColors[tabKey]}`, 'important');
+            btn.style.setProperty('--tab-glow-color', tabColors[tabKey]);
         } else {
             btn.style.removeProperty('background-color');
             btn.style.removeProperty('border-top');
+            btn.style.removeProperty('--tab-glow-color');
+        }
+        if (tabTextColors[tabKey]) {
+            btn.style.setProperty('color', tabTextColors[tabKey], 'important');
+        } else {
+            btn.style.removeProperty('color');
         }
     });
 }
@@ -103,47 +428,704 @@ function applyTabColors() {
 function checkSyncStatus() {
     const statusBox = document.getElementById('syncStatusText');
     if (!statusBox) return;
-    
     try {
-        chrome.storage.sync.getBytesInUse(null, (bytes) => {
+        const testKey = '_syncTest_' + Date.now();
+        const testVal = Math.random().toString(36).slice(2);
+        chrome.storage.sync.set({ [testKey]: testVal }, () => {
             if (chrome.runtime.lastError) {
-                statusBox.innerText = "❌ Synchronisierung inaktiv (Account fehlt oder Offline)";
-                statusBox.style.color = "#cf6679";
-            } else {
-                statusBox.innerText = "✅ Aktiv";
-                statusBox.style.color = "#4caf50";
+                statusBox.innerHTML = `❌ Synchronisierung nicht verfügbar<br><small style="opacity:0.8;font-weight:normal;">${chrome.runtime.lastError.message}<br>Prüfe: Chrome-Account angemeldet + Chrome-Sync aktiviert</small>`;
+                statusBox.style.color = '#cf6679';
+                return;
             }
+            chrome.storage.sync.get({ [testKey]: null }, (res) => {
+                chrome.storage.sync.remove(testKey);
+                if (chrome.runtime.lastError || res[testKey] !== testVal) {
+                    statusBox.innerHTML = `⚠️ Sync-API erreichbar, Schreiben fehlgeschlagen<br><small style="opacity:0.8;font-weight:normal;">Prüfe: Chrome-Account angemeldet + Chrome-Sync → Erweiterungen aktiviert</small>`;
+                    statusBox.style.color = '#ffaa44';
+                    return;
+                }
+                chrome.storage.sync.getBytesInUse(null, (bytes) => {
+                    const kb = Math.round(bytes / 1024 * 10) / 10;
+                    const pct = Math.round(bytes / 102400 * 100);
+                    let color = '#4caf50', warn = '';
+                    if (bytes > 92160) { color = '#cf6679'; warn = ' ⚠️ Kritisch'; }
+                    else if (bytes > 71680) { color = '#ffaa44'; warn = ' ⚠️ Fast voll'; }
+                    statusBox.innerHTML = `✅ Sync aktiv${warn} — ${kb} KB / 100 KB (${pct}%)<br>`
+                        + `<small style="opacity:0.8;font-weight:normal;">Synchronisiert: Prompts · Notizen · Sites · Sessions · Makros · Tab-Einstellungen</small>`;
+                    statusBox.style.color = color;
+                });
+            });
         });
     } catch (e) {
-        statusBox.innerText = "❌ Fehler";
-        statusBox.style.color = "#cf6679";
+        statusBox.innerHTML = `❌ Fehler: ${e.message}`;
+        statusBox.style.color = '#cf6679';
     }
 }
 
+// Alles außer Makros wird synchronisiert (Makros bleiben geräteabhängig lokal, siehe saveMakros)
+const MANUAL_SYNC_KEYS = ['promts', 'notes', 'bookmarks', 'deletedPromts', 'recentColors',
+    'groupMetadata', 'bookmarkGroupMetadata', 'tabColors', 'tabTextColors', 'tabIcons',
+    'tabIconOnly', 'tabLabels', 'tabOrder', 'customProviders', 'groupOrder', 'noteGroupOrder',
+    'bookmarkGroupOrder', 'savedSessions', 'tabHidden'];
+
+const MANUAL_SYNC_SOURCE = {
+    promts: () => promts, notes: () => notes, bookmarks: () => bookmarks,
+    deletedPromts: () => deletedPromts, recentColors: () => recentColors,
+    groupMetadata: () => groupMetadata, bookmarkGroupMetadata: () => bookmarkGroupMetadata,
+    tabColors: () => tabColors, tabTextColors: () => tabTextColors, tabIcons: () => tabIcons,
+    tabIconOnly: () => tabIconOnly, tabLabels: () => tabLabels, tabOrder: () => tabOrder,
+    customProviders: () => customProviders, groupOrder: () => groupOrder,
+    noteGroupOrder: () => noteGroupOrder, bookmarkGroupOrder: () => bookmarkGroupOrder,
+    savedSessions: () => savedSessions, tabHidden: () => tabHidden
+};
+
+function runManualSync() {
+    const logBox = document.getElementById('syncLogBox');
+    if (logBox) { logBox.style.display = 'block'; logBox.textContent = `⏳ Synchronisierung gestartet um ${new Date().toLocaleTimeString('de-DE')} …`; }
+    const encoder = new TextEncoder();
+    const obj = {};
+    const sizes = {};
+    MANUAL_SYNC_KEYS.forEach(k => {
+        const val = MANUAL_SYNC_SOURCE[k]();
+        obj[k] = val;
+        sizes[k] = encoder.encode(JSON.stringify(val === undefined ? null : val)).length;
+    });
+    syncSet(obj, (hadError) => {
+        const lines = [];
+        lines.push(`🔄 Manuelle Synchronisierung — ${new Date().toLocaleString('de-DE')}`);
+        lines.push(hadError ? '❌ Fehlgeschlagen (siehe Konsole für Details)' : '✅ Erfolgreich übertragen:');
+        MANUAL_SYNC_KEYS.forEach(k => {
+            const kb = Math.round(sizes[k] / 1024 * 10) / 10;
+            lines.push(`  ${hadError ? '✗' : '✓'} ${k}: ${kb} KB`);
+        });
+        lines.push('ℹ️ Makros werden bewusst nicht synchronisiert (bleiben lokal auf diesem Gerät).');
+        if (logBox) logBox.textContent = lines.join('\n');
+        checkSyncStatus();
+    });
+}
+
+document.getElementById('btnManualSyncNow').addEventListener('click', runManualSync);
+
+// --- GitHub Actions Runs aufräumen ---
+// Der GitHub-Token wird verschlüsselt abgelegt: ein nicht-extrahierbarer AES-GCM-256-Schlüssel
+// liegt als CryptoKey-Objekt in IndexedDB (kann per Web-Crypto-API nur ver-/entschlüsseln, der
+// Rohschlüssel selbst ist aus dem Storage nicht auslesbar). Nur der Ciphertext landet in
+// chrome.storage.local.
+function _ghSecureDb() {
+    return new Promise((resolve, reject) => {
+        const req = indexedDB.open('k_sidebar_secure_db', 1);
+        req.onupgradeneeded = () => { req.result.createObjectStore('keys'); };
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+    });
+}
+
+async function getOrCreateCryptoKey() {
+    const db = await _ghSecureDb();
+    const existing = await new Promise((resolve) => {
+        const tx = db.transaction('keys', 'readonly');
+        const req = tx.objectStore('keys').get('ghTokenKey');
+        req.onsuccess = () => resolve(req.result || null);
+        req.onerror = () => resolve(null);
+    });
+    if (existing) return existing;
+    const key = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+    await new Promise((resolve, reject) => {
+        const tx = db.transaction('keys', 'readwrite');
+        tx.objectStore('keys').put(key, 'ghTokenKey');
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+    });
+    return key;
+}
+
+function _bufToBase64(buf) {
+    return btoa(String.fromCharCode(...new Uint8Array(buf)));
+}
+function _base64ToBuf(b64) {
+    return Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+}
+
+async function encryptGithubToken(token) {
+    const key = await getOrCreateCryptoKey();
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, new TextEncoder().encode(token));
+    chrome.storage.local.set({ githubActionsTokenEnc: { iv: _bufToBase64(iv), data: _bufToBase64(ciphertext) } });
+}
+
+async function decryptGithubToken() {
+    const res = await new Promise((resolve) => chrome.storage.local.get({ githubActionsTokenEnc: null }, resolve));
+    if (!res.githubActionsTokenEnc) return null;
+    try {
+        const key = await getOrCreateCryptoKey();
+        const iv = _base64ToBuf(res.githubActionsTokenEnc.iv);
+        const data = _base64ToBuf(res.githubActionsTokenEnc.data);
+        const plainBuf = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, data);
+        return new TextDecoder().decode(plainBuf);
+    } catch (e) {
+        return null; // Schlüssel/Ciphertext passen nicht zusammen (z.B. Extension neu installiert)
+    }
+}
+
+document.getElementById('openGhTokenPageBtn').addEventListener('click', () => {
+    chrome.tabs.create({ url: 'https://github.com/settings/tokens/new?description=K-Sidebar%20Actions%20Cleanup&scopes=repo' });
+});
+
+document.getElementById('saveGhTokenBtn').addEventListener('click', async () => {
+    const input = document.getElementById('ghTokenInput');
+    const token = input.value.trim();
+    if (!token) return;
+    await encryptGithubToken(token);
+    input.value = '';
+    document.getElementById('ghTokenOverlay').style.display = 'none';
+    document.getElementById('mainContainer').style.display = 'block';
+    alert('Token gespeichert (verschlüsselt). Klicke jetzt erneut auf "🗑️ GH Actions".');
+});
+
+document.getElementById('closeGhTokenBtn').addEventListener('click', () => {
+    document.getElementById('ghTokenOverlay').style.display = 'none';
+    document.getElementById('mainContainer').style.display = 'block';
+});
+
+async function _cleanupActionsForRepo(owner, repo, token, appendLog) {
+    const headers = { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' };
+    let allRuns = [];
+    try {
+        let page = 1;
+        while (true) {
+            const res = await fetch(`https://api.github.com/repos/${owner}/${repo}/actions/runs?per_page=100&page=${page}`, { headers });
+            if (!res.ok) { appendLog(`❌ ${owner}/${repo}: HTTP ${res.status} ${res.statusText}`); return; }
+            const data = await res.json();
+            allRuns = allRuns.concat(data.workflow_runs || []);
+            if (!data.workflow_runs || data.workflow_runs.length < 100 || allRuns.length >= data.total_count) break;
+            page++;
+        }
+    } catch (e) {
+        appendLog(`❌ ${owner}/${repo}: Netzwerkfehler ${e.message}`);
+        return;
+    }
+    if (allRuns.length <= 1) {
+        appendLog(`ℹ️ Nur ${allRuns.length} Run(s) — nichts zu löschen.`);
+        return;
+    }
+    allRuns.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+    const [newest, ...toDelete] = allRuns;
+    appendLog(`  ✅ Behalten: #${newest.run_number} "${newest.display_title || newest.name}" (${new Date(newest.created_at).toLocaleString('de-DE')})`);
+    let ok = 0, fail = 0;
+    for (const run of toDelete) {
+        try {
+            const r = await fetch(`https://api.github.com/repos/${owner}/${repo}/actions/runs/${run.id}`, { method: 'DELETE', headers });
+            if (r.ok || r.status === 204) { ok++; } else { fail++; appendLog(`  ✗ #${run.run_number}: HTTP ${r.status}`); }
+        } catch (e) {
+            fail++;
+            appendLog(`  ✗ #${run.run_number}: ${e.message}`);
+        }
+    }
+    appendLog(`  → ${ok} gelöscht, ${fail} fehlgeschlagen.`);
+}
+
+async function cleanupGithubActions() {
+    const logBox = document.getElementById('ghActionsLogBox');
+    const lines = [];
+    const setLog = (text) => { if (logBox) { logBox.style.display = 'block'; logBox.textContent = text; document.getElementById('clearGhActionsLogBtn').style.display = 'block'; } };
+    const appendLog = (line) => { lines.push(line); setLog(lines.join('\n')); };
+
+    const tabs = await new Promise((resolve) => chrome.tabs.query({ active: true, currentWindow: true }, resolve));
+    const url = tabs[0] && tabs[0].url;
+    const match = url && url.match(/^https:\/\/github\.com\/([^\/]+)\/([^\/]+)\/actions/);
+    if (!match) {
+        alert('Bitte auf einer GitHub-Actions-Seite eines Repos ausführen (z.B. https://github.com/owner/repo/actions).');
+        return;
+    }
+    const [, owner, repo] = match;
+
+    const token = await decryptGithubToken();
+    if (!token) {
+        document.getElementById('mainContainer').style.display = 'none';
+        document.getElementById('ghTokenOverlay').style.display = 'flex';
+        return;
+    }
+
+    appendLog(`⏳ Lade Workflow-Runs für ${owner}/${repo} …`);
+    appendLog(`🗑️ GitHub Actions aufgeräumt — ${new Date().toLocaleString('de-DE')}`);
+    await _cleanupActionsForRepo(owner, repo, token, appendLog);
+    appendLog('Fertig.');
+    chrome.tabs.reload(tabs[0].id);
+}
+
+async function cleanupAllGithubActions() {
+    const token = await decryptGithubToken();
+    if (!token) {
+        document.getElementById('mainContainer').style.display = 'none';
+        document.getElementById('ghTokenOverlay').style.display = 'flex';
+        return;
+    }
+    document.getElementById('mainContainer').style.display = 'none';
+    document.getElementById('ghCleanupAllOverlay').style.display = 'flex';
+    const repoList = document.getElementById('ghRepoList');
+    const logBox = document.getElementById('ghCleanupAllLogBox');
+    repoList.innerHTML = '<div style="opacity:0.7;">⏳ Lade Repos…</div>';
+    logBox.style.display = 'none'; logBox.textContent = '';
+
+    const headers = { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' };
+    let allRepos = [];
+    try {
+        let page = 1;
+        while (true) {
+            const res = await fetch(`https://api.github.com/user/repos?per_page=100&page=${page}&type=all`, { headers });
+            if (!res.ok) { repoList.innerHTML = `<div style="color:#cf6679">❌ HTTP ${res.status} ${res.statusText}</div>`; return; }
+            const data = await res.json();
+            allRepos = allRepos.concat(data);
+            if (data.length < 100) break;
+            page++;
+        }
+    } catch (e) {
+        repoList.innerHTML = `<div style="color:#cf6679">❌ ${e.message}</div>`;
+        return;
+    }
+    allRepos.sort((a, b) => a.full_name.localeCompare(b.full_name));
+    repoList.innerHTML = allRepos.map(r =>
+        `<label style="display:flex; align-items:center; gap:6px; cursor:pointer; padding:3px 0;">` +
+        `<input type="checkbox" class="gh-repo-checkbox" data-owner="${r.owner.login}" data-repo="${r.name}" checked>` +
+        `<span>${r.name}</span></label>`
+    ).join('');
+}
+
+document.getElementById('ghSelectAllReposBtn').addEventListener('click', () =>
+    document.querySelectorAll('.gh-repo-checkbox').forEach(cb => cb.checked = true));
+document.getElementById('ghDeselectAllReposBtn').addEventListener('click', () =>
+    document.querySelectorAll('.gh-repo-checkbox').forEach(cb => cb.checked = false));
+document.getElementById('closeGhCleanupAllBtn').addEventListener('click', () => {
+    document.getElementById('ghCleanupAllOverlay').style.display = 'none';
+    document.getElementById('mainContainer').style.display = 'block';
+});
+document.getElementById('ghStartCleanupAllBtn').addEventListener('click', async () => {
+    const token = await decryptGithubToken();
+    if (!token) return;
+    const logBox = document.getElementById('ghCleanupAllLogBox');
+    logBox.style.display = 'block'; logBox.textContent = '';
+    const appendLog = (line) => { logBox.textContent += line + '\n'; logBox.scrollTop = logBox.scrollHeight; document.getElementById('clearGhCleanupAllLogBtn').style.display = 'block'; };
+    const checked = document.querySelectorAll('.gh-repo-checkbox:checked');
+    if (!checked.length) { appendLog('ℹ️ Keine Repos ausgewählt.'); return; }
+    appendLog(`🗑️ Starte Aufräumen — ${new Date().toLocaleString('de-DE')}`);
+    for (const cb of checked) {
+        appendLog(`\n🗂️ ${cb.dataset.owner}/${cb.dataset.repo}`);
+        await _cleanupActionsForRepo(cb.dataset.owner, cb.dataset.repo, token, appendLog);
+    }
+    appendLog('\n✅ Fertig.');
+});
+document.getElementById('cleanupAllGhActionsBtn').addEventListener('click', cleanupAllGithubActions);
+
+document.getElementById('clearGhActionsLogBtn').addEventListener('click', () => {
+    document.getElementById('ghActionsLogBox').style.display = 'none';
+    document.getElementById('ghActionsLogBox').textContent = '';
+    document.getElementById('clearGhActionsLogBtn').style.display = 'none';
+});
+
+document.getElementById('clearGhCleanupAllLogBtn').addEventListener('click', () => {
+    document.getElementById('ghCleanupAllLogBox').style.display = 'none';
+    document.getElementById('ghCleanupAllLogBox').textContent = '';
+    document.getElementById('clearGhCleanupAllLogBtn').style.display = 'none';
+});
+
+function fmtDateTime(iso) {
+    if (!iso) return '';
+    const d = new Date(iso);
+    const pad = n => String(n).padStart(2, '0');
+    return `${pad(d.getDate())}.${pad(d.getMonth() + 1)}.${d.getFullYear()} - ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+
+async function findLatestArtifact(owner, repo, token, appendLog) {
+    const headers = { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' };
+    appendLog(`⏳ Suche neuestes Release für ${owner}/${repo} …`);
+    let res;
+    try {
+        res = await fetch(`https://api.github.com/repos/${owner}/${repo}/releases/latest`, { headers });
+    } catch (e) {
+        appendLog(`❌ Netzwerkfehler: ${e.message}`);
+        return null;
+    }
+    if (!res.ok) { appendLog(`❌ Kein Release gefunden (HTTP ${res.status}).`); return null; }
+    const release = await res.json();
+    const assets = release.assets || [];
+    const MATCH_EXT = ['.zip', '.exe', '.apk'];
+    const candidates = assets.filter(a => MATCH_EXT.some(ext => a.name.toLowerCase().endsWith(ext)));
+    if (!candidates.length) { appendLog(`ℹ️ Kein zip/exe/apk-Artefakt im Release "${release.tag_name}" gefunden.`); return null; }
+    candidates.sort((a, b) => new Date(b.updated_at || b.created_at) - new Date(a.updated_at || a.created_at));
+    return { chosen: candidates[0], release };
+}
+
+function downloadArtifactAsset(chosen, token, appendLog) {
+    appendLog(`⬇️ Lade "${chosen.name}" …`);
+    chrome.downloads.download({
+        url: chosen.url,
+        filename: chosen.name,
+        headers: [
+            { name: 'Authorization', value: `Bearer ${token}` },
+            { name: 'Accept', value: 'application/octet-stream' }
+        ]
+    }, () => {
+        if (chrome.runtime.lastError) { appendLog(`❌ Download fehlgeschlagen: ${chrome.runtime.lastError.message}`); return; }
+        appendLog(`✅ Download gestartet: ${chosen.name}`);
+    });
+}
+
+async function openGhArtifactPicker() {
+    const token = await decryptGithubToken();
+    if (!token) {
+        document.getElementById('mainContainer').style.display = 'none';
+        document.getElementById('ghTokenOverlay').style.display = 'flex';
+        return;
+    }
+    document.getElementById('mainContainer').style.display = 'none';
+    document.getElementById('ghArtifactOverlay').style.display = 'flex';
+    const repoList = document.getElementById('ghArtifactRepoList');
+    const logBox = document.getElementById('ghArtifactLogBox');
+    repoList.innerHTML = '<div style="opacity:0.7;">⏳ Lade Repos…</div>';
+    logBox.style.display = 'none'; logBox.textContent = '';
+
+    const headers = { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' };
+    let allRepos = [];
+    try {
+        let page = 1;
+        while (true) {
+            const res = await fetch(`https://api.github.com/user/repos?per_page=100&page=${page}&type=all`, { headers });
+            if (!res.ok) { repoList.innerHTML = `<div style="color:#cf6679">❌ HTTP ${res.status} ${res.statusText}</div>`; return; }
+            const data = await res.json();
+            allRepos = allRepos.concat(data);
+            if (data.length < 100) break;
+            page++;
+        }
+    } catch (e) {
+        repoList.innerHTML = `<div style="color:#cf6679">❌ ${e.message}</div>`;
+        return;
+    }
+    allRepos.sort((a, b) => a.full_name.localeCompare(b.full_name));
+    repoList.innerHTML = allRepos.map(r =>
+        `<label style="display:flex; align-items:center; gap:6px; cursor:pointer; padding:3px 0;">` +
+        `<input type="checkbox" class="gh-artifact-repo-checkbox" data-owner="${r.owner.login}" data-repo="${r.name}">` +
+        `<span>${r.name}</span></label>`
+    ).join('');
+}
+
+document.getElementById('ghArtifactDownloadBtn').addEventListener('click', openGhArtifactPicker);
+
+document.getElementById('ghArtifactSelectAllBtn').addEventListener('click', () =>
+    document.querySelectorAll('.gh-artifact-repo-checkbox').forEach(cb => cb.checked = true));
+document.getElementById('ghArtifactDeselectAllBtn').addEventListener('click', () =>
+    document.querySelectorAll('.gh-artifact-repo-checkbox').forEach(cb => cb.checked = false));
+
+document.getElementById('ghArtifactStartBtn').addEventListener('click', async () => {
+    const token = await decryptGithubToken();
+    if (!token) return;
+    const logBox = document.getElementById('ghArtifactLogBox');
+    logBox.style.display = 'block'; logBox.textContent = '';
+    const appendLog = (line) => { logBox.textContent += line + '\n'; logBox.scrollTop = logBox.scrollHeight; document.getElementById('clearGhArtifactLogBtn').style.display = 'block'; };
+    const checked = document.querySelectorAll('.gh-artifact-repo-checkbox:checked');
+    if (!checked.length) { appendLog('ℹ️ Keine Repos ausgewählt.'); return; }
+    for (const cb of checked) {
+        const result = await findLatestArtifact(cb.dataset.owner, cb.dataset.repo, token, appendLog);
+        if (!result) continue;
+        appendLog(`✅ ${result.chosen.name} (${result.release.tag_name || '–'}, ${fmtDateTime(result.chosen.updated_at || result.chosen.created_at)})`);
+        downloadArtifactAsset(result.chosen, token, appendLog);
+    }
+});
+
+document.getElementById('closeGhArtifactBtn').addEventListener('click', () => {
+    document.getElementById('ghArtifactOverlay').style.display = 'none';
+    document.getElementById('mainContainer').style.display = 'block';
+});
+
+document.getElementById('clearGhArtifactLogBtn').addEventListener('click', () => {
+    document.getElementById('ghArtifactLogBox').style.display = 'none';
+    document.getElementById('ghArtifactLogBox').textContent = '';
+    document.getElementById('clearGhArtifactLogBtn').style.display = 'none';
+});
+
+document.getElementById('cleanupGhActionsBtn').addEventListener('click', cleanupGithubActions);
+
+document.getElementById('cleanupGhActionsBtn').addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+    const menu = document.getElementById('ghActionsContextMenu');
+    menu.style.visibility = 'hidden';
+    menu.style.left = '0px'; menu.style.top = '0px';
+    menu.style.display = 'block';
+    requestAnimationFrame(() => {
+        const rect = menu.getBoundingClientRect();
+        let x = Math.max(5, Math.min(e.clientX, window.innerWidth - rect.width - 5));
+        let y = Math.max(5, Math.min(e.clientY, window.innerHeight - rect.height - 5));
+        menu.style.left = x + 'px'; menu.style.top = y + 'px';
+        menu.style.visibility = 'visible';
+    });
+});
+
+document.getElementById('ctxChangeGhToken').addEventListener('click', () => {
+    document.getElementById('ghActionsContextMenu').style.display = 'none';
+    document.getElementById('mainContainer').style.display = 'none';
+    document.getElementById('ghTokenOverlay').style.display = 'flex';
+});
+
+document.getElementById('ghChangeTokenBtn').addEventListener('click', () => {
+    document.getElementById('mainContainer').style.display = 'none';
+    document.getElementById('ghTokenOverlay').style.display = 'flex';
+});
+
+document.getElementById('ctxClearGhActionsLog').addEventListener('click', () => {
+    document.getElementById('ghActionsContextMenu').style.display = 'none';
+    document.getElementById('ghActionsLogBox').style.display = 'none';
+    document.getElementById('ghActionsLogBox').textContent = '';
+    document.getElementById('clearGhActionsLogBtn').style.display = 'none';
+});
+
+document.getElementById('cleanupAllGhActionsBtn').addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+    const menu = document.getElementById('ghActionsAllContextMenu');
+    menu.style.visibility = 'hidden'; menu.style.left = '0px'; menu.style.top = '0px'; menu.style.display = 'block';
+    requestAnimationFrame(() => {
+        const rect = menu.getBoundingClientRect();
+        let x = Math.max(5, Math.min(e.clientX, window.innerWidth - rect.width - 5));
+        let y = Math.max(5, Math.min(e.clientY, window.innerHeight - rect.height - 5));
+        menu.style.left = x + 'px'; menu.style.top = y + 'px'; menu.style.visibility = 'visible';
+    });
+});
+
+document.getElementById('ctxChangeGhTokenAll').addEventListener('click', () => {
+    document.getElementById('ghActionsAllContextMenu').style.display = 'none';
+    document.getElementById('mainContainer').style.display = 'none';
+    document.getElementById('ghTokenOverlay').style.display = 'flex';
+});
+
+document.getElementById('ctxClearGhCleanupAllLog').addEventListener('click', () => {
+    document.getElementById('ghActionsAllContextMenu').style.display = 'none';
+    document.getElementById('ghCleanupAllLogBox').style.display = 'none';
+    document.getElementById('ghCleanupAllLogBox').textContent = '';
+    document.getElementById('clearGhCleanupAllLogBtn').style.display = 'none';
+});
+
+let _loadDebounceTimer = null;
+function _scheduleLoadDataReload() {
+    if (_pendingSyncWrites > 0) {
+        // Ein eigener Schreibvorgang läuft noch - Reload verschieben, damit er nicht
+        // mit veralteten Daten den gerade erstellten/bearbeiteten Eintrag überschreibt
+        _loadDebounceTimer = setTimeout(_scheduleLoadDataReload, 500);
+        return;
+    }
+    loadData();
+}
 chrome.storage.onChanged.addListener((changes, areaName) => {
     if (areaName === 'sync') {
-        loadData();
+        clearTimeout(_loadDebounceTimer);
+        _loadDebounceTimer = setTimeout(_scheduleLoadDataReload, 2000);
     }
 });
 
 function populateGroupDropdowns() {
     const pSelect = document.getElementById('groupSelectOptions');
     const nSelect = document.getElementById('noteGroupSelectOptions');
+    const bSelect = document.getElementById('bookmarkGroupSelectOptions');
     if (!pSelect || !nSelect) return;
-    
+
     const uniqueGroups = new Set();
     promts.forEach(p => { if (p.group && p.group.trim() !== "") uniqueGroups.add(p.group); });
     notes.forEach(n => { if (n.group && n.group.trim() !== "") uniqueGroups.add(n.group); });
     Object.keys(groupMetadata).forEach(g => uniqueGroups.add(g));
-    
-    let baseHtml = '<option value="">-- Keine Gruppe gewählt --</option>';
-    uniqueGroups.forEach(gName => {
-        baseHtml += `<option value="${gName}">${gName}</option>`;
-    });
-    baseHtml += '<option value="__NEW_GROUP__">[+ Neue Gruppe erstellen]</option>';
-    
+
+    const buildOptions = (names) => {
+        let html = '<option value="">Keine</option>';
+        names.sort((a, b) => a.localeCompare(b, 'de')).forEach(gName => {
+            html += `<option value="${gName}">${gName}</option>`;
+        });
+        html += '<option value="__NEW_GROUP__">[+ Neue Gruppe erstellen]</option>';
+        return html;
+    };
+
+    const baseHtml = buildOptions(Array.from(uniqueGroups));
     pSelect.innerHTML = baseHtml;
     nSelect.innerHTML = baseHtml;
+
+    if (bSelect) {
+        const uniqueBookmarkGroups = new Set();
+        bookmarks.forEach(b => { if (b.group && b.group.trim() !== "") uniqueBookmarkGroups.add(b.group); });
+        Object.keys(bookmarkGroupMetadata).forEach(g => uniqueBookmarkGroups.add(g));
+        bSelect.innerHTML = buildOptions(Array.from(uniqueBookmarkGroups));
+    }
+}
+
+function sortGroupNames(names, orderArray) {
+    if (!orderArray || orderArray.length === 0) return names;
+    const inOrder = orderArray.filter(n => names.includes(n));
+    const rest = names.filter(n => !orderArray.includes(n));
+    return [...inOrder, ...rest];
+}
+
+function populateProviderDropdowns() {
+    const effectiveIcons = getEffectiveProviderIcons();
+    const defaultProviders = ['none', 'ChatGPT', 'Gemini', 'Claude', 'Copilot', 'Perplexity', 'DeepL', 'Grok', 'Humata', 'Grammarly', 'DeepSeek', 'DataLab', 'Google Antigravity', 'Cursor', 'GitHub Copilot', 'Nano Banana', 'ChatGPT-Image-2.0', 'NotebookLM'];
+    const sortedNames = [...defaultProviders.filter(n => n !== 'none'), ...customProviders.map(cp => cp.name)]
+        .sort((a, b) => a.localeCompare(b, 'de'));
+    const allNames = ['none', ...sortedNames];
+
+    const buildOptions = (includeDefault) => {
+        let html = '';
+        if (includeDefault) html += '<option value="default">Gruppen-Anbieter (Standard)</option>';
+        allNames.forEach(name => {
+            if (name === 'none') {
+                html += '<option value="none">Keins</option>';
+            } else {
+                const ico = effectiveIcons[name] || '';
+                html += `<option value="${name}">${ico ? ico + ' ' : ''}${name}</option>`;
+            }
+        });
+        return html;
+    };
+
+    const prov = document.getElementById('aiProvider');
+    const gProv = document.getElementById('groupAiProvider');
+    if (prov) prov.innerHTML = buildOptions(false);
+    if (gProv) gProv.innerHTML = buildOptions(true);
+    renderCustomProviderList();
+}
+
+function renderCustomProviderList() {
+    const container = document.getElementById('customProviderList');
+    if (!container) return;
+    if (customProviders.length === 0) {
+        container.innerHTML = '<p style="font-size:11px;opacity:0.5;margin:0;">Keine eigenen Anbieter.</p>';
+        return;
+    }
+    container.innerHTML = customProviders.map((cp, i) => `
+        <div style="display:flex;align-items:center;gap:6px;padding:4px 0;">
+            <span style="font-size:16px;min-width:24px;">${cp.icon}</span>
+            <span style="flex:1;font-size:12px;">${cp.name}</span>
+            <button class="group-edit-btn remove-custom-provider" data-index="${i}"
+                    style="color:#cf6679;" title="Entfernen">✕</button>
+        </div>
+    `).join('');
+}
+
+function initGroupDragDrop(containerEl, isNotes) {
+    if (!containerEl) return;
+    let dragSrcName = null;
+
+    containerEl.addEventListener('dragstart', (e) => {
+        if (e.target.closest('.bookmark-card[draggable]')) return; // verschachtelte Lesezeichen-Karte -> initBookmarkItemDragDrop übernimmt
+        const gc = e.target.closest('.group-container[draggable]');
+        if (!gc) return;
+        dragSrcName = gc.dataset.groupname;
+        e.dataTransfer.effectAllowed = 'move';
+        setTimeout(() => { gc.style.opacity = '0.5'; }, 0);
+    });
+
+    containerEl.addEventListener('dragend', (e) => {
+        const gc = e.target.closest('.group-container[draggable]');
+        if (gc) gc.style.opacity = '';
+        containerEl.querySelectorAll('.group-container[draggable]').forEach(el => {
+            el.style.outline = '';
+        });
+        dragSrcName = null;
+    });
+
+    containerEl.addEventListener('dragover', (e) => {
+        if (!dragSrcName) return; // kein interner Gruppen-Drag aktiv -> externen Import-Listener nicht stören
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+        const gc = e.target.closest('.group-container[draggable]');
+        if (gc && gc.dataset.groupname !== dragSrcName) {
+            gc.style.outline = '2px dashed var(--accent, #ff8c00)';
+        }
+    });
+
+    containerEl.addEventListener('dragleave', (e) => {
+        const gc = e.target.closest('.group-container[draggable]');
+        if (gc) gc.style.outline = '';
+    });
+
+    containerEl.addEventListener('drop', (e) => {
+        e.preventDefault();
+        const gc = e.target.closest('.group-container[draggable]');
+        if (!gc || !dragSrcName) return;
+        gc.style.outline = '';
+        const targetName = gc.dataset.groupname;
+        if (targetName === dragSrcName) return;
+
+        const allRendered = Array.from(
+            containerEl.querySelectorAll('.group-container[draggable]')
+        ).map(el => el.dataset.groupname);
+
+        let newOrder = [...allRendered];
+        const fromIdx = newOrder.indexOf(dragSrcName);
+        const toIdx = newOrder.indexOf(targetName);
+        if (fromIdx === -1 || toIdx === -1) return;
+        newOrder.splice(fromIdx, 1);
+        newOrder.splice(toIdx, 0, dragSrcName);
+
+        if (isNotes === 'bookmark') {
+            bookmarkGroupOrder = newOrder;
+            syncSet({ bookmarkGroupOrder }, renderBookmarks);
+        } else if (isNotes) {
+            noteGroupOrder = newOrder;
+            syncSet({ noteGroupOrder }, renderNotes);
+        } else {
+            groupOrder = newOrder;
+            syncSet({ groupOrder }, render);
+        }
+    });
+}
+
+// Einzelne Lesezeichen innerhalb derselben Gruppe (bzw. innerhalb der Gruppenlosen) per
+// Drag & Drop umsortieren. Nutzt dasselbe dropEffect-Guard-Muster wie initGroupDragDrop,
+// damit der externe Lesezeichen-Import (dragover auf #bookmarksView) nicht gestört wird.
+function initBookmarkItemDragDrop(containerEl) {
+    if (!containerEl) return;
+    let dragSrcIndex = null;
+
+    containerEl.addEventListener('dragstart', (e) => {
+        const card = e.target.closest('.bookmark-card[draggable]');
+        if (!card) return;
+        dragSrcIndex = parseInt(card.dataset.bookmarkIndex, 10);
+        e.dataTransfer.effectAllowed = 'move';
+        setTimeout(() => { card.style.opacity = '0.5'; }, 0);
+    });
+
+    containerEl.addEventListener('dragend', (e) => {
+        const card = e.target.closest('.bookmark-card[draggable]');
+        if (card) card.style.opacity = '';
+        containerEl.querySelectorAll('.bookmark-card[draggable]').forEach(el => { el.style.outline = ''; });
+        dragSrcIndex = null;
+    });
+
+    containerEl.addEventListener('dragover', (e) => {
+        if (dragSrcIndex === null) return; // kein interner Karten-Drag aktiv -> externen Import-Listener nicht stören
+        const card = e.target.closest('.bookmark-card[draggable]');
+        if (!card) return;
+        const targetIndex = parseInt(card.dataset.bookmarkIndex, 10);
+        if ((bookmarks[targetIndex] && bookmarks[targetIndex].group) !== (bookmarks[dragSrcIndex] && bookmarks[dragSrcIndex].group)) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+        if (targetIndex !== dragSrcIndex) card.style.outline = '2px dashed var(--accent, #ff8c00)';
+    });
+
+    containerEl.addEventListener('dragleave', (e) => {
+        const card = e.target.closest('.bookmark-card[draggable]');
+        if (card) card.style.outline = '';
+    });
+
+    containerEl.addEventListener('drop', (e) => {
+        const card = e.target.closest('.bookmark-card[draggable]');
+        if (!card || dragSrcIndex === null) return;
+        const targetIndex = parseInt(card.dataset.bookmarkIndex, 10);
+        card.style.outline = '';
+        if (targetIndex === dragSrcIndex) return;
+        if ((bookmarks[targetIndex] && bookmarks[targetIndex].group) !== (bookmarks[dragSrcIndex] && bookmarks[dragSrcIndex].group)) return;
+        e.preventDefault();
+
+        const targetBookmark = bookmarks[targetIndex];
+        const [moved] = bookmarks.splice(dragSrcIndex, 1);
+        const newTargetIndex = bookmarks.indexOf(targetBookmark);
+        bookmarks.splice(newTargetIndex, 0, moved);
+        dragSrcIndex = null;
+        syncSet({ bookmarks }, renderBookmarks);
+    });
 }
 
 function handleDropdownChange(selectId, inputId) {
@@ -163,6 +1145,7 @@ function handleDropdownChange(selectId, inputId) {
 }
 handleDropdownChange('groupSelectOptions', 'groupInput');
 handleDropdownChange('noteGroupSelectOptions', 'noteGroupInput');
+handleDropdownChange('bookmarkGroupSelectOptions', 'bookmarkGroupInput');
 
 function render() {
     const pList = document.getElementById('promptList');
@@ -181,15 +1164,16 @@ function render() {
     });
 
     let html = "";
-    Object.keys(groups).forEach(gName => {
-        const isCollapsed = collapsedGroups[gName] || false;
+    sortGroupNames(Object.keys(groups), groupOrder).forEach(gName => {
+        const isCollapsed = (gName in collapsedGroups) ? collapsedGroups[gName] : true;
         const meta = groupMetadata[gName] || { color: '#ff8c00', icon: '📁' };
         let totalCount = groups[gName] ? groups[gName].length : 0;
 
         html += `
-            <div class="group-container" style="border-top: 2px solid ${meta.color}">
+            <div class="group-container" draggable="true" data-groupname="${gName}" style="border-top: 2px solid ${meta.color}">
                 <div class="group-header" data-group="${gName}" style="color: ${meta.color};">
                     <div class="group-title-wrapper">
+                        <span class="drag-handle" title="Verschieben">⠿</span>
                         <span>${meta.icon} ${gName}</span>
                     </div>
                     <div class="group-right-wrapper">
@@ -216,22 +1200,19 @@ function render() {
 }
 
 function getCardHtml(p, i) {
-    const icon = providerIcons[p.provider] !== undefined ? providerIcons[p.provider] : '⚬';
+    const icons = getEffectiveProviderIcons();
+    const icon = icons[p.provider] !== undefined ? icons[p.provider] : '⚬';
     const showIcon = icon !== '';
     return `
         <div class="prompt-card" style="border-left: 3px solid ${p.color || '#ff8c00'}">
             <div class="card-header">
                 <div class="prompt-info" data-action="copy-insert" data-index="${i}">
-                    ${showIcon ? `<span class="provider-icon" title="${p.provider === 'none' ? 'Kein Anbieter' : (p.provider || 'Anbieter')}">${icon}</span>` : ''}
+                    ${showIcon ? `<span class="provider-icon" title="${p.provider === 'none' ? 'Keins' : (p.provider || 'Anbieter')}">${icon}</span>` : ''}
                     <span class="prompt-title">${p.title || 'Unbenannt'}</span>
-                </div>
-                <div class="card-actions">
-                    <button class="btn-icon" data-action="toggle" data-index="${i}" title="Vorschau">👁</button>
-                    <button class="btn-icon" data-action="edit" data-index="${i}" title="Bearbeiten">✎</button>
-                    <button class="btn-icon" data-action="delete" data-index="${i}" title="Löschen">✕</button>
                 </div>
             </div>
             <div id="content-${i}" class="content-box">${p.text || ''}</div>
+            ${(p.createdAt || p.updatedAt) ? `<div style="font-size:10px; color:var(--text-muted); font-style:italic; margin-top:4px; padding:0 2px; text-align:right;">${p.createdAt ? '📅 ' + fmtDate(p.createdAt) : ''}${p.updatedAt && fmtDate(p.updatedAt) !== fmtDate(p.createdAt) ? ' · ✏️ ' + fmtDate(p.updatedAt) : ''}</div>` : ''}
         </div>
     `;
 }
@@ -269,19 +1250,21 @@ function renderNotes() {
     });
 
     let html = "";
-    Object.keys(groups).forEach(gName => {
-        const isCollapsed = collapsedNoteGroups[gName] || false;
+    sortGroupNames(Object.keys(groups), noteGroupOrder).forEach(gName => {
+        const isCollapsed = (gName in collapsedNoteGroups) ? collapsedNoteGroups[gName] : true;
         const meta = groupMetadata[gName] || { color: '#ff8c00', icon: '📁' };
         let totalCount = groups[gName].length;
 
         html += `
-            <div class="group-container" style="border-top: 2px solid ${meta.color}">
+            <div class="group-container" draggable="true" data-groupname="${gName}" style="border-top: 2px solid ${meta.color}">
                 <div class="group-header" data-notegroup="${gName}" style="color: ${meta.color};">
                     <div class="group-title-wrapper">
+                        <span class="drag-handle" title="Verschieben">⠿</span>
                         <span>${meta.icon} ${gName}</span>
                     </div>
                     <div class="group-right-wrapper">
                         <span class="badge">${totalCount}</span>
+                        <button class="group-edit-btn" data-notegroupedit="${gName}" title="Gruppe bearbeiten">✎</button>
                         <span style="font-size:10px; padding-left:4px;">${isCollapsed ? '►' : '▼'}</span>
                     </div>
                 </div>
@@ -314,22 +1297,98 @@ function getNoteCardHtml(n, i) {
 
     const tileColor = n.color || '#ff8c00';
 
-    return `
-        <div class="note-card" style="border-left: 3px solid ${tileColor}; background: rgba(0,0,0,0.15);">
+    const noteCardEl = document.createElement('div');
+    noteCardEl.className = 'note-card';
+    noteCardEl.style.cssText = `border-left: 3px solid ${tileColor}; background: rgba(0,0,0,0.15);`;
+    noteCardEl.innerHTML = `
             <div class="card-header">
                 <div class="note-info" data-note-action="toggle-view" data-index="${i}">
-                    <span class="note-title" style="font-weight:bold; color:${tileColor};">${n.pinned ? '📌 ' : ''}${n.title || 'Unbenannte Notiz'}</span>
-                </div>
-                <div class="card-actions">
-                    <button class="btn-icon" data-note-action="toggle-view" data-index="${i}" title="Vorschau">👁</button>
-                    <button class="btn-icon" data-note-action="edit" data-index="${i}" title="Bearbeiten">✎</button>
-                    <button class="btn-icon" data-note-action="delete" data-index="${i}" title="Löschen">✕</button>
+                    <span class="note-title" style="font-weight:bold; color:${tileColor}; cursor:pointer;" data-note-copy-idx="${i}">${n.pinned ? '📌 ' : ''}${n.icon ? '<span class="note-card-icon">' + n.icon + '</span> ' : ''}${n.title || 'Unbenannte Notiz'}</span>
                 </div>
             </div>
             <div id="note-content-${i}" class="content-box" style="display:none; background:rgba(0,0,0,0.3);">
                 <div style="white-space: pre-wrap;">${n.text || ''}</div>
                 ${todoHtml}
             </div>
+            ${(n.createdAt || n.updatedAt) ? `<div style="font-size:10px; color:var(--text-muted); font-style:italic; margin-top:4px; padding:0 2px; text-align:right;">${n.createdAt ? '📅 ' + fmtDate(n.createdAt) : ''}${n.updatedAt && fmtDate(n.updatedAt) !== fmtDate(n.createdAt) ? ' · ✏️ ' + fmtDate(n.updatedAt) : ''}</div>` : ''}
+    `;
+    return noteCardEl.outerHTML;
+}
+
+function renderBookmarks() {
+    const bList = document.getElementById('bookmarksList');
+    if (!bList) return;
+
+    const groups = {};
+    const unassigned = [];
+
+    bookmarks.forEach((b, i) => {
+        if (b.group && b.group.trim() !== "") {
+            if (!groups[b.group]) groups[b.group] = [];
+            groups[b.group].push({ item: b, index: i });
+        } else {
+            unassigned.push({ item: b, index: i });
+        }
+    });
+
+    let html = "";
+    sortGroupNames(Object.keys(groups), bookmarkGroupOrder).forEach(gName => {
+        const isCollapsed = (gName in collapsedBookmarkGroups) ? collapsedBookmarkGroups[gName] : true;
+        const meta = bookmarkGroupMetadata[gName] || { color: '#ff8c00', icon: '🔖' };
+        let totalCount = groups[gName].length;
+
+        html += `
+            <div class="group-container" draggable="true" data-groupname="${gName}" style="border-top: 2px solid ${meta.color}">
+                <div class="group-header" data-bookmarkgroup="${gName}" style="color: ${meta.color};">
+                    <div class="group-title-wrapper">
+                        <span class="drag-handle" title="Verschieben">⠿</span>
+                        <span>${meta.icon} ${gName}</span>
+                    </div>
+                    <div class="group-right-wrapper">
+                        <span class="badge">${totalCount}</span>
+                        <button class="group-edit-btn" data-bookmarkgroupedit="${gName}" title="Gruppe bearbeiten">✎</button>
+                        <span style="font-size:10px; padding-left:4px;">${isCollapsed ? '►' : '▼'}</span>
+                    </div>
+                </div>
+                <div class="group-content" style="display: ${isCollapsed ? 'none' : 'flex'};">
+                    ${groups[gName].map(bObj => getBookmarkCardHtml(bObj.item, bObj.index)).join('')}
+                </div>
+            </div>
+        `;
+    });
+
+    if (unassigned.length > 0) {
+        html += unassigned.map(bObj => getBookmarkCardHtml(bObj.item, bObj.index)).join('');
+    } else if (html === "") {
+        html = '<p style="font-size:12px; opacity:0.5; margin:0;">Keine Sites vorhanden.</p>';
+    }
+
+    bList.innerHTML = html;
+}
+
+function faviconUrl(pageUrl) {
+    try {
+        const u = new URL(chrome.runtime.getURL('/_favicon/'));
+        u.searchParams.set('pageUrl', pageUrl);
+        u.searchParams.set('size', '32');
+        return u.toString();
+    } catch (e) {
+        return '';
+    }
+}
+
+function getBookmarkCardHtml(b, i) {
+    const favicon = b.url ? faviconUrl(b.url) : '';
+    return `
+        <div class="bookmark-card" draggable="true" data-bookmark-index="${i}" style="border-left: 3px solid ${b.color || '#ff8c00'}">
+            <div class="card-header">
+                <div class="prompt-info" data-bookmark-action="open" data-index="${i}" title="In neuem Tab öffnen">
+                    <span class="bookmark-favicon-wrap" style="display:inline-flex; width:16px; height:16px; align-items:center; justify-content:center; flex-shrink:0;">${favicon ? `<img class="bookmark-favicon" src="${favicon}" data-fallback="🔖" style="width:14px; height:14px; object-fit:contain;">` : '🔖'}</span>
+                    <span class="prompt-title">${b.title || 'Unbenannte Site'}</span>
+                </div>
+            </div>
+            <div id="bookmark-content-${i}" class="content-box">${b.url || ''}</div>
+            ${(b.createdAt || b.updatedAt) ? `<div style="font-size:10px; color:var(--text-muted); font-style:italic; margin-top:4px; padding:0 2px; text-align:right;">${b.createdAt ? '📅 ' + fmtDate(b.createdAt) : ''}${b.updatedAt && fmtDate(b.updatedAt) !== fmtDate(b.createdAt) ? ' · ✏️ ' + fmtDate(b.updatedAt) : ''}</div>` : ''}
         </div>
     `;
 }
@@ -339,28 +1398,47 @@ function renderMakros() {
     if (!mList) return;
 
     if (makros.length === 0) {
-        mList.innerHTML = '<p style="font-size:12px; opacity:0.5; margin:0;">Keine Makros vorhanden.</p>';
+        mList.innerHTML = '';
         return;
     }
 
     mList.innerHTML = makros.map((m, i) => {
         const stepsCount = m.steps ? m.steps.length : 0;
+        const stepIcon = (s) => ({ click:'🖱', type:'⌨', wait:'⏱', waitForReload:'🔄', navigate:'🌐', scroll:'🔃', keypress:'⌨', select:'☰', doubleclick:'🖱🖱', rightclick:'🖱❯', hover:'↗', switchTab:'⇄', newTab:'🗗', mousemovepath:'↝' }[s.type] || '▸');
+        const stepDesc = (s) => {
+            if (s.type === 'click') return `Klick @ (${s._px},${s._py})`;
+            if (s.type === 'type') return `Text: "${(s.value||'').slice(0,28)}"`;
+            if (s.type === 'wait') return `Pause ${s.duration||1000}ms`;
+            if (s.type === 'waitForReload') return `Reload warten (max ${s.timeout||10000}ms)`;
+            if (s.type === 'navigate') return `→ ${(s.url||'').slice(0,35)}`;
+            if (s.type === 'scroll') return s.selector ? `Scroll zu ${s.selector}` : `Scroll (${s.x||0},${s.y||0})`;
+            if (s.type === 'keypress') return `Taste: ${(s.modifiers||[]).join('+')}${s.modifiers?.length?'+':''}${s.key}`;
+            if (s.type === 'select') return `Auswahl: ${s.selector} = "${s.value}"`;
+            if (s.type === 'doubleclick') return `Doppelklick: ${s.selector||`(${s._px},${s._py})`}`;
+            if (s.type === 'rightclick') return `Rechtsklick: ${s.selector||`(${s._px},${s._py})`}`;
+            if (s.type === 'hover') return `Hover: ${s.selector||`(${s._px},${s._py})`}`;
+            return s.type;
+        };
+        const stepsHtml = (m.steps || []).map((s, j) => `
+            <div class="makro-step-item" draggable="true" data-makro-idx="${i}" data-step-idx="${j}" title="Klicken zum Hervorheben auf Seite">
+                <span class="drag-handle">⠿</span>
+                <span>${stepIcon(s)}</span>
+                <span style="flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${stepDesc(s)}</span>
+            </div>
+        `).join('');
         return `
             <div class="makro-card" style="border-left: 3px solid ${m.color || '#ff8c00'}">
                 <div class="card-header">
                     <div class="makro-info" data-makro-action="run" data-index="${i}" title="Makro abspielen">
-                        <span style="color: #4caf50; font-size:14px;">▶</span>
-                        <span class="makro-title" style="font-weight:600;">${m.title || 'Unbenanntes Makro'}</span>
-                        <span style="font-size:10px; opacity:0.5;">(${stepsCount} Schritte)${(m.repeat && m.repeat > 1) ? ` <span style="color:#ff8c00;">${m.repeat}×</span>` : ''}</span>
-                    </div>
-                    <div class="card-actions">
-                        <button class="btn-icon" data-makro-action="step" data-index="${i}" title="Einzelschritt-Wiedergabe">▶|</button>
-                        <button class="btn-icon" data-makro-action="toggle-json" data-index="${i}" title="JSON Code anzeigen">👁</button>
-                        <button class="btn-icon" data-makro-action="edit" data-index="${i}" title="Bearbeiten">✎</button>
-                        <button class="btn-icon" data-makro-action="delete" data-index="${i}" title="Löschen">✕</button>
+                        <span style="color: #4caf50; font-size:12px;">▶</span>
+                        <div style="display:flex; flex-direction:column; flex:1; overflow:hidden;">
+                            <span class="makro-title" style="font-weight:600;">${m.title || 'Unbenanntes Makro'}</span>
+                            <span style="font-size:10px; opacity:0.5;">(${stepsCount} Schritte)${(m.repeat && m.repeat > 1) ? ` <span style="color:#ff8c00;">${m.repeat}×</span>` : ''}${m.domain ? ` <span title="Aufgenommen auf ${m.domain}">🌐</span>` : ''}${m.method === 1 ? ` <span style="color:#4caf50; font-weight:700; font-size:9px; background:rgba(76,175,80,0.15); padding:1px 4px; border-radius:3px;">M1</span>` : ''}</span>
+                        </div>
                     </div>
                 </div>
-                <div id="makro-content-${i}" class="content-box" style="font-family: monospace; font-size:11px; max-height:150px; overflow-y:auto;">${JSON.stringify(m.steps, null, 2)}</div>
+                <div id="makro-content-${i}" class="content-box" style="display:none; padding:4px;">${stepsHtml}</div>
+                ${(m.createdAt || m.updatedAt) ? `<div style="font-size:10px; color:var(--text-muted); font-style:italic; margin-top:4px; padding:0 2px; text-align:right;">${m.createdAt ? '📅 ' + fmtDate(m.createdAt) : ''}${m.updatedAt && fmtDate(m.updatedAt) !== fmtDate(m.createdAt) ? ' · ✏️ ' + fmtDate(m.updatedAt) : ''}</div>` : ''}
             </div>
         `;
     }).join('');
@@ -391,7 +1469,7 @@ function renderTrash() {
 }
 
 function renderRecentColors() {
-    ['recentColorsPrompt', 'recentColorsGroup', 'recentColorsNote', 'recentColorsMakro'].forEach(id => {
+    ['recentColorsPrompt', 'recentColorsGroup', 'recentColorsNote', 'recentColorsMakro', 'recentColorsBookmark'].forEach(id => {
         const container = document.getElementById(id);
         if (!container) return;
         container.innerHTML = recentColors.map(c => `
@@ -405,7 +1483,7 @@ function updateRecentColors(color) {
     recentColors = recentColors.filter(c => c !== color);
     recentColors.unshift(color);
     if (recentColors.length > 10) recentColors.pop();
-    chrome.storage.sync.set({ recentColors });
+    syncSet({ recentColors });
 }
 
 function renderSessions() {
@@ -462,9 +1540,10 @@ function renderSessions() {
                     <div class="session-title-row" data-session-action="toggle-collapse">
                         <div class="session-title">
                             <span>${s.name || 'Unbenannte Session'}</span>
-                            <span class="session-meta">(${totalTabsCount} Tabs)</span>
+                            <span class="session-meta" style="color:orange;">${totalTabsCount} Tabs</span>
                             <span style="font-size:10px; padding-left:4px;">${isCollapsed ? '►' : '▼'}</span>
                         </div>
+                        ${(s.timestamp || s.updatedAt) ? `<div style="font-size:10px; color:#fff; font-style:italic; margin-top:2px; opacity:0.7;">${s.timestamp ? '📅 ' + fmtDate(s.timestamp) : ''}${s.updatedAt && s.updatedAt !== s.timestamp ? ' · ✏️ ' + fmtDate(s.updatedAt) : ''}</div>` : ''}
                     </div>
                     <div class="session-actions-sub">
                         <button class="btn-icon" data-session-action="update-current" title="Mit aktuellen Browser-Tabs überschreiben">🔄</button>
@@ -509,6 +1588,34 @@ function insertTextIntoPage(text) {
 
 // Event-Handling für Makros
 document.getElementById('makrosList').addEventListener('click', (e) => {
+    // Step-Hervorhebung auf Seite (Klick auf eine Schritt-Zeile)
+    const stepItem = e.target.closest('.makro-step-item');
+    if (stepItem && !e.target.closest('[data-makro-action]') && !e.target.classList.contains('drag-handle')) {
+        const mi = parseInt(stepItem.dataset.makroIdx);
+        const si = parseInt(stepItem.dataset.stepIdx);
+        const step = makros[mi]?.steps?.[si];
+        if (step && step._px !== undefined) {
+            chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+                if (!tabs[0]) return;
+                chrome.scripting.executeScript({
+                    target: { tabId: tabs[0].id },
+                    func: (px, py) => {
+                        window.scrollTo({ top: py - window.innerHeight / 2, behavior: 'smooth' });
+                        const vx = px - window.scrollX, vy = py - window.scrollY;
+                        const el = document.elementFromPoint(vx, vy);
+                        if (!el) return;
+                        const orig = el.style.outline;
+                        el.style.outline = '3px solid #ff8c00';
+                        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                        setTimeout(() => { el.style.outline = orig; }, 1500);
+                    },
+                    args: [step._px, step._py]
+                });
+            });
+        }
+        return;
+    }
+
     const target = e.target.closest('[data-makro-action]');
     if (!target) return;
 
@@ -516,7 +1623,7 @@ document.getElementById('makrosList').addEventListener('click', (e) => {
     const i = parseInt(target.dataset.index);
     const m = makros[i];
 
-    if (action === 'toggle-json') {
+    if (action === 'toggle-steps') {
         const el = document.getElementById(`makro-content-${i}`);
         if (el) el.style.display = el.style.display === 'block' ? 'none' : 'block';
     }
@@ -525,7 +1632,7 @@ document.getElementById('makrosList').addEventListener('click', (e) => {
     }
     else if (action === 'delete') {
         makros.splice(i, 1);
-        chrome.storage.sync.set({ makros }, renderMakros);
+        saveMakros(renderMakros);
     }
     else if (action === 'edit') {
         if (m) {
@@ -534,117 +1641,116 @@ document.getElementById('makrosList').addEventListener('click', (e) => {
             document.getElementById('makroStepsInput').value = JSON.stringify(m.steps, null, 2);
             document.getElementById('makroColor').value = m.color || '#ff8c00';
             document.getElementById('makroRepeatInput').value = m.repeat || 1;
+            const sd = (m.speedDelay !== undefined) ? m.speedDelay : 700;
+            const speedActive = sd > 0;
+            document.getElementById('makroSpeedToggle').checked = speedActive;
+            document.getElementById('makroSpeedInput').value = speedActive ? sd : 700;
+            document.getElementById('makroSpeedRow').style.display = speedActive ? 'flex' : 'none';
+            document.getElementById('makroAskRepeatInput').checked = !!m.askRepeatBeforePlay;
+            document.getElementById('makroScrollToStartInput').checked = !!m.scrollToStart;
+            document.getElementById('makroScrollToEndInput').checked = !!m.scrollToEnd;
+            document.getElementById('makroLockScrollInput').checked = !!m.lockScroll;
+            const mMethod = m.method || 2;
+            document.getElementById('makroMethodInput').value = mMethod;
+            ['1','2','3','4'].forEach(n => document.getElementById('methodBtn' + n).classList.remove('active'));
+            document.getElementById('methodBtn' + mMethod).classList.add('active');
+            document.getElementById('makroRepeatDelayInput').value = m.repeatDelay || 0;
+            document.getElementById('makroWaitReloadInput').checked = !!m.waitReloadBetweenRepeats;
 
             document.getElementById('mainContainer').style.display = 'none';
             document.getElementById('makroInputGroup').style.display = 'flex';
             renderRecentColors();
+            // Zahlen-Markierungen automatisch auf der Seite anzeigen
+            chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+                if (!tabs[0]) return;
+                chrome.scripting.executeScript({ target: { tabId: tabs[0].id }, func: injectEditMarkersFunc, args: [m.steps] });
+                document.getElementById('showStepsOnPageBtn').style.display = 'none';
+                document.getElementById('applyPageEditsBtn').style.display = 'flex';
+                document.getElementById('cancelPageEditsBtn').style.display = 'flex';
+            });
         }
     }
     else if (action === 'run') {
         if (m && m.steps) {
             chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
                 if (!tabs[0]) return;
-                chrome.scripting.executeScript({
-                    target: { tabId: tabs[0].id },
-                    func: ({ stepsList, repeat }) => {
-                        const showClickIndicator = (x, y) => {
-                            const dot = document.createElement('div');
-                            dot.style.cssText = `position:fixed;left:${x}px;top:${y}px;width:24px;height:24px;border-radius:50%;background:rgba(255,140,0,0.6);border:2px solid #ff8c00;transform:translate(-50%,-50%) scale(0);animation:_mkRipple 0.55s ease forwards;pointer-events:none;z-index:2147483647;inset:auto;margin:0;`;
-                            const st = document.createElement('style');
-                            st.textContent = `@keyframes _mkRipple{0%{transform:translate(-50%,-50%) scale(0);opacity:1}100%{transform:translate(-50%,-50%) scale(2.8);opacity:0}}`;
-                            document.head.appendChild(st);
-                            try { dot.setAttribute('popover','manual'); document.documentElement.appendChild(dot); dot.showPopover(); }
-                            catch(e) { document.documentElement.appendChild(dot); }
-                            setTimeout(() => { dot.remove(); st.remove(); }, 600);
-                        };
-                        const executeAction = (step, attempt) => {
-                            if (step.type === 'click' && step._px !== undefined) {
-                                // Koordinaten als primäre Methode für Klicks
-                                window.scrollTo({ top: step._py - window.innerHeight / 2, behavior: 'instant' });
-                                const vx = step._px - window.scrollX;
-                                const vy = step._py - window.scrollY;
-                                let el = document.elementFromPoint(vx, vy);
-                                const originalEl = el;
-                                // Walk up max 5 levels to find a proper clickable ancestor
-                                let candidate = el;
-                                for (let d = 0; d < 5 && candidate && candidate !== document.body; d++) {
-                                    const tag = candidate.tagName.toLowerCase();
-                                    const role = (candidate.getAttribute && candidate.getAttribute('role')) || '';
-                                    if (['button','a','input','select','label'].includes(tag) ||
-                                        role === 'button' || role === 'link' || role === 'menuitem' || role === 'tab') {
-                                        el = candidate; break;
-                                    }
-                                    candidate = candidate.parentElement;
-                                }
-                                // Fall back to original element if no proper clickable found
-                                if (!el || el === document.body) el = originalEl;
-                                if (!el) {
-                                    if (attempt < 3) setTimeout(() => executeAction(step, attempt + 1), 300);
-                                    return;
-                                }
-                                el.focus();
-                                // Klick immer in die Mitte des gefundenen Elements
-                                const rect = el.getBoundingClientRect();
-                                const cx = rect.left + rect.width / 2;
-                                const cy = rect.top + rect.height / 2;
-                                // Indikator immer exakt auf der getroffenen Mitte zeigen
-                                showClickIndicator(cx, cy);
-                                el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, clientX: cx, clientY: cy }));
-                                el.dispatchEvent(new MouseEvent('mouseup',   { bubbles: true, cancelable: true, clientX: cx, clientY: cy }));
-                                el.dispatchEvent(new MouseEvent('click',     { bubbles: true, cancelable: true, clientX: cx, clientY: cy }));
-                            } else if (step.type === 'type') {
-                                // Selektor primär, Koordinaten als Fallback
-                                let el = null;
-                                try { el = document.querySelector(step.target); } catch (e) {}
-                                if (!el && step._px !== undefined) {
-                                    window.scrollTo({ top: step._py - window.innerHeight / 2, behavior: 'instant' });
-                                    el = document.elementFromPoint(step._px - window.scrollX, step._py - window.scrollY);
-                                }
-                                if (!el) {
-                                    if (attempt < 3) setTimeout(() => executeAction(step, attempt + 1), 300);
-                                    return;
-                                }
-                                el.focus();
-                                if (el.isContentEditable || el.tagName === 'DIV') {
-                                    document.execCommand('selectAll', false, null);
-                                    document.execCommand('insertText', false, step.value);
-                                    el.dispatchEvent(new Event('input', { bubbles: true }));
-                                } else {
-                                    const proto = el.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
-                                    const nativeSetter = Object.getOwnPropertyDescriptor(proto, 'value');
-                                    if (nativeSetter && nativeSetter.set) {
-                                        nativeSetter.set.call(el, step.value);
-                                    } else {
-                                        el.value = step.value;
-                                    }
-                                    el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: step.value }));
-                                    el.dispatchEvent(new Event('change', { bubbles: true }));
-                                }
-                            }
-                        };
-                        const stepDelay = 700;
-                        const pauseDelay = 900;
-                        for (let r = 0; r < repeat; r++) {
-                            const runOffset = r * (stepsList.length * stepDelay + pauseDelay);
-                            stepsList.forEach((step, i) => {
-                                setTimeout(() => executeAction(step, 0), runOffset + i * stepDelay);
-                            });
-                        }
-                    },
-                    args: [{ stepsList: m.steps, repeat: m.repeat || 1 }]
-                });
+                if (m.domain) {
+                    let currentDomain = '';
+                    try { currentDomain = new URL(tabs[0].url).hostname; } catch(e) {}
+                    if (currentDomain && m.domain !== currentDomain) {
+                        const ok = confirm(`⚠️ Dieses Makro wurde auf „${m.domain}" aufgenommen.\nAktueller Tab: „${currentDomain}".\nTrotzdem ausführen?`);
+                        if (!ok) return;
+                    }
+                }
+                if (m.askRepeatBeforePlay) {
+                    document.getElementById('makroRepeatAskInput').value = m.repeat || 1;
+                    document.getElementById('mainContainer').style.display = 'none';
+                    document.getElementById('makroRepeatAskDialog').style.display = 'block';
+                    window._pendingPlayTabId = tabs[0].id;
+                    window._pendingPlayMakro = m;
+                    return;
+                }
+                playMakroFull(tabs[0].id, m, m.steps);
             });
         }
     }
+});
+
+// Drag & Drop für Schritt-Reihenfolge in Makro-Karte
+let stepDragSrc = null;
+document.getElementById('makrosList').addEventListener('dragstart', (e) => {
+    const item = e.target.closest('.makro-step-item');
+    if (!item) return;
+    stepDragSrc = { mi: parseInt(item.dataset.makroIdx), si: parseInt(item.dataset.stepIdx) };
+    e.dataTransfer.effectAllowed = 'move';
+    setTimeout(() => { item.style.opacity = '0.5'; }, 0);
+});
+document.getElementById('makrosList').addEventListener('dragend', (e) => {
+    const item = e.target.closest('.makro-step-item');
+    if (item) item.style.opacity = '';
+    stepDragSrc = null;
+});
+document.getElementById('makrosList').addEventListener('dragover', (e) => {
+    const item = e.target.closest('.makro-step-item');
+    if (item && stepDragSrc) { e.preventDefault(); item.style.outline = '2px dashed var(--accent, #ff8c00)'; }
+});
+document.getElementById('makrosList').addEventListener('dragleave', (e) => {
+    const item = e.target.closest('.makro-step-item');
+    if (item) item.style.outline = '';
+});
+document.getElementById('makrosList').addEventListener('drop', (e) => {
+    const item = e.target.closest('.makro-step-item');
+    if (!item || !stepDragSrc) return;
+    item.style.outline = '';
+    const mi = parseInt(item.dataset.makroIdx);
+    const si = parseInt(item.dataset.stepIdx);
+    if (mi !== stepDragSrc.mi || si === stepDragSrc.si) return;
+    const steps = makros[mi].steps;
+    const moved = steps.splice(stepDragSrc.si, 1)[0];
+    steps.splice(si, 0, moved);
+    saveMakros(renderMakros);
 });
 
 // Recorder-Injektion (wird bei Start und nach jedem Reload/Navigation neu aufgerufen)
 function injectRecorder(tabId) {
     chrome.scripting.executeScript({
         target: { tabId },
-        func: () => {
+        func: (method) => {
             if (window._makroRecordingActive) return;
             window._makroRecordingActive = true;
+            window._makroRecordingMethod = method;
+
+            // Schritte werden über chrome.storage.session statt per chrome.runtime.sendMessage
+            // übertragen: reine Schreibzugriffe mit eigenem Schlüssel (kein Read-Modify-Write,
+            // also race-frei) werden vom Browser-Prozess auch dann noch zugestellt, wenn der
+            // auslösende Klick sofort zu einer Navigation/Unload führt - sendMessage kann in
+            // diesem Fall die Nachricht verlieren, bevor sie beim Sidepanel ankommt.
+            window._makroSendStep = (step) => {
+                try {
+                    const key = '_makroStep_' + Date.now() + '_' + Math.random().toString(36).slice(2);
+                    chrome.storage.session.set({ [key]: step });
+                } catch(e) {}
+            };
 
             const style = document.createElement('style');
             style.id = '_makroStyle';
@@ -699,7 +1805,7 @@ function injectRecorder(tabId) {
                     const rect = target.getBoundingClientRect();
                     const px = Math.round(rect.left + rect.width / 2 + window.scrollX);
                     const py = Math.round(rect.top + rect.height / 2 + window.scrollY);
-                    chrome.runtime.sendMessage({ _makroRecStep: { type: 'click', target: path, _px: px, _py: py } });
+                    window._makroSendStep({ type: 'click', target: path, _px: px, _py: py });
                     e.target.classList.remove('_makro-hover');
                     target.classList.add('_makro-recorded');
                     setTimeout(() => target.classList.remove('_makro-recorded'), 800);
@@ -709,7 +1815,7 @@ function injectRecorder(tabId) {
             window._makroChangeHandler = (e) => {
                 try {
                     const path = getPath(e.target);
-                    chrome.runtime.sendMessage({ _makroRecStep: { type: 'type', target: path, value: e.target.value || e.target.innerText } });
+                    window._makroSendStep({ type: 'type', target: path, value: e.target.value || e.target.innerText });
                     e.target.classList.add('_makro-recorded');
                     setTimeout(() => e.target.classList.remove('_makro-recorded'), 800);
                 } catch (err) {}
@@ -719,65 +1825,330 @@ function injectRecorder(tabId) {
             document.addEventListener('mouseout', window._makroMouseOutHandler, { capture: true });
             document.addEventListener('click', window._makroClickHandler, { capture: true });
             document.addEventListener('change', window._makroChangeHandler, { capture: true });
-        }
+
+            if (method === 3 || method === 1) {
+                // M3/M1: click als {selector, _px, _py} speichern (statt {target, _px, _py})
+                // Überschreibe den Standard-click-Handler für M3 um selector-Feld korrekt zu setzen
+                if (method === 3) {
+                    document.removeEventListener('click', window._makroClickHandler, { capture: true });
+                    window._makroClickHandler = (e) => {
+                        try {
+                            let target = e.target;
+                            let candidate = e.target;
+                            for (let d = 0; d < 5 && candidate && candidate !== document.body; d++) {
+                                const tag = candidate.tagName.toLowerCase();
+                                const role = (candidate.getAttribute && candidate.getAttribute('role')) || '';
+                                if (['button','a','input','select','label'].includes(tag) ||
+                                    role === 'button' || role === 'link' || role === 'menuitem' || role === 'tab') {
+                                    target = candidate; break;
+                                }
+                                candidate = candidate.parentElement;
+                            }
+                            const path = getPath(target);
+                            const rect = target.getBoundingClientRect();
+                            const px = Math.round(rect.left + rect.width / 2 + window.scrollX);
+                            const py = Math.round(rect.top + rect.height / 2 + window.scrollY);
+                            window._makroSendStep({ type: 'click', selector: path, _px: px, _py: py });
+                            e.target.classList.remove('_makro-hover');
+                            target.classList.add('_makro-recorded');
+                            setTimeout(() => target.classList.remove('_makro-recorded'), 800);
+                        } catch (err) {}
+                    };
+                    document.addEventListener('click', window._makroClickHandler, { capture: true });
+                }
+            }
+            if (method === 1 || method === 3) {
+                // M1: dblclick
+                window._makroDblClickHandler = (e) => {
+                    try {
+                        let t = e.target;
+                        const path = getPath(t);
+                        const rect = t.getBoundingClientRect();
+                        const px = Math.round(rect.left + rect.width / 2 + window.scrollX);
+                        const py = Math.round(rect.top + rect.height / 2 + window.scrollY);
+                        window._makroSendStep({ type: 'doubleclick', selector: path, _px: px, _py: py });
+                    } catch(err) {}
+                };
+                // M1: rightclick
+                window._makroContextHandler = (e) => {
+                    try {
+                        e.preventDefault();
+                        const path = getPath(e.target);
+                        const rect = e.target.getBoundingClientRect();
+                        const px = Math.round(rect.left + rect.width / 2 + window.scrollX);
+                        const py = Math.round(rect.top + rect.height / 2 + window.scrollY);
+                        window._makroSendStep({ type: 'rightclick', selector: path, _px: px, _py: py });
+                    } catch(err) {}
+                };
+                // M1: scroll (debounced)
+                let _scrollTimer = null;
+                let _lastScrollX = window.scrollX, _lastScrollY = window.scrollY;
+                window._makroScrollHandler = () => {
+                    clearTimeout(_scrollTimer);
+                    _scrollTimer = setTimeout(() => {
+                        const dx = Math.abs(window.scrollX - _lastScrollX);
+                        const dy = Math.abs(window.scrollY - _lastScrollY);
+                        if (dx > 50 || dy > 50) {
+                            window._makroSendStep({ type: 'scroll', x: Math.round(window.scrollX), y: Math.round(window.scrollY) });
+                            _lastScrollX = window.scrollX; _lastScrollY = window.scrollY;
+                        }
+                    }, 500);
+                };
+                // M1: change on <select> → recorded as 'select' type (override change handler's 'type')
+                // The existing _makroChangeHandler already covers this but we want 'select' type for select elements
+                // So we add a separate handler that fires first for select elements
+                window._makroSelectHandler = (e) => {
+                    if (e.target.tagName !== 'SELECT') return;
+                    try {
+                        const path = getPath(e.target);
+                        window._makroSendStep({ type: 'select', selector: path, value: e.target.value });
+                        e.target.classList.add('_makro-recorded');
+                        setTimeout(() => e.target.classList.remove('_makro-recorded'), 800);
+                        e.stopPropagation(); // prevent generic change handler from also firing
+                    } catch(err) {}
+                };
+                document.addEventListener('dblclick', window._makroDblClickHandler, { capture: true });
+                document.addEventListener('contextmenu', window._makroContextHandler, { capture: true });
+                document.addEventListener('scroll', window._makroScrollHandler, { capture: true, passive: true });
+                document.addEventListener('change', window._makroSelectHandler, { capture: true });
+            }
+            // Alle Methoden: jede Tastatureingabe aufzeichnen, exakt wie eingegeben (nur reine
+            // Modifier-Tastendrücke ohne weitere Taste werden übersprungen).
+            window._makroKeyHandler = (e) => {
+                try {
+                    const pureModifier = ['Shift','Control','Alt','Meta','CapsLock'].includes(e.key);
+                    if (pureModifier) return;
+                    const modifiers = [];
+                    if (e.ctrlKey) modifiers.push('ctrl');
+                    if (e.shiftKey) modifiers.push('shift');
+                    if (e.altKey) modifiers.push('alt');
+                    window._makroSendStep({ type: 'keypress', key: e.key, modifiers });
+                } catch(err) {}
+            };
+            document.addEventListener('keydown', window._makroKeyHandler, { capture: true });
+            if (method === 4) {
+                // M4: Mausbewegungen 1:1 aufzeichnen (throttled 40ms)
+                let _m4LastSend = 0;
+                let _m4Points = [];
+                let _m4StartT = Date.now();
+                window._makroMoveHandler = (e) => {
+                    const now = Date.now();
+                    if (now - _m4LastSend < 40) return;
+                    _m4LastSend = now;
+                    const px = Math.round(e.clientX + window.scrollX);
+                    const py = Math.round(e.clientY + window.scrollY);
+                    _m4Points.push({ x: px, y: py, t: now - _m4StartT });
+                };
+                // Bei Klick: aktuelle Punkte als mousemovepath-Schritt senden, dann click-Schritt
+                document.removeEventListener('click', window._makroClickHandler, { capture: true });
+                window._makroClickHandler = (e) => {
+                    try {
+                        const px = Math.round(e.clientX + window.scrollX);
+                        const py = Math.round(e.clientY + window.scrollY);
+                        const now = Date.now();
+                        _m4Points.push({ x: px, y: py, t: now - _m4StartT });
+                        if (_m4Points.length > 1) {
+                            window._makroSendStep({ type: 'mousemovepath', points: _m4Points.slice() });
+                        }
+                        _m4Points = [];
+                        _m4StartT = Date.now();
+                        window._makroSendStep({ type: 'click', selector: '', _px: px, _py: py });
+                        e.target.classList.add('_makro-recorded');
+                        setTimeout(() => e.target.classList.remove('_makro-recorded'), 800);
+                    } catch(err) {}
+                };
+                document.addEventListener('mousemove', window._makroMoveHandler, { capture: true, passive: true });
+                document.addEventListener('click', window._makroClickHandler, { capture: true });
+            }
+        },
+        args: [recordingMethod]
     });
 }
 
-// Schritte aus dem injizierten Recorder puffern
+// Schritte aus dem injizierten Recorder puffern: window._makroSendStep (im Recorder) schreibt
+// jeden Schritt unter einem eigenen Schlüssel in chrome.storage.session; hier abholen und
+// wieder entfernen, sobald er im recordingBuffer gelandet ist.
+chrome.storage.onChanged.addListener((changes, areaName) => {
+    if (areaName !== 'session' || !isRecording) return;
+    const consumedKeys = [];
+    Object.keys(changes).forEach(key => {
+        if (!key.startsWith('_makroStep_')) return;
+        if (changes[key].newValue !== undefined) recordingBuffer.push(changes[key].newValue);
+        consumedKeys.push(key);
+    });
+    if (consumedKeys.length) chrome.storage.session.remove(consumedKeys);
+});
+
 chrome.runtime.onMessage.addListener((msg) => {
-    if (msg._makroRecStep && isRecording) {
-        recordingBuffer.push(msg._makroRecStep);
+    if (msg._makroStepPosUpdate) {
+        // Nur die Felder des aktuell angezeigten Schritts aktualisieren
+        const upd = msg._makroStepPosUpdate;
+        if (upd.idx === undefined || (stepPlaybackState && upd.idx === stepPlaybackState.stepIndex)) {
+            document.getElementById('stepEditPx').value = upd.px;
+            document.getElementById('stepEditPy').value = upd.py;
+        }
     }
 });
 
 // Nach Reload/Navigation Recorder neu injizieren (Puffer bleibt erhalten)
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
-    if (isRecording && tabId === recordingTabId && changeInfo.status === 'complete') {
-        injectRecorder(tabId);
+    if (isRecording && tabId === recordingTabId) {
+        if (changeInfo.status === 'loading' && changeInfo.url) {
+            // Navigation erkannt → waitForReload-Schritt einfügen
+            recordingBuffer.push({ type: 'waitForReload', timeout: 10000 });
+        }
+        if (changeInfo.status === 'complete') {
+            injectRecorder(tabId);
+        }
     }
+    // Wiedergabe: auf vollständiges Neuladen zwischen Wiederholungen warten
+    if (runningMakroState && tabId === (runningMakroState.currentTabId || runningMakroState.tabId) && changeInfo.status === 'complete') {
+        runningMakroState.reloadSeen = true;
+        if (runningMakroState.awaitingReload) {
+            runningMakroState.awaitingReload = false;
+            if (runningMakroState.fallbackTimer) { clearTimeout(runningMakroState.fallbackTimer); runningMakroState.fallbackTimer = null; }
+            setTimeout(runMakroIteration, runningMakroState.repeatDelay);
+        }
+    }
+});
+
+// M4: neuen Tab während der Aufnahme merken (wird bei Aktivierung als 'newTab' erkannt)
+chrome.tabs.onCreated.addListener((tab) => {
+    if (isRecording && recordingMethod === 4) {
+        recordingCreatedTabIds.add(tab.id);
+    }
+});
+
+// M4: Tab-/Seitenwechsel während der Aufnahme als switchTab/newTab-Schritt aufzeichnen,
+// damit die komplette Session (auch über mehrere Tabs hinweg) 1:1 wiedergegeben werden kann.
+chrome.tabs.onActivated.addListener(({ tabId }) => {
+    if (!isRecording || recordingMethod !== 4 || tabId === recordingTabId) return;
+    let tabIndex = recordingTabIndexMap[tabId];
+    const isNewTab = tabIndex === undefined && recordingCreatedTabIds.has(tabId);
+    if (tabIndex === undefined) {
+        tabIndex = recordingNextTabIndex++;
+        recordingTabIndexMap[tabId] = tabIndex;
+    }
+    const afterStepQueued = () => {
+        recordingTabId = tabId;
+        injectRecorder(tabId);
+    };
+    if (isNewTab) {
+        chrome.tabs.get(tabId, (tab) => {
+            recordingBuffer.push({ type: 'newTab', tabIndex, url: (tab && tab.url) || 'about:blank' });
+            afterStepQueued();
+        });
+    } else {
+        recordingBuffer.push({ type: 'switchTab', tabIndex });
+        afterStepQueued();
+    }
+});
+
+// Method-Toggle im Editor
+['1','2','3','4'].forEach(n => {
+    document.getElementById('methodBtn' + n).addEventListener('click', () => {
+        ['1','2','3','4'].forEach(m => document.getElementById('methodBtn' + m).classList.remove('active'));
+        document.getElementById('methodBtn' + n).classList.add('active');
+        document.getElementById('makroMethodInput').value = n;
+    });
+});
+
+// Aufnahme-Dialog Method-Toggle
+['1','2','3','4'].forEach(n => {
+    document.getElementById('dialogMethodBtn' + n).addEventListener('click', () => {
+        ['1','2','3','4'].forEach(m => document.getElementById('dialogMethodBtn' + m).classList.remove('active'));
+        document.getElementById('dialogMethodBtn' + n).classList.add('active');
+        recordingMethod = parseInt(n);
+    });
+});
+
+document.getElementById('cancelRecordDialogBtn').addEventListener('click', () => {
+    document.getElementById('recordMethodDialog').style.display = 'none';
+    document.getElementById('mainContainer').style.display = 'block';
+});
+
+document.getElementById('startRecordBtn').addEventListener('click', () => {
+    document.getElementById('recordMethodDialog').style.display = 'none';
+    document.getElementById('mainContainer').style.display = 'block';
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        if (!tabs[0]) { alert("Kein aktiver Tab für eine Aufnahme gefunden."); return; }
+        isRecording = true;
+        const btn = document.getElementById('recordMakroBtn');
+        btn.innerHTML = '<span class="record-dot"></span> ⏹ Stoppen';
+        btn.classList.add('recording');
+        recordingTabId = tabs[0].id;
+        recordingBuffer = [];
+        recordingTabIndexMap = { [recordingTabId]: 0 };
+        recordingNextTabIndex = 1;
+        recordingCreatedTabIds = new Set();
+        document.getElementById('recordingWaitBar').style.display = 'flex';
+        injectRecorder(recordingTabId);
+    });
+});
+
+// Wartezeit während Aufnahme einfügen
+document.getElementById('insertWaitBtn').addEventListener('click', () => {
+    if (!isRecording) return;
+    const dur = parseInt(document.getElementById('insertWaitDuration').value) || 1000;
+    recordingBuffer.push({ type: 'wait', duration: dur });
+});
+document.getElementById('insertReloadBtn').addEventListener('click', () => {
+    if (!isRecording) return;
+    recordingBuffer.push({ type: 'waitForReload', timeout: 10000 });
+});
+
+// Schritt im Editor einfügen
+document.getElementById('addWaitStepBtn').addEventListener('click', () => {
+    const dur = parseInt(document.getElementById('addWaitStepDuration').value) || 1000;
+    const ta = document.getElementById('makroStepsInput');
+    let steps = [];
+    try { steps = JSON.parse(ta.value || '[]'); } catch(e) { steps = []; }
+    steps.push({ type: 'wait', duration: dur });
+    ta.value = JSON.stringify(steps, null, 2);
+});
+document.getElementById('addReloadStepBtn').addEventListener('click', () => {
+    const ta = document.getElementById('makroStepsInput');
+    let steps = [];
+    try { steps = JSON.parse(ta.value || '[]'); } catch(e) { steps = []; }
+    steps.push({ type: 'waitForReload', timeout: 10000 });
+    ta.value = JSON.stringify(steps, null, 2);
 });
 
 // Live Aufnahme-Logik für Makros
 document.getElementById('recordMakroBtn').addEventListener('click', () => {
+    if (!isRecording) {
+        // Zeige Methoden-Dialog statt sofort zu starten
+        document.getElementById('mainContainer').style.display = 'none';
+        document.getElementById('recordMethodDialog').style.display = 'flex';
+        return;
+    }
+    // Stoppen
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-        if (!tabs[0]) {
-            alert("Kein aktiver Tab für eine Aufnahme gefunden.");
-            return;
-        }
+        if (!tabs[0]) return;
 
-        isRecording = !isRecording;
-        const btn = document.getElementById('recordMakroBtn');
+        // Letzte, noch nicht abgeholte Schritte aus chrome.storage.session nachziehen, bevor
+        // isRecording auf false gesetzt wird (sonst würde der storage.onChanged-Listener sie
+        // ignorieren, weil er isRecording prüft).
+        chrome.storage.session.get(null, (all) => {
+            const pendingKeys = Object.keys(all || {}).filter(k => k.startsWith('_makroStep_')).sort();
+            pendingKeys.forEach(k => recordingBuffer.push(all[k]));
+            if (pendingKeys.length) chrome.storage.session.remove(pendingKeys);
 
-        if (isRecording) {
-            btn.innerHTML = '<span class="record-dot"></span> ⏹ Stoppen';
-            btn.classList.add('recording');
-            recordingTabId = tabs[0].id;
-            recordingBuffer = [];
-            injectRecorder(recordingTabId);
-        } else {
-            btn.innerHTML = '<span class="record-dot"></span> Aufnahme';
+            isRecording = false;
+            const btn = document.getElementById('recordMakroBtn');
+            btn.innerHTML = '<span class="record-dot"></span> REC';
             btn.classList.remove('recording');
+            document.getElementById('recordingWaitBar').style.display = 'none';
+
+            // M4: Recorder auch in allen anderen während der Aufnahme besuchten Tabs entfernen
+            // (best-effort, da einzelne Tabs zwischenzeitlich geschlossen worden sein können).
+            Object.keys(recordingTabIndexMap).map(Number).filter(id => id !== tabs[0].id).forEach(otherTabId => {
+                chrome.scripting.executeScript({ target: { tabId: otherTabId }, func: cleanupMakroRecorderListeners }).catch(() => {});
+            });
 
             chrome.scripting.executeScript({
                 target: { tabId: tabs[0].id },
-                func: () => {
-                    if (window._makroClickHandler) document.removeEventListener('click', window._makroClickHandler, { capture: true });
-                    if (window._makroChangeHandler) document.removeEventListener('change', window._makroChangeHandler, { capture: true });
-                    if (window._makroHoverHandler) document.removeEventListener('mouseover', window._makroHoverHandler, { capture: true });
-                    if (window._makroMouseOutHandler) document.removeEventListener('mouseout', window._makroMouseOutHandler, { capture: true });
-
-                    delete window._makroClickHandler;
-                    delete window._makroChangeHandler;
-                    delete window._makroHoverHandler;
-                    delete window._makroMouseOutHandler;
-                    delete window._makroRecordingActive;
-
-                    const s = document.getElementById('_makroStyle');
-                    if (s) s.remove();
-                    document.querySelectorAll('._makro-hover, ._makro-recorded').forEach(el => {
-                        el.classList.remove('_makro-hover', '_makro-recorded');
-                    });
-                }
+                func: cleanupMakroRecorderListeners
             }, () => {
                 const recordedSteps = recordingBuffer;
                 recordingTabId = null;
@@ -785,21 +2156,56 @@ document.getElementById('recordMakroBtn').addEventListener('click', () => {
                 if (recordedSteps.length > 0) {
                     const mName = prompt("Makro-Aufnahme erfolgreich! Name eingeben:", `Makro vom ${new Date().toLocaleTimeString()}`);
                     if (mName !== null) {
+                        let recDomain = '';
+                        try { recDomain = tabs[0] ? new URL(tabs[0].url).hostname : ''; } catch(e) {}
                         const newMakro = {
                             title: mName.trim() || "Aufgenommenes Makro",
                             steps: recordedSteps,
-                            color: "#ff8c00"
+                            color: "#ff8c00",
+                            speedDelay: 700,
+                            scrollToEnd: true,
+                            domain: recDomain,
+                            method: recordingMethod,
+                            createdAt: Date.now(),
+                            updatedAt: Date.now()
                         };
                         makros.push(newMakro);
-                        chrome.storage.sync.set({ makros }, renderMakros);
+                        saveMakros(renderMakros);
                     }
                 } else {
                     alert("Es wurden keine Klicks oder Eingaben während der Aufnahme registriert.");
                 }
             });
-        }
+        });
     });
 });
+
+function cleanupMakroRecorderListeners() {
+    delete window._makroSendStep;
+    if (window._makroClickHandler) document.removeEventListener('click', window._makroClickHandler, { capture: true });
+    if (window._makroChangeHandler) document.removeEventListener('change', window._makroChangeHandler, { capture: true });
+    if (window._makroHoverHandler) document.removeEventListener('mouseover', window._makroHoverHandler, { capture: true });
+    if (window._makroMouseOutHandler) document.removeEventListener('mouseout', window._makroMouseOutHandler, { capture: true });
+    if (window._makroDblClickHandler) document.removeEventListener('dblclick', window._makroDblClickHandler, { capture: true });
+    if (window._makroContextHandler) document.removeEventListener('contextmenu', window._makroContextHandler, { capture: true });
+    if (window._makroKeyHandler) document.removeEventListener('keydown', window._makroKeyHandler, { capture: true });
+    if (window._makroScrollHandler) document.removeEventListener('scroll', window._makroScrollHandler, { capture: true });
+    if (window._makroSelectHandler) document.removeEventListener('change', window._makroSelectHandler, { capture: true });
+    if (window._makroMoveHandler) document.removeEventListener('mousemove', window._makroMoveHandler, { capture: true });
+
+    delete window._makroClickHandler; delete window._makroChangeHandler;
+    delete window._makroHoverHandler; delete window._makroMouseOutHandler;
+    delete window._makroDblClickHandler; delete window._makroContextHandler;
+    delete window._makroKeyHandler; delete window._makroScrollHandler;
+    delete window._makroSelectHandler; delete window._makroMoveHandler;
+    delete window._makroRecordingActive; delete window._makroRecordingMethod;
+
+    const s = document.getElementById('_makroStyle');
+    if (s) s.remove();
+    document.querySelectorAll('._makro-hover, ._makro-recorded').forEach(el => {
+        el.classList.remove('_makro-hover', '_makro-recorded');
+    });
+}
 
 function closeMakroEditMode() {
     document.getElementById('makroInputGroup').style.display = 'none';
@@ -808,21 +2214,68 @@ function closeMakroEditMode() {
     document.getElementById('makroTitleInput').value = '';
     document.getElementById('makroStepsInput').value = '';
     document.getElementById('makroRepeatInput').value = '1';
+    document.getElementById('makroRepeatDelayInput').value = '0';
+    document.getElementById('makroWaitReloadInput').checked = false;
+    document.getElementById('makroSpeedToggle').checked = true;
+    document.getElementById('makroSpeedInput').value = '700';
+    document.getElementById('makroSpeedRow').style.display = 'flex';
+    document.getElementById('makroAskRepeatInput').checked = false;
+    document.getElementById('makroScrollToStartInput').checked = false;
+    document.getElementById('makroScrollToEndInput').checked = true;
+    document.getElementById('makroLockScrollInput').checked = false;
     document.getElementById('showStepsOnPageBtn').style.display = 'flex';
     document.getElementById('applyPageEditsBtn').style.display = 'none';
     document.getElementById('cancelPageEditsBtn').style.display = 'none';
+    document.getElementById('makroMethodInput').value = '2';
+    document.getElementById('methodBtn2').classList.add('active');
+    document.getElementById('methodBtn1').classList.remove('active');
+    // Markierungen von der Seite entfernen
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        if (!tabs[0]) return;
+        chrome.scripting.executeScript({
+            target: { tabId: tabs[0].id },
+            func: () => {
+                sessionStorage.removeItem('_makroEditSteps');
+                if (window._makroMarkerScrollHandler) { window.removeEventListener('scroll', window._makroMarkerScrollHandler); delete window._makroMarkerScrollHandler; }
+                document.querySelectorAll('#_makroMarkerContainer').forEach(c => { if(c._makroMutObs) c._makroMutObs.disconnect(); if(c._makroDialogObs) c._makroDialogObs.disconnect(); try{c.hidePopover();}catch(e){} });
+                document.querySelectorAll('._makroEditMarker, #_makroEditPanel, #_makroEditStyle, #_makroMarkerContainer').forEach(el => el.remove());
+            }
+        });
+    });
 }
 
 document.getElementById('cancelMakroBtn').addEventListener('click', closeMakroEditMode);
 
+document.getElementById('makroSpeedToggle').addEventListener('change', (e) => {
+    document.getElementById('makroSpeedRow').style.display = e.target.checked ? 'flex' : 'none';
+});
+
 function openStepPlayback(i) {
     const m = makros[i];
     if (!m || !m.steps || m.steps.length === 0) return;
-    stepPlaybackState = { makro: m, stepIndex: 0, repeat: m.repeat || 1, currentRun: 0 };
-    document.getElementById('stepPlaybackTitle').textContent = m.title || 'Makro';
-    document.getElementById('mainContainer').style.display = 'none';
-    document.getElementById('stepPlaybackPanel').style.display = 'flex';
-    renderStepPanel();
+    const doOpen = () => {
+        stepPlaybackState = { makro: m, stepIndex: 0, repeat: m.repeat || 1, currentRun: 0 };
+        document.getElementById('stepPlaybackTitle').textContent = m.title || 'Makro';
+        document.getElementById('mainContainer').style.display = 'none';
+        document.getElementById('stepPlaybackPanel').style.display = 'flex';
+        renderStepPanel();
+        showStepMarkers();
+    };
+    if (m.domain) {
+        chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+            if (tabs[0] && m.domain) {
+                let currentDomain = '';
+                try { currentDomain = new URL(tabs[0].url).hostname; } catch(e) {}
+                if (currentDomain && m.domain !== currentDomain) {
+                    const ok = confirm(`⚠️ Dieses Makro wurde auf „${m.domain}" aufgenommen.\nAktueller Tab: „${currentDomain}".\nTrotzdem ausführen?`);
+                    if (!ok) return;
+                }
+            }
+            doOpen();
+        });
+    } else {
+        doOpen();
+    }
 }
 
 function renderStepPanel() {
@@ -832,44 +2285,134 @@ function renderStepPanel() {
     const step = makro.steps[stepIndex];
     const runLabel = repeat > 1 ? ` (Durchlauf ${currentRun + 1}/${repeat})` : '';
     document.getElementById('stepPlaybackCounter').textContent = `Schritt ${stepIndex + 1} / ${totalSteps}${runLabel}`;
-    const desc = step.type === 'click'
-        ? `🖱 Klick\nZiel: ${step.target}\nPosition: x=${step._px}, y=${step._py}`
-        : `⌨ Text eingeben\nZiel: ${step.target}\nWert: "${step.value}"`;
+
+    const typeLabels = { click:'🖱 Klick', type:'⌨ Text eingeben', wait:'⏱ Pause', waitForReload:'🔄 Warten auf Reload', navigate:'🌐 Navigation', scroll:'🔃 Scrollen', keypress:'⌨ Tastendruck', select:'☰ Dropdown-Auswahl', doubleclick:'🖱🖱 Doppelklick', rightclick:'🖱❯ Rechtsklick', hover:'↗ Hover', switchTab:'⇄ Tab wechseln', newTab:'🗗 Neuer Tab', mousemovepath:'↝ Mausbewegung' };
+    let desc = typeLabels[step.type] || step.type;
+    if (step.type === 'click') desc += `\nZiel: ${step.target||''}\nPosition: x=${step._px}, y=${step._py}`;
+    else if (step.type === 'type') desc += `\nZiel: ${step.target||''}\nWert: "${step.value||''}"`;
+    else if (step.type === 'wait') desc += `\nDauer: ${step.duration||1000}ms`;
+    else if (step.type === 'waitForReload') desc += `\nMax. Wartezeit: ${step.timeout||10000}ms`;
+    else if (step.type === 'navigate') desc += `\nURL: ${step.url||''}`;
+    else if (step.type === 'scroll') desc += step.selector ? `\nSelektor: ${step.selector}` : `\nPosition: x=${step.x||0}, y=${step.y||0}`;
+    else if (step.type === 'keypress') desc += `\nTaste: ${(step.modifiers||[]).join('+')}${step.modifiers?.length?'+':''}${step.key||''}`;
+    else if (step.type === 'select') desc += `\nSelektor: ${step.selector||''}\nWert: ${step.value||''}`;
+    else if (['doubleclick','rightclick','hover'].includes(step.type)) desc += step.selector ? `\nSelektor: ${step.selector}` : `\nPosition: x=${step._px}, y=${step._py}`;
+    else if (step.type === 'newTab') desc += `\nURL: ${step.url||''}`;
     document.getElementById('stepPlaybackDesc').textContent = desc;
-    // Edit fields
+
+    // Hide all edit panels
+    ['stepEditClick','stepEditType','stepEditWait','stepEditWaitReload','stepEditNavigate','stepEditScroll','stepEditKeypress','stepEditSelect','stepEditSelectorOnly'].forEach(id => {
+        document.getElementById(id).style.display = 'none';
+    });
+    document.getElementById('showStepOnPageBtn').style.display = 'none';
+
     if (step.type === 'click') {
         document.getElementById('stepEditClick').style.display = 'flex';
-        document.getElementById('stepEditType').style.display = 'none';
         document.getElementById('stepEditPx').value = step._px || '';
         document.getElementById('stepEditPy').value = step._py || '';
-    } else {
-        document.getElementById('stepEditClick').style.display = 'none';
+    } else if (step.type === 'type') {
         document.getElementById('stepEditType').style.display = 'flex';
         document.getElementById('stepEditValue').value = step.value || '';
+    } else if (step.type === 'wait') {
+        document.getElementById('stepEditWait').style.display = 'flex';
+        document.getElementById('stepEditWaitDuration').value = step.duration || 1000;
+    } else if (step.type === 'waitForReload') {
+        document.getElementById('stepEditWaitReload').style.display = 'flex';
+        document.getElementById('stepEditReloadTimeout').value = step.timeout || 10000;
+    } else if (step.type === 'navigate') {
+        document.getElementById('stepEditNavigate').style.display = 'flex';
+        document.getElementById('stepEditUrl').value = step.url || '';
+    } else if (step.type === 'scroll') {
+        document.getElementById('stepEditScroll').style.display = 'flex';
+        document.getElementById('stepEditScrollSelector').value = step.selector || '';
+        document.getElementById('stepEditScrollX').value = step.x || '';
+        document.getElementById('stepEditScrollY').value = step.y || '';
+    } else if (step.type === 'keypress') {
+        document.getElementById('stepEditKeypress').style.display = 'flex';
+        document.getElementById('stepEditKey').value = step.key || '';
+        document.getElementById('stepEditModCtrl').checked = (step.modifiers||[]).includes('ctrl');
+        document.getElementById('stepEditModShift').checked = (step.modifiers||[]).includes('shift');
+        document.getElementById('stepEditModAlt').checked = (step.modifiers||[]).includes('alt');
+    } else if (step.type === 'select') {
+        document.getElementById('stepEditSelect').style.display = 'flex';
+        document.getElementById('stepEditSelectSelector').value = step.selector || '';
+        document.getElementById('stepEditSelectValue').value = step.value || '';
+    } else if (['doubleclick','rightclick','hover'].includes(step.type)) {
+        document.getElementById('stepEditSelectorOnly').style.display = 'flex';
+        document.getElementById('stepEditSelector').value = step.selector || '';
     }
-    const saveBtn = document.getElementById('stepEditSaveBtn');
-    saveBtn.textContent = '💾 Schritt speichern';
+    document.getElementById('stepEditSaveBtn').textContent = '💾 Schritt speichern';
+}
+
+// Zeigt alle nummerierten Markierungen für das aktuelle Makro auf der Seite an
+function showStepMarkers() {
+    if (!stepPlaybackState) return;
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        if (!tabs[0]) return;
+        chrome.scripting.executeScript({ target: { tabId: tabs[0].id }, func: injectEditMarkersFunc, args: [stepPlaybackState.makro.steps] });
+    });
+}
+
+// Liest verschobene Marker-Positionen von der Seite und übernimmt sie in die Schritte
+function syncMarkerPositions(cb) {
+    if (!stepPlaybackState) { if (cb) cb(); return; }
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        if (!tabs[0]) { if (cb) cb(); return; }
+        chrome.scripting.executeScript({
+            target: { tabId: tabs[0].id },
+            func: () => JSON.parse(sessionStorage.getItem('_makroEditSteps') || 'null')
+        }, (results) => {
+            const updated = results?.[0]?.result;
+            if (updated && stepPlaybackState) {
+                updated.forEach((s, idx) => {
+                    const target = stepPlaybackState.makro.steps[idx];
+                    if (s && target && s._px !== undefined) {
+                        target._px = s._px;
+                        target._py = s._py;
+                    }
+                });
+                saveMakros();
+            }
+            if (cb) cb();
+        });
+    });
 }
 
 function advanceStep() {
     if (!stepPlaybackState) return;
-    const { makro, repeat } = stepPlaybackState;
-    stepPlaybackState.stepIndex++;
-    if (stepPlaybackState.stepIndex >= makro.steps.length) {
-        stepPlaybackState.stepIndex = 0;
-        stepPlaybackState.currentRun++;
-        if (stepPlaybackState.currentRun >= repeat) {
-            closeStepPanel();
-            return;
+    syncMarkerPositions(() => {
+        if (!stepPlaybackState) return;
+        const { makro, repeat } = stepPlaybackState;
+        stepPlaybackState.stepIndex++;
+        if (stepPlaybackState.stepIndex >= makro.steps.length) {
+            stepPlaybackState.stepIndex = 0;
+            stepPlaybackState.currentRun++;
+            if (stepPlaybackState.currentRun >= repeat) {
+                closeStepPanel();
+                return;
+            }
         }
-    }
-    renderStepPanel();
+        renderStepPanel();
+        showStepMarkers();
+    });
 }
 
 function closeStepPanel() {
     stepPlaybackState = null;
     document.getElementById('stepPlaybackPanel').style.display = 'none';
     document.getElementById('mainContainer').style.display = 'block';
+    document.getElementById('showStepOnPageBtn').style.display = 'none';
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        if (!tabs[0]) return;
+        chrome.scripting.executeScript({
+            target: { tabId: tabs[0].id },
+            func: () => {
+                if (window._makroMarkerScrollHandler) { window.removeEventListener('scroll', window._makroMarkerScrollHandler); delete window._makroMarkerScrollHandler; }
+                document.querySelectorAll('#_makroMarkerContainer').forEach(c => { if(c._makroMutObs) c._makroMutObs.disconnect(); if(c._makroDialogObs) c._makroDialogObs.disconnect(); try{c.hidePopover();}catch(e){} });
+                document.querySelectorAll('._makroEditMarker, #_makroEditPanel, #_makroEditStyle, #_makroMarkerContainer').forEach(el => el.remove());
+            }
+        });
+    });
 }
 
 document.getElementById('stepPlaybackAbortBtn').addEventListener('click', closeStepPanel);
@@ -877,6 +2420,53 @@ document.getElementById('stepPlaybackSkipBtn').addEventListener('click', advance
 document.getElementById('stepPlaybackRunBtn').addEventListener('click', () => {
     if (!stepPlaybackState) return;
     const step = stepPlaybackState.makro.steps[stepPlaybackState.stepIndex];
+    // Apply edits from input fields
+    if (step.type === 'click') {
+        const newPx = parseInt(document.getElementById('stepEditPx').value);
+        const newPy = parseInt(document.getElementById('stepEditPy').value);
+        if (!isNaN(newPx)) step._px = newPx;
+        if (!isNaN(newPy)) step._py = newPy;
+    } else if (step.type === 'type') {
+        step.value = document.getElementById('stepEditValue').value;
+    } else if (step.type === 'wait') {
+        const dur = parseInt(document.getElementById('stepEditWaitDuration').value);
+        if (!isNaN(dur)) step.duration = dur;
+        document.getElementById('stepPlaybackDesc').textContent = `⏱ Warte ${step.duration||1000}ms…`;
+        setTimeout(() => { saveMakros(); advanceStep(); }, step.duration || 1000);
+        return;
+    } else if (step.type === 'waitForReload') {
+        document.getElementById('stepPlaybackDesc').textContent = '🔄 Warte auf Seitenneuladen…';
+        saveMakros();
+        advanceStep();
+        return;
+    } else if (step.type === 'navigate') {
+        step.url = document.getElementById('stepEditUrl').value || step.url;
+    } else if (step.type === 'scroll') {
+        step.selector = document.getElementById('stepEditScrollSelector').value;
+        step.x = parseInt(document.getElementById('stepEditScrollX').value) || step.x || 0;
+        step.y = parseInt(document.getElementById('stepEditScrollY').value) || step.y || 0;
+    } else if (step.type === 'keypress') {
+        step.key = document.getElementById('stepEditKey').value || step.key;
+        const mods = [];
+        if (document.getElementById('stepEditModCtrl').checked) mods.push('ctrl');
+        if (document.getElementById('stepEditModShift').checked) mods.push('shift');
+        if (document.getElementById('stepEditModAlt').checked) mods.push('alt');
+        step.modifiers = mods;
+    } else if (step.type === 'select') {
+        step.selector = document.getElementById('stepEditSelectSelector').value || step.selector;
+        step.value = document.getElementById('stepEditSelectValue').value;
+    } else if (['doubleclick','rightclick','hover'].includes(step.type)) {
+        step.selector = document.getElementById('stepEditSelector').value || step.selector;
+    }
+    // Remove any page marker before executing
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        if (tabs[0]) {
+            chrome.scripting.executeScript({
+                target: { tabId: tabs[0].id },
+                func: () => { document.querySelectorAll('#_makroMarkerContainer').forEach(c => { if(c._makroMutObs) c._makroMutObs.disconnect(); if(c._makroDialogObs) c._makroDialogObs.disconnect(); try{c.hidePopover();}catch(e){} }); document.querySelectorAll('._makroEditMarker, #_makroEditPanel, #_makroEditStyle, #_makroMarkerContainer').forEach(el => el.remove()); }
+            });
+        }
+    });
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
         if (!tabs[0]) { advanceStep(); return; }
         chrome.scripting.executeScript({
@@ -892,33 +2482,53 @@ document.getElementById('stepPlaybackRunBtn').addEventListener('click', () => {
                     catch(e) { document.documentElement.appendChild(dot); }
                     setTimeout(() => { dot.remove(); st.remove(); }, 600);
                 };
+                const findTopClickable = (vx, vy) => {
+                    const els = document.elementsFromPoint(vx, vy);
+                    const top = els.find(e => {
+                        const cs = window.getComputedStyle(e);
+                        return cs.pointerEvents !== 'none' && cs.visibility !== 'hidden' && cs.display !== 'none'
+                            && e !== document.documentElement && e !== document.body;
+                    }) || els[0];
+                    if (!top) return null;
+                    let candidate = top;
+                    for (let d = 0; d < 5 && candidate && candidate !== document.body; d++) {
+                        const tag = candidate.tagName.toLowerCase();
+                        const role = (candidate.getAttribute && candidate.getAttribute('role')) || '';
+                        if (['button','a','input','select','label'].includes(tag) ||
+                            role === 'button' || role === 'link' || role === 'menuitem' || role === 'tab') {
+                            return candidate;
+                        }
+                        candidate = candidate.parentElement;
+                    }
+                    return top;
+                };
+                const findEl = (step) => {
+                    if (step.selector) { try { return document.querySelector(step.selector); } catch(e) {} }
+                    if (step._px !== undefined) {
+                        window.scrollTo({ top: step._py - window.innerHeight / 2, behavior: 'instant' });
+                        return findTopClickable(step._px - window.scrollX, step._py - window.scrollY);
+                    }
+                    return null;
+                };
                 if (step.type === 'click' && step._px !== undefined) {
                     window.scrollTo({ top: step._py - window.innerHeight / 2, behavior: 'instant' });
                     const vx = step._px - window.scrollX, vy = step._py - window.scrollY;
-                    let el = document.elementFromPoint(vx, vy);
-                    const originalEl = el;
-                    let candidate = el;
-                    for (let d = 0; d < 5 && candidate && candidate !== document.body; d++) {
-                        const tag = candidate.tagName.toLowerCase(), role = (candidate.getAttribute && candidate.getAttribute('role')) || '';
-                        if (['button','a','input','select','label'].includes(tag) || role === 'button' || role === 'link' || role === 'menuitem' || role === 'tab') { el = candidate; break; }
-                        candidate = candidate.parentElement;
-                    }
-                    if (!el || el === document.body) el = originalEl;
+                    const el = findTopClickable(vx, vy);
                     if (!el) return;
                     el.focus();
                     const rect = el.getBoundingClientRect();
-                    const cx = rect.left + rect.width / 2;
-                    const cy = rect.top + rect.height / 2;
+                    const cx = rect.left + rect.width / 2, cy = rect.top + rect.height / 2;
                     showClickIndicator(cx, cy);
-                    el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, clientX: cx, clientY: cy }));
-                    el.dispatchEvent(new MouseEvent('mouseup',   { bubbles: true, cancelable: true, clientX: cx, clientY: cy }));
-                    el.dispatchEvent(new MouseEvent('click',     { bubbles: true, cancelable: true, clientX: cx, clientY: cy }));
+                    el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, composed: true, clientX: cx, clientY: cy }));
+                    el.dispatchEvent(new MouseEvent('mouseup',   { bubbles: true, cancelable: true, composed: true, clientX: cx, clientY: cy }));
+                    el.dispatchEvent(new MouseEvent('click',     { bubbles: true, cancelable: true, composed: true, clientX: cx, clientY: cy }));
+                    try { el.click(); } catch(e2) {}
                 } else if (step.type === 'type') {
                     let el = null;
                     try { el = document.querySelector(step.target); } catch(e) {}
                     if (!el && step._px !== undefined) {
                         window.scrollTo({ top: step._py - window.innerHeight / 2, behavior: 'instant' });
-                        el = document.elementFromPoint(step._px - window.scrollX, step._py - window.scrollY);
+                        el = findTopClickable(step._px - window.scrollX, step._py - window.scrollY);
                     }
                     if (!el) return;
                     el.focus();
@@ -933,15 +2543,47 @@ document.getElementById('stepPlaybackRunBtn').addEventListener('click', () => {
                         el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: step.value }));
                         el.dispatchEvent(new Event('change', { bubbles: true }));
                     }
+                } else if (step.type === 'navigate') {
+                    if (step.url) window.location.href = step.url;
+                } else if (step.type === 'scroll') {
+                    if (step.selector) {
+                        const el = document.querySelector(step.selector);
+                        if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    } else {
+                        window.scrollTo({ top: step.y || 0, left: step.x || 0, behavior: 'smooth' });
+                    }
+                } else if (step.type === 'keypress') {
+                    document.dispatchEvent(new KeyboardEvent('keydown', {
+                        key: step.key, bubbles: true, composed: true,
+                        ctrlKey: (step.modifiers||[]).includes('ctrl'),
+                        shiftKey: (step.modifiers||[]).includes('shift'),
+                        altKey: (step.modifiers||[]).includes('alt')
+                    }));
+                } else if (step.type === 'select') {
+                    const el = step.selector ? document.querySelector(step.selector) : null;
+                    if (el) { el.value = step.value; el.dispatchEvent(new Event('change', { bubbles: true })); }
+                } else if (step.type === 'doubleclick') {
+                    const el = findEl(step);
+                    if (el) el.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, cancelable: true, composed: true }));
+                } else if (step.type === 'rightclick') {
+                    const el = findEl(step);
+                    if (el) el.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, composed: true }));
+                } else if (step.type === 'hover') {
+                    const el = findEl(step);
+                    if (el) el.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, composed: true }));
                 }
             },
             args: [step]
         });
+        saveMakros();
         advanceStep();
     });
 });
 
 document.getElementById('stepEditSaveBtn').addEventListener('click', () => {
+    if (!stepPlaybackState) return;
+    // Zuerst alle (auch verschobene) Marker-Positionen übernehmen
+    syncMarkerPositions(() => {
     if (!stepPlaybackState) return;
     const { makro, stepIndex } = stepPlaybackState;
     const step = makro.steps[stepIndex];
@@ -952,15 +2594,176 @@ document.getElementById('stepEditSaveBtn').addEventListener('click', () => {
         if (!isNaN(py)) step._py = py;
     } else if (step.type === 'type') {
         step.value = document.getElementById('stepEditValue').value;
+    } else if (step.type === 'wait') {
+        step.duration = parseInt(document.getElementById('stepEditWaitDuration').value) || 1000;
+    } else if (step.type === 'waitForReload') {
+        step.timeout = parseInt(document.getElementById('stepEditReloadTimeout').value) || 10000;
+    } else if (step.type === 'navigate') {
+        step.url = document.getElementById('stepEditUrl').value;
+    } else if (step.type === 'scroll') {
+        step.selector = document.getElementById('stepEditScrollSelector').value;
+        step.x = parseInt(document.getElementById('stepEditScrollX').value) || 0;
+        step.y = parseInt(document.getElementById('stepEditScrollY').value) || 0;
+    } else if (step.type === 'keypress') {
+        step.key = document.getElementById('stepEditKey').value;
+        const mods = [];
+        if (document.getElementById('stepEditModCtrl').checked) mods.push('ctrl');
+        if (document.getElementById('stepEditModShift').checked) mods.push('shift');
+        if (document.getElementById('stepEditModAlt').checked) mods.push('alt');
+        step.modifiers = mods;
+    } else if (step.type === 'select') {
+        step.selector = document.getElementById('stepEditSelectSelector').value;
+        step.value = document.getElementById('stepEditSelectValue').value;
+    } else if (['doubleclick','rightclick','hover'].includes(step.type)) {
+        step.selector = document.getElementById('stepEditSelector').value;
     }
-    chrome.storage.sync.set({ makros }, () => {
+    saveMakros(() => {
         const btn = document.getElementById('stepEditSaveBtn');
         btn.textContent = '✓ Gespeichert!';
         setTimeout(() => { if (btn) btn.textContent = '💾 Schritt speichern'; }, 1500);
     });
+    });
 });
 
 // Page-Overlay: Schritte auf Seite anzeigen und bearbeiten
+function injectEditMarkersFunc(steps) {
+    document.querySelectorAll('#_makroMarkerContainer').forEach(c => { if(c._makroMutObs) c._makroMutObs.disconnect(); if(c._makroDialogObs) c._makroDialogObs.disconnect(); try{c.hidePopover();}catch(e){} });
+    document.querySelectorAll('._makroEditMarker, #_makroEditPanel, #_makroEditStyle, #_makroMarkerContainer').forEach(el => el.remove());
+    sessionStorage.setItem('_makroEditSteps', JSON.stringify(steps));
+    const style = document.createElement('style');
+    style.id = '_makroEditStyle';
+    style.textContent = `
+        ._makroEditMarker{position:fixed;z-index:2147483647;width:26px;height:26px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:bold;color:#fff;cursor:grab;user-select:none;box-shadow:0 2px 8px rgba(0,0,0,0.5);border:2px solid rgba(255,255,255,0.5);}
+        ._makroEditMarker:active{cursor:grabbing;}
+        ._makroEditMarker._click{background:#ff8c00;}
+        ._makroEditMarker._type{background:#2196f3;}
+        ._makroEditMarker._wait{background:#9c27b0;}
+        ._makroEditMarker._nav{background:#4caf50;}
+        #_makroEditPanel{position:fixed;z-index:2147483647;background:#1e1e1e;border:1px solid #555;border-radius:8px;padding:12px;min-width:210px;box-shadow:0 4px 16px rgba(0,0,0,0.7);font-family:system-ui;font-size:12px;color:#e0e0e0;}
+        #_makroEditPanel label{display:block;font-size:10px;opacity:.6;margin-top:6px;}
+        #_makroEditPanel input,#_makroEditPanel textarea{width:100%;background:#252525;border:1px solid #444;color:#e0e0e0;border-radius:4px;padding:4px;font-size:12px;box-sizing:border-box;margin:2px 0;}
+        #_makroEditPanel button{background:rgba(255,140,0,.2);border:1px solid rgba(255,140,0,.4);color:#ff8c00;border-radius:4px;padding:4px 10px;cursor:pointer;font-size:11px;margin:4px 2px 0;}
+    `;
+    document.head.appendChild(style);
+
+    // Converts page coords to viewport coords for fixed positioning
+    const toViewport = (px, py) => ({ vx: px - window.scrollX - 13, vy: py - window.scrollY - 13 });
+
+    const markerEls = [];
+    steps.forEach((step, idx) => {
+        if (step._px === undefined || step._py === undefined) return;
+        const marker = document.createElement('div');
+        const cls = step.type === 'click' ? '_click' : step.type === 'type' ? '_type' : step.type === 'wait' || step.type === 'waitForReload' ? '_wait' : '_nav';
+        marker.className = `_makroEditMarker ${cls}`;
+        marker.textContent = idx + 1;
+        marker.dataset.idx = idx;
+        const vp = toViewport(step._px, step._py);
+        marker.style.left = vp.vx + 'px';
+        marker.style.top = vp.vy + 'px';
+        markerEls.push(marker);
+
+        let isDragging = false, startX, startY, startLeft, startTop;
+        marker.addEventListener('mousedown', (e) => {
+            e.preventDefault();
+            isDragging = false;
+            startX = e.clientX; startY = e.clientY;
+            startLeft = parseInt(marker.style.left); startTop = parseInt(marker.style.top);
+            const onMove = (me) => {
+                if (!isDragging && (Math.abs(me.clientX - startX) > 3 || Math.abs(me.clientY - startY) > 3)) isDragging = true;
+                if (isDragging) {
+                    const nl = startLeft + (me.clientX - startX);
+                    const nt = startTop + (me.clientY - startY);
+                    marker.style.left = nl + 'px'; marker.style.top = nt + 'px';
+                    const stps = JSON.parse(sessionStorage.getItem('_makroEditSteps') || '[]');
+                    const npx = nl + 13 + window.scrollX;
+                    const npy = nt + 13 + window.scrollY;
+                    stps[idx]._px = npx;
+                    stps[idx]._py = npy;
+                    sessionStorage.setItem('_makroEditSteps', JSON.stringify(stps));
+                    try { chrome.runtime.sendMessage({ _makroStepPosUpdate: { idx, px: npx, py: npy } }); } catch(e) {}
+                }
+            };
+            const onUp = () => { document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp); };
+            document.addEventListener('mousemove', onMove);
+            document.addEventListener('mouseup', onUp);
+        });
+        marker.addEventListener('click', (e) => {
+            if (isDragging) { isDragging = false; return; }
+            const existing = document.getElementById('_makroEditPanel');
+            if (existing) existing.remove();
+            const stps = JSON.parse(sessionStorage.getItem('_makroEditSteps') || '[]');
+            const s = stps[idx];
+            const panel = document.createElement('div');
+            panel.id = '_makroEditPanel';
+            panel.style.left = Math.min(e.clientX + 12, window.innerWidth - 230) + 'px';
+            panel.style.top = Math.min(e.clientY + 12, window.innerHeight - 160) + 'px';
+            if (s.type === 'click') {
+                panel.innerHTML = `<b>🖱 Schritt ${idx+1}: Klick</b><label>X:</label><input type="number" id="_ep_px" value="${s._px}"><label>Y:</label><input type="number" id="_ep_py" value="${s._py}"><div><button id="_ep_save">💾 Speichern</button><button id="_ep_close">✕</button></div>`;
+            } else if (s.type === 'type') {
+                panel.innerHTML = `<b>⌨ Schritt ${idx+1}: Text</b><label>Ziel:</label><input type="text" id="_ep_target" value="${(s.target||'').replace(/"/g,'&quot;')}"><label>Wert:</label><textarea id="_ep_value" rows="2">${(s.value||'').replace(/</g,'&lt;')}</textarea><div><button id="_ep_save">💾 Speichern</button><button id="_ep_close">✕</button></div>`;
+            } else {
+                panel.innerHTML = `<b>Schritt ${idx+1}: ${s.type}</b><div style="opacity:.7;font-size:11px;margin-top:4px;">${JSON.stringify(s,null,1).replace(/</g,'&lt;')}</div><div><button id="_ep_close">✕</button></div>`;
+            }
+            document.body.appendChild(panel);
+            document.getElementById('_ep_close').addEventListener('click', () => panel.remove());
+            const saveBtn = document.getElementById('_ep_save');
+            if (saveBtn) saveBtn.addEventListener('click', () => {
+                const stps2 = JSON.parse(sessionStorage.getItem('_makroEditSteps') || '[]');
+                if (s.type === 'click') {
+                    stps2[idx]._px = parseInt(document.getElementById('_ep_px').value) || stps2[idx]._px;
+                    stps2[idx]._py = parseInt(document.getElementById('_ep_py').value) || stps2[idx]._py;
+                    const nvp = toViewport(stps2[idx]._px, stps2[idx]._py);
+                    marker.style.left = nvp.vx + 'px';
+                    marker.style.top = nvp.vy + 'px';
+                } else if (s.type === 'type') {
+                    stps2[idx].target = document.getElementById('_ep_target').value;
+                    stps2[idx].value = document.getElementById('_ep_value').value;
+                }
+                sessionStorage.setItem('_makroEditSteps', JSON.stringify(stps2));
+                panel.remove();
+            });
+        });
+        document.body.appendChild(marker);
+    });
+
+    // Container im Browser Top Layer platzieren (Popover API) → über nativen <dialog showModal()>
+    const container = document.createElement('div');
+    container.id = '_makroMarkerContainer';
+    container.setAttribute('popover', 'manual');
+    container.style.cssText = 'position:fixed;top:0;left:0;width:100vw;height:100vh;background:transparent;border:none;padding:0;margin:0;max-width:100vw;max-height:100vh;overflow:visible;pointer-events:none;z-index:2147483647;';
+    document.body.appendChild(container);
+    try { container.showPopover(); } catch(e) {}
+
+    // MutationObserver: Container im Top Layer re-promoten wenn neues Element erscheint
+    const _repromote = () => {
+        try { container.hidePopover(); container.showPopover(); } catch(e) {
+            if (document.body.lastElementChild !== container) document.body.appendChild(container);
+        }
+    };
+    const _obs = new MutationObserver(_repromote);
+    _obs.observe(document.body, { childList: true });
+    container._makroMutObs = _obs;
+    // Zweiter Observer: feuert wenn <dialog> via showModal() das 'open'-Attribut erhält
+    const _dialogObs = new MutationObserver(_repromote);
+    _dialogObs.observe(document.documentElement, { subtree: true, attributes: true, attributeFilter: ['open', 'aria-modal'] });
+    container._makroDialogObs = _dialogObs;
+
+    // Update fixed-position markers on scroll
+    const updateMarkers = () => {
+        const stps = JSON.parse(sessionStorage.getItem('_makroEditSteps') || '[]');
+        markerEls.forEach(m => {
+            const i = parseInt(m.dataset.idx);
+            const s = stps[i];
+            if (s && s._px !== undefined) {
+                m.style.left = (s._px - window.scrollX - 13) + 'px';
+                m.style.top  = (s._py - window.scrollY - 13) + 'px';
+            }
+        });
+    };
+    window._makroMarkerScrollHandler = updateMarkers;
+    window.addEventListener('scroll', updateMarkers, { passive: true });
+}
+
 document.getElementById('showStepsOnPageBtn').addEventListener('click', () => {
     let steps = [];
     try { steps = JSON.parse(document.getElementById('makroStepsInput').value); } catch(e) { alert('Ungültiges JSON in Aktionen'); return; }
@@ -968,85 +2771,7 @@ document.getElementById('showStepsOnPageBtn').addEventListener('click', () => {
         if (!tabs[0]) return;
         chrome.scripting.executeScript({
             target: { tabId: tabs[0].id },
-            func: (steps) => {
-                document.querySelectorAll('._makroEditMarker, #_makroEditPanel, #_makroEditStyle').forEach(el => el.remove());
-                sessionStorage.setItem('_makroEditSteps', JSON.stringify(steps));
-                const style = document.createElement('style');
-                style.id = '_makroEditStyle';
-                style.textContent = `
-                    ._makroEditMarker{position:absolute;z-index:999998;width:26px;height:26px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:bold;color:#fff;cursor:grab;user-select:none;box-shadow:0 2px 8px rgba(0,0,0,0.5);border:2px solid rgba(255,255,255,0.5);}
-                    ._makroEditMarker:active{cursor:grabbing;}
-                    ._makroEditMarker._click{background:#ff8c00;}
-                    ._makroEditMarker._type{background:#2196f3;}
-                    #_makroEditPanel{position:fixed;z-index:999999;background:#1e1e1e;border:1px solid #555;border-radius:8px;padding:12px;min-width:210px;box-shadow:0 4px 16px rgba(0,0,0,0.7);font-family:system-ui;font-size:12px;color:#e0e0e0;}
-                    #_makroEditPanel label{display:block;font-size:10px;opacity:.6;margin-top:6px;}
-                    #_makroEditPanel input,#_makroEditPanel textarea{width:100%;background:#252525;border:1px solid #444;color:#e0e0e0;border-radius:4px;padding:4px;font-size:12px;box-sizing:border-box;margin:2px 0;}
-                    #_makroEditPanel button{background:rgba(255,140,0,.2);border:1px solid rgba(255,140,0,.4);color:#ff8c00;border-radius:4px;padding:4px 10px;cursor:pointer;font-size:11px;margin:4px 2px 0;}
-                `;
-                document.head.appendChild(style);
-                steps.forEach((step, idx) => {
-                    if (step._px === undefined || step._py === undefined) return;
-                    const marker = document.createElement('div');
-                    marker.className = `_makroEditMarker ${step.type === 'click' ? '_click' : '_type'}`;
-                    marker.textContent = idx + 1;
-                    marker.style.left = (step._px - 13) + 'px';
-                    marker.style.top = (step._py - 13) + 'px';
-                    let isDragging = false, startX, startY, startLeft, startTop;
-                    marker.addEventListener('mousedown', (e) => {
-                        e.preventDefault();
-                        isDragging = false;
-                        startX = e.clientX; startY = e.clientY;
-                        startLeft = parseInt(marker.style.left); startTop = parseInt(marker.style.top);
-                        const onMove = (me) => {
-                            if (!isDragging && (Math.abs(me.clientX - startX) > 3 || Math.abs(me.clientY - startY) > 3)) isDragging = true;
-                            if (isDragging) {
-                                const nl = startLeft + (me.clientX - startX);
-                                const nt = startTop + (me.clientY - startY);
-                                marker.style.left = nl + 'px'; marker.style.top = nt + 'px';
-                                const stps = JSON.parse(sessionStorage.getItem('_makroEditSteps') || '[]');
-                                stps[idx]._px = nl + 13; stps[idx]._py = nt + 13;
-                                sessionStorage.setItem('_makroEditSteps', JSON.stringify(stps));
-                            }
-                        };
-                        const onUp = () => { document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp); };
-                        document.addEventListener('mousemove', onMove);
-                        document.addEventListener('mouseup', onUp);
-                    });
-                    marker.addEventListener('click', (e) => {
-                        if (isDragging) { isDragging = false; return; }
-                        const existing = document.getElementById('_makroEditPanel');
-                        if (existing) existing.remove();
-                        const stps = JSON.parse(sessionStorage.getItem('_makroEditSteps') || '[]');
-                        const s = stps[idx];
-                        const panel = document.createElement('div');
-                        panel.id = '_makroEditPanel';
-                        panel.style.left = Math.min(e.clientX + 12, window.innerWidth - 230) + 'px';
-                        panel.style.top = Math.min(e.clientY + 12, window.innerHeight - 160) + 'px';
-                        if (s.type === 'click') {
-                            panel.innerHTML = `<b>🖱 Schritt ${idx+1}: Klick</b><label>X:</label><input type="number" id="_ep_px" value="${s._px}"><label>Y:</label><input type="number" id="_ep_py" value="${s._py}"><div><button id="_ep_save">💾 Speichern</button><button id="_ep_close">✕</button></div>`;
-                        } else {
-                            panel.innerHTML = `<b>⌨ Schritt ${idx+1}: Text</b><label>Ziel:</label><input type="text" id="_ep_target" value="${(s.target||'').replace(/"/g,'&quot;')}"><label>Wert:</label><textarea id="_ep_value" rows="2">${(s.value||'').replace(/</g,'&lt;')}</textarea><div><button id="_ep_save">💾 Speichern</button><button id="_ep_close">✕</button></div>`;
-                        }
-                        document.body.appendChild(panel);
-                        document.getElementById('_ep_close').addEventListener('click', () => panel.remove());
-                        document.getElementById('_ep_save').addEventListener('click', () => {
-                            const stps2 = JSON.parse(sessionStorage.getItem('_makroEditSteps') || '[]');
-                            if (s.type === 'click') {
-                                stps2[idx]._px = parseInt(document.getElementById('_ep_px').value) || stps2[idx]._px;
-                                stps2[idx]._py = parseInt(document.getElementById('_ep_py').value) || stps2[idx]._py;
-                                marker.style.left = (stps2[idx]._px - 13) + 'px';
-                                marker.style.top = (stps2[idx]._py - 13) + 'px';
-                            } else {
-                                stps2[idx].target = document.getElementById('_ep_target').value;
-                                stps2[idx].value = document.getElementById('_ep_value').value;
-                            }
-                            sessionStorage.setItem('_makroEditSteps', JSON.stringify(stps2));
-                            panel.remove();
-                        });
-                    });
-                    document.body.appendChild(marker);
-                });
-            },
+            func: injectEditMarkersFunc,
             args: [steps]
         });
         document.getElementById('showStepsOnPageBtn').style.display = 'none';
@@ -1063,7 +2788,9 @@ document.getElementById('applyPageEditsBtn').addEventListener('click', () => {
             func: () => {
                 const steps = JSON.parse(sessionStorage.getItem('_makroEditSteps') || '[]');
                 sessionStorage.removeItem('_makroEditSteps');
-                document.querySelectorAll('._makroEditMarker, #_makroEditPanel, #_makroEditStyle').forEach(el => el.remove());
+                if (window._makroMarkerScrollHandler) { window.removeEventListener('scroll', window._makroMarkerScrollHandler); delete window._makroMarkerScrollHandler; }
+                document.querySelectorAll('#_makroMarkerContainer').forEach(c => { if(c._makroMutObs) c._makroMutObs.disconnect(); if(c._makroDialogObs) c._makroDialogObs.disconnect(); try{c.hidePopover();}catch(e){} });
+                document.querySelectorAll('._makroEditMarker, #_makroEditPanel, #_makroEditStyle, #_makroMarkerContainer').forEach(el => el.remove());
                 return steps;
             }
         }, (results) => {
@@ -1084,7 +2811,9 @@ document.getElementById('cancelPageEditsBtn').addEventListener('click', () => {
                 target: { tabId: tabs[0].id },
                 func: () => {
                     sessionStorage.removeItem('_makroEditSteps');
-                    document.querySelectorAll('._makroEditMarker, #_makroEditPanel, #_makroEditStyle').forEach(el => el.remove());
+                    if (window._makroMarkerScrollHandler) { window.removeEventListener('scroll', window._makroMarkerScrollHandler); delete window._makroMarkerScrollHandler; }
+                    document.querySelectorAll('#_makroMarkerContainer').forEach(c => { if(c._makroMutObs) c._makroMutObs.disconnect(); if(c._makroDialogObs) c._makroDialogObs.disconnect(); try{c.hidePopover();}catch(e){} });
+                    document.querySelectorAll('._makroEditMarker, #_makroEditPanel, #_makroEditStyle, #_makroMarkerContainer').forEach(el => el.remove());
                 }
             });
         }
@@ -1094,11 +2823,486 @@ document.getElementById('cancelPageEditsBtn').addEventListener('click', () => {
     document.getElementById('cancelPageEditsBtn').style.display = 'none';
 });
 
+// Eine einzelne Makro-Iteration im Tab ausführen (eine injizierte Funktion)
+function injectOneRun({ stepsList, speedDelay }) {
+    function showClickRipple(vx, vy) {
+        const d = document.createElement('div');
+        d.style.cssText = 'position:fixed;left:' + (vx-18) + 'px;top:' + (vy-18) + 'px;width:36px;height:36px;border-radius:50%;border:3px solid #ff8c00;pointer-events:none;z-index:2147483647;animation:_makroRipple 0.5s ease-out forwards;';
+        if (!document.getElementById('_makroRippleStyle')) {
+            const s = document.createElement('style');
+            s.id = '_makroRippleStyle';
+            s.textContent = '@keyframes _makroRipple{0%{transform:scale(0.3);opacity:1}100%{transform:scale(1.5);opacity:0}}';
+            document.head.appendChild(s);
+        }
+        // Im bestehenden Top-Layer-Container einbetten, sonst eigenen Popover erstellen
+        const host = document.getElementById('_makroMarkerContainer') || (() => {
+            const h = document.createElement('div');
+            h.setAttribute('popover', 'manual');
+            h.style.cssText = 'position:fixed;top:0;left:0;width:0;height:0;background:transparent;border:none;padding:0;margin:0;overflow:visible;pointer-events:none;';
+            document.body.appendChild(h);
+            try { h.showPopover(); } catch(e) {}
+            setTimeout(() => { try{h.hidePopover();}catch(e){} h.remove(); }, 700);
+            return h;
+        })();
+        host.appendChild(d);
+        setTimeout(() => d.remove(), 600);
+    }
+    const showClickIndicator = (x, y) => {
+        const dot = document.createElement('div');
+        dot.style.cssText = `position:fixed;left:${x}px;top:${y}px;width:24px;height:24px;border-radius:50%;background:rgba(255,140,0,0.6);border:2px solid #ff8c00;transform:translate(-50%,-50%) scale(0);animation:_mkRipple 0.55s ease forwards;pointer-events:none;z-index:2147483647;inset:auto;margin:0;`;
+        const st = document.createElement('style');
+        st.textContent = `@keyframes _mkRipple{0%{transform:translate(-50%,-50%) scale(0);opacity:1}100%{transform:translate(-50%,-50%) scale(2.8);opacity:0}}`;
+        document.head.appendChild(st);
+        try { dot.setAttribute('popover','manual'); document.documentElement.appendChild(dot); dot.showPopover(); }
+        catch(e) { document.documentElement.appendChild(dot); }
+        setTimeout(() => { dot.remove(); st.remove(); }, 600);
+    };
+    const showKeyIndicator = (label) => {
+        const cur = document.getElementById('_makroCursor');
+        const x = cur ? parseFloat(cur.style.left) || 40 : 40;
+        const y = cur ? parseFloat(cur.style.top) || 40 : 40;
+        const pill = document.createElement('div');
+        pill.textContent = '⌨ ' + label;
+        pill.style.cssText = `position:fixed;left:${x}px;top:${y - 28}px;transform:translate(-50%,0);background:#ff8c00;color:#111;font:600 11px system-ui,sans-serif;padding:3px 8px;border-radius:12px;pointer-events:none;z-index:2147483647;white-space:nowrap;box-shadow:0 2px 6px rgba(0,0,0,0.35);animation:_mkKeyFade 0.9s ease forwards;`;
+        if (!document.getElementById('_makroKeyStyle')) {
+            const st = document.createElement('style');
+            st.id = '_makroKeyStyle';
+            st.textContent = `@keyframes _mkKeyFade{0%{opacity:0;transform:translate(-50%,4px)}15%{opacity:1;transform:translate(-50%,0)}75%{opacity:1}100%{opacity:0;transform:translate(-50%,-6px)}}`;
+            document.head.appendChild(st);
+        }
+        document.body.appendChild(pill);
+        setTimeout(() => pill.remove(), 900);
+    };
+    const findTopClickable = (vx, vy) => {
+        const els = document.elementsFromPoint(vx, vy);
+        const top = els.find(e => {
+            const cs = window.getComputedStyle(e);
+            return cs.pointerEvents !== 'none' && cs.visibility !== 'hidden' && cs.display !== 'none'
+                && e !== document.documentElement && e !== document.body;
+        }) || els[0];
+        if (!top) return null;
+        let candidate = top;
+        for (let d = 0; d < 5 && candidate && candidate !== document.body; d++) {
+            const tag = candidate.tagName.toLowerCase();
+            const role = (candidate.getAttribute && candidate.getAttribute('role')) || '';
+            if (['button','a','input','select','label'].includes(tag) ||
+                role === 'button' || role === 'link' || role === 'menuitem' || role === 'tab') {
+                return candidate;
+            }
+            candidate = candidate.parentElement;
+        }
+        return top;
+    };
+    // Animierter Maus-Cursor
+    function getCursor() {
+        let cur = document.getElementById('_makroCursor');
+        if (!cur) {
+            const host = document.getElementById('_makroMarkerContainer') || document.body;
+            cur = document.createElement('div');
+            cur.id = '_makroCursor';
+            cur.style.cssText = 'position:fixed;pointer-events:none;z-index:2147483647;width:20px;height:20px;transition:left 0.12s ease,top 0.12s ease;transform:translate(-3px,-2px);';
+            cur.innerHTML = '<svg width="20" height="20" viewBox="0 0 20 20" xmlns="http://www.w3.org/2000/svg"><polygon points="3,2 3,17 7,13 10,19 12,18 9,12 15,12" fill="white" stroke="#333" stroke-width="1.5" stroke-linejoin="round"/></svg>';
+            host.appendChild(cur);
+        }
+        return cur;
+    }
+    function moveCursorTo(vx, vy) {
+        const cur = getCursor();
+        cur.style.left = vx + 'px';
+        cur.style.top = vy + 'px';
+    }
+    // Nur scrollen, wenn das Ziel tatsächlich außerhalb des sichtbaren Bereichs liegt, und
+    // dabei CSS scroll-behavior:smooth kurzzeitig ausschalten, damit der direkt danach
+    // ausgelesene window.scrollY-Wert bereits aktuell ist (sonst landen Klicks daneben).
+    function ensureVisible(py) {
+        if (!py || py <= 0) return;
+        const margin = 40;
+        if (py >= window.scrollY + margin && py <= window.scrollY + window.innerHeight - margin) return;
+        const prevBehavior = document.documentElement.style.scrollBehavior;
+        document.documentElement.style.scrollBehavior = 'auto';
+        window.scrollTo({ top: py - window.innerHeight / 2, behavior: 'instant' });
+        document.documentElement.style.scrollBehavior = prevBehavior;
+    }
+    const findEl = (step) => {
+        const sel = step.selector || step.target;
+        if (sel) { try { const found = document.querySelector(sel); if (found) return found; } catch(e) {} }
+        if (step._px !== undefined) {
+            ensureVisible(step._py);
+            const vx = (step._px || 0) - window.scrollX;
+            const vy = (step._py || 0) - window.scrollY;
+            return findTopClickable(vx, vy);
+        }
+        return null;
+    };
+    const executeAction = (step, attempt) => {
+        if (step.type === 'click' && step._px !== undefined) {
+            ensureVisible(step._py);
+            const vx = (step._px || 0) - window.scrollX;
+            const vy = (step._py || 0) - window.scrollY;
+            moveCursorTo(vx, vy);
+            const el = findTopClickable(vx, vy);
+            if (!el) { if (attempt < 3) setTimeout(() => executeAction(step, attempt + 1), 300); return; }
+            el.focus();
+            const rect = el.getBoundingClientRect();
+            const cx = rect.left + rect.width / 2, cy = rect.top + rect.height / 2;
+            showClickIndicator(cx, cy);
+            el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, composed: true, clientX: vx, clientY: vy, pageX: step._px, pageY: step._py }));
+            el.dispatchEvent(new MouseEvent('mouseup',   { bubbles: true, cancelable: true, composed: true, clientX: vx, clientY: vy, pageX: step._px, pageY: step._py }));
+            el.dispatchEvent(new MouseEvent('click',     { bubbles: true, cancelable: true, composed: true, clientX: vx, clientY: vy, pageX: step._px, pageY: step._py }));
+            try { el.click(); } catch(e2) {}
+            showClickRipple(vx, vy);
+        } else if (step.type === 'type') {
+            let el = null;
+            try { el = document.querySelector(step.target); } catch (e) {}
+            if (!el && step._px !== undefined) {
+                ensureVisible(step._py);
+                const vx = (step._px || 0) - window.scrollX;
+                const vy = (step._py || 0) - window.scrollY;
+                el = findTopClickable(vx, vy);
+            }
+            if (!el) { if (attempt < 3) setTimeout(() => executeAction(step, attempt + 1), 300); return; }
+            el.focus();
+            if (el.isContentEditable || el.tagName === 'DIV') {
+                document.execCommand('selectAll', false, null);
+                document.execCommand('insertText', false, step.value);
+                el.dispatchEvent(new Event('input', { bubbles: true }));
+            } else {
+                const proto = el.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+                const nativeSetter = Object.getOwnPropertyDescriptor(proto, 'value');
+                if (nativeSetter && nativeSetter.set) nativeSetter.set.call(el, step.value); else el.value = step.value;
+                el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: step.value }));
+                el.dispatchEvent(new Event('change', { bubbles: true }));
+            }
+        } else if (step.type === 'navigate') {
+            if (step.url) window.location.href = step.url;
+        } else if (step.type === 'scroll') {
+            if (step.selector) { const el = document.querySelector(step.selector); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' }); }
+            else { window.scrollTo({ top: step.y || 0, left: step.x || 0, behavior: 'smooth' }); }
+        } else if (step.type === 'keypress') {
+            const label = (step.modifiers||[]).concat(step.key || '').join('+');
+            showKeyIndicator(label);
+            document.dispatchEvent(new KeyboardEvent('keydown', { key: step.key, bubbles: true, composed: true, ctrlKey: (step.modifiers||[]).includes('ctrl'), shiftKey: (step.modifiers||[]).includes('shift'), altKey: (step.modifiers||[]).includes('alt') }));
+        } else if (step.type === 'select') {
+            const el = step.selector ? document.querySelector(step.selector) : null;
+            if (el) { el.value = step.value; el.dispatchEvent(new Event('change', { bubbles: true })); }
+        } else if (step.type === 'doubleclick') {
+            const vx = (step._px || 0) - window.scrollX;
+            const vy = (step._py || 0) - window.scrollY;
+            moveCursorTo(vx, vy);
+            const el = findEl(step); if (el) { el.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, cancelable: true, composed: true, clientX: vx, clientY: vy })); showClickRipple(vx, vy); }
+        } else if (step.type === 'rightclick') {
+            const vx = (step._px || 0) - window.scrollX;
+            const vy = (step._py || 0) - window.scrollY;
+            moveCursorTo(vx, vy);
+            const el = findEl(step); if (el) { el.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, composed: true, clientX: vx, clientY: vy })); showClickRipple(vx, vy); }
+        } else if (step.type === 'hover') {
+            const vx = (step._px || 0) - window.scrollX;
+            const vy = (step._py || 0) - window.scrollY;
+            moveCursorTo(vx, vy);
+            const el = findEl(step); if (el) { el.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, composed: true, clientX: vx, clientY: vy })); showClickRipple(vx, vy); }
+        }
+    };
+    const stepDelay = (speedDelay !== undefined && speedDelay !== null) ? speedDelay : 700;
+    let cumOffset = 0;
+    stepsList.forEach((step) => {
+        const delay = cumOffset;
+        if (step.type === 'wait') { cumOffset += stepDelay + (step.duration || 1000); return; }
+        if (step.type === 'waitForReload') { cumOffset += stepDelay; return; }
+        if (step.type === 'mousemovepath') {
+            // M4: Mausbewegungen abspielen
+            const pts = step.points || [];
+            const base = cumOffset;
+            pts.forEach(pt => {
+                setTimeout(() => {
+                    const vx = pt.x - window.scrollX;
+                    const vy = pt.y - window.scrollY;
+                    moveCursorTo(vx, vy);
+                    // Echtes mousemove-Event dispatchen, damit hover-abhängige Seiten-Logik
+                    // (Dropdowns, Slider, Canvas etc.) wie bei der Aufnahme reagiert.
+                    const target = document.elementFromPoint(vx, vy) || document.body;
+                    target.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, cancelable: true, composed: true, clientX: vx, clientY: vy }));
+                }, base + (pt.t || 0));
+            });
+            cumOffset += stepDelay + (pts.length > 0 ? pts[pts.length - 1].t || 0 : 0);
+            return;
+        }
+        cumOffset += stepDelay;
+        setTimeout(() => executeAction(step, 0), delay);
+    });
+    // Cursor nach Abschluss entfernen
+    setTimeout(() => { const c = document.getElementById('_makroCursor'); if (c) c.remove(); }, cumOffset + 300);
+}
+
+// Geschätzte Dauer einer Iteration (für Sidebar-Timing)
+function makroIterationDuration(steps, stepDelay) {
+    return steps.reduce((acc, s) => {
+        if (s.type === 'mousemovepath') return acc + stepDelay + (s.points && s.points.length ? s.points[s.points.length-1].t || 0 : 0);
+        return acc + stepDelay + (s.type === 'wait' ? (s.duration || 1000) : 0);
+    }, 0) + 400;
+}
+
+// Startet die vollständige Wiedergabe (Wiederholungen werden vom Sidebar gesteuert)
+function playMakroFull(tabId, m, steps, overrideRepeat) {
+    if (runningMakroState && runningMakroState.fallbackTimer) clearTimeout(runningMakroState.fallbackTimer);
+    runningMakroState = {
+        tabId,
+        steps: steps || m.steps,
+        stepDelay: (m.speedDelay !== undefined && m.speedDelay !== null) ? m.speedDelay : 700,
+        repeat: Math.max(1, overrideRepeat || m.repeat || 1),
+        current: 0,
+        repeatDelay: Math.max(0, m.repeatDelay || 0),
+        waitReload: !!m.waitReloadBetweenRepeats,
+        awaitingReload: false,
+        reloadSeen: false,
+        fallbackTimer: null,
+        paused: false,
+        scrollToStart: !!m.scrollToStart,
+        scrollToEnd: !!m.scrollToEnd,
+        lockScroll: !!m.lockScroll,
+        title: m.title || 'Makro'
+    };
+    updatePlaybackBar();
+    runMakroIteration();
+}
+
+// M4: teilt eine Schrittliste an switchTab/newTab-Grenzen in pro-Tab-Segmente auf, damit
+// eine Aufnahme, die über mehrere Tabs/Seiten hinweg lief, beim Abspielen denselben
+// Tab-/Seitenwechseln folgen kann (Segmente ohne Tab-Wechsel ergeben genau 1 Segment,
+// Verhalten bleibt für M1-M3-Makros dadurch unverändert).
+function splitStepsIntoTabSegments(steps) {
+    const segments = [{ tabIndex: 0, enterStep: null, steps: [] }];
+    (steps || []).forEach(s => {
+        if (s.type === 'switchTab' || s.type === 'newTab') {
+            segments.push({ tabIndex: s.tabIndex, enterStep: s, steps: [] });
+        } else {
+            segments[segments.length - 1].steps.push(s);
+        }
+    });
+    return segments;
+}
+
+function waitForTabComplete(tabId, cb) {
+    let done = false;
+    const finish = () => { if (done) return; done = true; chrome.tabs.onUpdated.removeListener(listener); clearTimeout(fallback); cb(); };
+    const listener = (id, changeInfo) => { if (id === tabId && changeInfo.status === 'complete') finish(); };
+    chrome.tabs.onUpdated.addListener(listener);
+    const fallback = setTimeout(finish, 8000);
+}
+
+function runMakroIteration() {
+    const st = runningMakroState;
+    if (!st) return;
+    updatePlaybackBar();
+    st.reloadSeen = false;
+    st.tabRuntimeMap = { 0: st.tabId };
+    st.currentTabId = st.tabId;
+    runMakroSegment(splitStepsIntoTabSegments(st.steps || []), 0);
+}
+
+function runMakroSegment(segments, segIdx) {
+    const st = runningMakroState;
+    if (!st) return;
+    if (segIdx >= segments.length) { setTimeout(afterMakroIteration, 0); return; }
+    const seg = segments[segIdx];
+
+    const runOnTab = (tabId) => {
+        st.currentTabId = tabId;
+        if (st.scrollToStart && segIdx === 0 && st.current === 0) {
+            const firstClickStep = (seg.steps || []).find(s => ['click','doubleclick','rightclick','hover'].includes(s.type) && s._py > 0);
+            if (firstClickStep) {
+                chrome.scripting.executeScript({ target: { tabId }, func: (py) => { window.scrollTo({ top: py - window.innerHeight/2, behavior: 'smooth' }); }, args: [firstClickStep._py] });
+            }
+        }
+        const _runSteps = () => chrome.scripting.executeScript({
+            target: { tabId },
+            func: injectOneRun,
+            args: [{ stepsList: seg.steps, speedDelay: st.stepDelay }]
+        });
+        if (st.lockScroll) {
+            chrome.scripting.executeScript({
+                target: { tabId },
+                func: () => { document.documentElement.style.overflow='hidden'; document.body.style.overflow='hidden'; }
+            }).then(_runSteps);
+        } else {
+            _runSteps();
+        }
+        const dur = makroIterationDuration(seg.steps, st.stepDelay);
+        setTimeout(() => runMakroSegment(segments, segIdx + 1), dur);
+    };
+
+    if (!seg.enterStep) { runOnTab(st.tabRuntimeMap[seg.tabIndex] !== undefined ? st.tabRuntimeMap[seg.tabIndex] : st.tabId); return; }
+
+    if (seg.enterStep.type === 'newTab') {
+        chrome.tabs.create({ url: seg.enterStep.url || 'about:blank' }, (newTab) => {
+            st.tabRuntimeMap[seg.enterStep.tabIndex] = newTab.id;
+            waitForTabComplete(newTab.id, () => runOnTab(newTab.id));
+        });
+    } else {
+        const targetId = st.tabRuntimeMap[seg.enterStep.tabIndex] !== undefined ? st.tabRuntimeMap[seg.enterStep.tabIndex] : st.tabId;
+        chrome.tabs.update(targetId, { active: true }, () => runOnTab(targetId));
+    }
+}
+
+function afterMakroIteration() {
+    const st = runningMakroState;
+    if (!st) return;
+    st.current++;
+    if (st.current >= st.repeat) {
+        const endTabId = st.currentTabId || st.tabId;
+        if (st.lockScroll) {
+            chrome.scripting.executeScript({ target: { tabId: endTabId }, func: () => { document.documentElement.style.overflow=''; document.body.style.overflow=''; }});
+        }
+        if (st.scrollToEnd) {
+            const steps = st.steps || [];
+            let lastClickStep = null;
+            for (let i = steps.length-1; i >= 0; i--) { if (['click','doubleclick','rightclick','hover'].includes(steps[i].type) && steps[i]._py !== undefined) { lastClickStep = steps[i]; break; } }
+            if (lastClickStep) {
+                chrome.scripting.executeScript({ target: { tabId: endTabId }, func: (py) => { window.scrollTo({ top: py - window.innerHeight/2, behavior: 'smooth' }); }, args: [lastClickStep._py] });
+            }
+        }
+        runningMakroState = null;
+        updatePlaybackBar();
+        return;
+    }
+    if (st.paused) {
+        updatePlaybackBar();
+        return;
+    }
+    if (st.waitReload) {
+        if (st.reloadSeen) {
+            // Seite wurde während der Iteration bereits neu geladen → direkt weiter (nach repeatDelay)
+            setTimeout(runMakroIteration, st.repeatDelay);
+        } else {
+            st.awaitingReload = true;
+            st.fallbackTimer = setTimeout(() => {
+                if (runningMakroState && runningMakroState.awaitingReload) {
+                    runningMakroState.awaitingReload = false;
+                    runningMakroState.fallbackTimer = null;
+                    setTimeout(runMakroIteration, runningMakroState.repeatDelay);
+                }
+            }, 15000);
+        }
+    } else {
+        setTimeout(runMakroIteration, st.repeatDelay);
+    }
+}
+
+document.getElementById('showStepOnPageBtn').addEventListener('click', () => {
+    if (!stepPlaybackState) return;
+    const step = stepPlaybackState.makro.steps[stepPlaybackState.stepIndex];
+    if (!step || step._px === undefined) return;
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        if (!tabs[0]) return;
+        chrome.scripting.executeScript({
+            target: { tabId: tabs[0].id },
+            func: (px, py, stepIdx) => {
+                if (window._makroMarkerScrollHandler) { window.removeEventListener('scroll', window._makroMarkerScrollHandler); delete window._makroMarkerScrollHandler; }
+                document.querySelectorAll('._makroEditMarker, #_makroEditPanel, #_makroEditStyle').forEach(el => el.remove());
+                const style = document.createElement('style');
+                style.id = '_makroEditStyle';
+                style.textContent = `
+                    ._makroEditMarker{position:fixed;z-index:2147483647;width:26px;height:26px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:bold;color:#fff;cursor:grab;user-select:none;box-shadow:0 2px 8px rgba(0,0,0,0.5);border:2px solid rgba(255,255,255,0.5);}
+                    ._makroEditMarker:active{cursor:grabbing;}
+                    ._makroEditMarker._click{background:#ff8c00;}
+                `;
+                document.head.appendChild(style);
+                const marker = document.createElement('div');
+                marker.className = '_makroEditMarker _click';
+                marker.textContent = stepIdx + 1;
+                // page coords → viewport coords for fixed positioning
+                let vpx = px - window.scrollX - 13;
+                let vpy = py - window.scrollY - 13;
+                marker.style.left = vpx + 'px';
+                marker.style.top = vpy + 'px';
+                let isDragging = false, startX, startY, startLeft, startTop;
+                marker.addEventListener('mousedown', (e) => {
+                    e.preventDefault();
+                    isDragging = false;
+                    startX = e.clientX; startY = e.clientY;
+                    startLeft = parseInt(marker.style.left); startTop = parseInt(marker.style.top);
+                    const onMove = (me) => {
+                        if (!isDragging && (Math.abs(me.clientX - startX) > 3 || Math.abs(me.clientY - startY) > 3)) isDragging = true;
+                        if (isDragging) {
+                            marker.style.left = (startLeft + (me.clientX - startX)) + 'px';
+                            marker.style.top = (startTop + (me.clientY - startY)) + 'px';
+                        }
+                    };
+                    const onUp = () => {
+                        document.removeEventListener('mousemove', onMove);
+                        document.removeEventListener('mouseup', onUp);
+                        if (isDragging) {
+                            // Convert viewport back to page coords
+                            const newPx = parseInt(marker.style.left) + 13 + window.scrollX;
+                            const newPy = parseInt(marker.style.top) + 13 + window.scrollY;
+                            chrome.runtime.sendMessage({ _makroStepPosUpdate: { px: newPx, py: newPy } });
+                        }
+                    };
+                    document.addEventListener('mousemove', onMove);
+                    document.addEventListener('mouseup', onUp);
+                });
+                document.body.appendChild(marker);
+                // Keep marker visible on scroll
+                window._makroMarkerScrollHandler = () => {
+                    marker.style.left = (px - window.scrollX - 13) + 'px';
+                    marker.style.top  = (py - window.scrollY - 13) + 'px';
+                };
+                window.addEventListener('scroll', window._makroMarkerScrollHandler, { passive: true });
+                window.scrollTo({ top: py - window.innerHeight / 2, behavior: 'smooth' });
+            },
+            args: [step._px, step._py, stepPlaybackState.stepIndex]
+        });
+    });
+});
+
+document.getElementById('makroPlaybackPauseBtn').addEventListener('click', () => {
+    if (!runningMakroState) return;
+    if (runningMakroState.paused) {
+        runningMakroState.paused = false;
+        updatePlaybackBar();
+        runMakroIteration();
+    } else {
+        runningMakroState.paused = true;
+        updatePlaybackBar();
+    }
+});
+document.getElementById('makroPlaybackStopBtn').addEventListener('click', () => {
+    if (runningMakroState) {
+        const tabId = runningMakroState.tabId;
+        const shouldUnlock = runningMakroState.lockScroll;
+        if (runningMakroState.fallbackTimer) clearTimeout(runningMakroState.fallbackTimer);
+        runningMakroState = null;
+        updatePlaybackBar();
+        if (shouldUnlock) {
+            chrome.scripting.executeScript({ target: { tabId }, func: () => {
+                document.documentElement.style.overflow = '';
+                document.body.style.overflow = '';
+            }});
+        }
+    }
+});
+
+document.getElementById('cancelRepeatAskBtn').addEventListener('click', () => {
+    document.getElementById('makroRepeatAskDialog').style.display = 'none';
+    document.getElementById('mainContainer').style.display = 'block';
+    window._pendingPlayTabId = null;
+    window._pendingPlayMakro = null;
+});
+document.getElementById('confirmRepeatAskBtn').addEventListener('click', () => {
+    const tabId = window._pendingPlayTabId;
+    const m = window._pendingPlayMakro;
+    const overrideRepeat = Math.max(1, parseInt(document.getElementById('makroRepeatAskInput').value) || 1);
+    document.getElementById('makroRepeatAskDialog').style.display = 'none';
+    document.getElementById('mainContainer').style.display = 'block';
+    window._pendingPlayTabId = null;
+    window._pendingPlayMakro = null;
+    if (tabId && m) playMakroFull(tabId, m, m.steps, overrideRepeat);
+});
+
 document.getElementById('saveMakroBtn').addEventListener('click', () => {
-    const i = document.getElementById('editMakroIndex').value;
+    const editIdx = document.getElementById('editMakroIndex').value;
     const selectedColor = document.getElementById('makroColor').value;
     let parsedSteps = [];
-    
+
     try {
         parsedSteps = JSON.parse(document.getElementById('makroStepsInput').value);
     } catch (err) {
@@ -1106,23 +3310,58 @@ document.getElementById('saveMakroBtn').addEventListener('click', () => {
         return;
     }
 
-    const newMakro = {
-        title: document.getElementById('makroTitleInput').value,
-        steps: parsedSteps,
-        color: selectedColor,
-        repeat: Math.max(1, parseInt(document.getElementById('makroRepeatInput').value) || 1)
+    const finishSave = (steps) => {
+        const existingDomain = (editIdx !== '' && makros[parseInt(editIdx)]) ? (makros[parseInt(editIdx)].domain || '') : '';
+        const newMakro = {
+            title: document.getElementById('makroTitleInput').value,
+            steps: steps,
+            color: selectedColor,
+            repeat: Math.max(1, parseInt(document.getElementById('makroRepeatInput').value) || 1),
+            repeatDelay: Math.max(0, parseInt(document.getElementById('makroRepeatDelayInput').value) || 0),
+            waitReloadBetweenRepeats: document.getElementById('makroWaitReloadInput').checked,
+            speedDelay: document.getElementById('makroSpeedToggle').checked ? Math.max(0, parseInt(document.getElementById('makroSpeedInput').value) || 0) : 0,
+            askRepeatBeforePlay: document.getElementById('makroAskRepeatInput').checked,
+            scrollToStart: document.getElementById('makroScrollToStartInput').checked,
+            scrollToEnd: document.getElementById('makroScrollToEndInput').checked,
+            lockScroll: document.getElementById('makroLockScrollInput').checked,
+            domain: existingDomain,
+            method: parseInt(document.getElementById('makroMethodInput').value) || 2,
+            createdAt: Date.now(),
+            updatedAt: Date.now()
+        };
+
+        if (editIdx !== "") {
+            newMakro.createdAt = makros[parseInt(editIdx)].createdAt || Date.now();
+            makros[parseInt(editIdx)] = newMakro;
+        } else {
+            makros.push(newMakro);
+        }
+
+        updateRecentColors(selectedColor);
+        saveMakros(() => {
+            closeMakroEditMode();
+            renderMakros();
+        });
     };
 
-    if (i !== "") {
-        makros[parseInt(i)] = newMakro;
-    } else {
-        makros.push(newMakro);
-    }
-
-    updateRecentColors(selectedColor);
-    chrome.storage.sync.set({ makros }, () => {
-        closeMakroEditMode();
-        renderMakros();
+    // Verschobene Marker-Positionen von der Seite übernehmen (falls vorhanden)
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        if (!tabs[0]) { finishSave(parsedSteps); return; }
+        chrome.scripting.executeScript({
+            target: { tabId: tabs[0].id },
+            func: () => JSON.parse(sessionStorage.getItem('_makroEditSteps') || 'null')
+        }, (results) => {
+            const marked = results?.[0]?.result;
+            if (Array.isArray(marked)) {
+                parsedSteps.forEach((s, idx) => {
+                    if (marked[idx] && marked[idx]._px !== undefined) {
+                        s._px = marked[idx]._px;
+                        s._py = marked[idx]._py;
+                    }
+                });
+            }
+            finishSave(parsedSteps);
+        });
     });
 });
 
@@ -1131,12 +3370,20 @@ document.addEventListener('click', (e) => {
     if (!e.target.closest('#tabContextMenu')) {
         document.getElementById('tabContextMenu').style.display = 'none';
     }
+    if (!e.target.closest('#sessionContextMenu')) {
+        document.getElementById('sessionContextMenu').style.display = 'none';
+    }
+    if (!e.target.closest('#makroContextMenu')) {
+        document.getElementById('makroContextMenu').style.display = 'none';
+    }
 
     const tabBtn = e.target.closest('.tab-btn');
     if (tabBtn) {
+        document.querySelectorAll('.overlay-page').forEach(o => o.style.display = 'none');
+        document.getElementById('mainContainer').style.display = 'block';
         document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
         document.querySelectorAll('.tab-view').forEach(v => v.style.display = 'none');
-        
+
         tabBtn.classList.add('active');
         const viewId = tabBtn.dataset.tab + 'View';
         const targetView = document.getElementById(viewId);
@@ -1156,8 +3403,9 @@ document.getElementById('promptList').addEventListener('click', (e) => {
         document.getElementById('groupTitleInput').value = oldName;
         document.getElementById('groupIconInput').value = meta.icon;
         document.getElementById('groupColorInput').value = meta.color;
+        populateProviderDropdowns();
         document.getElementById('groupAiProvider').value = meta.groupProvider || 'default';
-        
+
         document.getElementById('mainContainer').style.display = 'none';
         document.getElementById('groupEditorGroup').style.display = 'flex';
         renderRecentColors();
@@ -1167,7 +3415,8 @@ document.getElementById('promptList').addEventListener('click', (e) => {
     const groupHeader = e.target.closest('.group-header');
     if (groupHeader && groupHeader.dataset.group) {
         const gName = groupHeader.dataset.group;
-        collapsedGroups[gName] = !collapsedGroups[gName];
+        const cur = (gName in collapsedGroups) ? collapsedGroups[gName] : true;
+        collapsedGroups[gName] = !cur;
         render();
         return;
     }
@@ -1193,6 +3442,7 @@ document.getElementById('promptList').addEventListener('click', (e) => {
             document.getElementById('textInput').value = p.text || '';
             document.getElementById('promptColor').value = p.color || '#ff8c00';
             document.getElementById('shortcutInput').value = p.shortcut || '';
+            populateProviderDropdowns();
             document.getElementById('aiProvider').value = p.provider || 'ChatGPT';
             populateGroupDropdowns();
             
@@ -1207,13 +3457,14 @@ document.getElementById('promptList').addEventListener('click', (e) => {
             
             document.getElementById('mainContainer').style.display = 'none';
             document.getElementById('inputGroup').style.display = 'flex';
+            autoResizeTextInput();
             renderRecentColors();
         }
     } 
     else if (action === 'delete') {
         const removed = promts.splice(i, 1)[0];
         deletedPromts.push(removed);
-        chrome.storage.sync.set({ promts, deletedPromts });
+        syncSet({ promts, deletedPromts });
     }
 });
 
@@ -1221,7 +3472,8 @@ function handleNotesViewClicks(e) {
     const groupHeader = e.target.closest('.group-header');
     if (groupHeader && groupHeader.dataset.notegroup) {
         const gName = groupHeader.dataset.notegroup;
-        collapsedNoteGroups[gName] = !collapsedNoteGroups[gName];
+        const cur = (gName in collapsedNoteGroups) ? collapsedNoteGroups[gName] : true;
+        collapsedNoteGroups[gName] = !cur;
         renderNotes();
         return;
     }
@@ -1231,7 +3483,7 @@ function handleNotesViewClicks(e) {
         const tIdx = parseInt(e.target.dataset.todoIdx);
         if (notes[nIdx] && notes[nIdx].todos && notes[nIdx].todos[tIdx]) {
             notes[nIdx].todos[tIdx].done = e.target.checked;
-            chrome.storage.sync.set({ notes });
+            syncSet({ notes });
         }
         return;
     }
@@ -1247,7 +3499,7 @@ function handleNotesViewClicks(e) {
     }
     else if (action === 'delete') {
         notes.splice(i, 1);
-        chrome.storage.sync.set({ notes });
+        syncSet({ notes });
     }
     else if (action === 'edit') {
         const n = notes[i];
@@ -1270,6 +3522,7 @@ function handleNotesViewClicks(e) {
             textInput.style.display = 'none';
             textInput.value = '';
 
+            document.getElementById('noteIconInput').value = n.icon || '';
             document.getElementById('mainContainer').style.display = 'none';
             document.getElementById('noteInputGroup').style.display = 'flex';
             renderRecentColors();
@@ -1278,6 +3531,388 @@ function handleNotesViewClicks(e) {
 }
 document.getElementById('pinnedNotesList').addEventListener('click', handleNotesViewClicks);
 document.getElementById('notesList').addEventListener('click', handleNotesViewClicks);
+
+// Note-Gruppen bearbeiten: Icon/Farbe via Popup
+document.getElementById('notesList').addEventListener('click', (e) => {
+    const editBtn = e.target.closest('[data-notegroupedit]');
+    if (!editBtn) return;
+    e.stopPropagation();
+    const gName = editBtn.dataset.notegroupedit;
+    const meta = groupMetadata[gName] || { color: '#ff8c00', icon: '📁' };
+    document.getElementById('editNoteGroupName').value = gName;
+    document.getElementById('noteGroupIconInput').value = meta.icon || '📁';
+    document.getElementById('noteGroupColorInput').value = meta.color || '#ff8c00';
+    const popup = document.getElementById('noteGroupEditPopup');
+    const rect = editBtn.getBoundingClientRect();
+    popup.style.display = 'block';
+    popup.style.top = (rect.bottom + 4) + 'px';
+    popup.style.left = Math.max(4, rect.left - 180) + 'px';
+});
+document.getElementById('noteGroupIconPick').addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-icon]');
+    if (btn) document.getElementById('noteGroupIconInput').value = btn.dataset.icon;
+});
+document.getElementById('cancelNoteGroupBtn').addEventListener('click', () => {
+    document.getElementById('noteGroupEditPopup').style.display = 'none';
+});
+document.getElementById('saveNoteGroupBtn').addEventListener('click', () => {
+    const gName = document.getElementById('editNoteGroupName').value;
+    if (!gName) return;
+    groupMetadata[gName] = {
+        ...(groupMetadata[gName] || {}),
+        icon: document.getElementById('noteGroupIconInput').value || '📁',
+        color: document.getElementById('noteGroupColorInput').value || '#ff8c00'
+    };
+    syncSet({ groupMetadata }, () => {
+        document.getElementById('noteGroupEditPopup').style.display = 'none';
+        renderNotes();
+    });
+});
+
+function openBookmarkEditor(i) {
+    const b = bookmarks[i];
+    if (!b) return;
+    document.getElementById('editBookmarkIndex').value = i;
+    document.getElementById('bookmarkTitleInput').value = b.title || '';
+    document.getElementById('bookmarkUrlInput').value = b.url || '';
+    document.getElementById('bookmarkColor').value = b.color || '#ff8c00';
+
+    populateGroupDropdowns();
+    const textInput = document.getElementById('bookmarkGroupInput');
+    if (b.group && b.group.trim() !== "") {
+        document.getElementById('bookmarkGroupSelectOptions').value = b.group;
+    } else {
+        document.getElementById('bookmarkGroupSelectOptions').value = '';
+    }
+    textInput.style.display = 'none';
+    textInput.value = '';
+
+    document.getElementById('mainContainer').style.display = 'none';
+    document.getElementById('bookmarkInputGroup').style.display = 'flex';
+    renderRecentColors();
+}
+
+function openBookmarkEditorForCurrentPage() {
+    document.getElementById('editBookmarkIndex').value = "";
+    document.getElementById('bookmarkTitleInput').value = '';
+    document.getElementById('bookmarkUrlInput').value = '';
+    document.getElementById('mainContainer').style.display = 'none';
+    document.getElementById('bookmarkInputGroup').style.display = 'flex';
+    populateGroupDropdowns();
+    renderRecentColors();
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        if (tabs[0] && tabs[0].url) {
+            document.getElementById('bookmarkTitleInput').value = tabs[0].title || '';
+            document.getElementById('bookmarkUrlInput').value = tabs[0].url || '';
+        }
+    });
+}
+
+function handleBookmarksViewClicks(e) {
+    const groupHeader = e.target.closest('.group-header');
+    if (groupHeader && groupHeader.dataset.bookmarkgroup) {
+        const gName = groupHeader.dataset.bookmarkgroup;
+        const cur = (gName in collapsedBookmarkGroups) ? collapsedBookmarkGroups[gName] : true;
+        collapsedBookmarkGroups[gName] = !cur;
+        renderBookmarks();
+        return;
+    }
+
+    const target = e.target.closest('[data-bookmark-action]');
+    if (!target) return;
+    const action = target.dataset.bookmarkAction;
+    const i = parseInt(target.dataset.index);
+
+    if (action === 'open') {
+        const b = bookmarks[i];
+        if (b && b.url) {
+            let url = b.url.trim();
+            if (!/^https?:\/\//i.test(url)) url = 'https://' + url;
+            chrome.tabs.create({ url });
+        }
+    }
+    else if (action === 'toggle') {
+        const el = document.getElementById(`bookmark-content-${i}`);
+        if (el) el.style.display = el.style.display === 'block' ? 'none' : 'block';
+    }
+    else if (action === 'delete') {
+        bookmarks.splice(i, 1);
+        syncSet({ bookmarks }, renderBookmarks);
+    }
+    else if (action === 'edit') {
+        openBookmarkEditor(i);
+    }
+}
+document.getElementById('bookmarksList').addEventListener('click', handleBookmarksViewClicks);
+
+// Favicon-Fallback: bei Ladefehler durch Emoji ersetzen (error-Events bubblen nicht -> capture:true)
+document.getElementById('bookmarksList').addEventListener('error', (e) => {
+    const img = e.target;
+    if (img.classList && img.classList.contains('bookmark-favicon')) {
+        const wrap = img.parentElement;
+        if (wrap) wrap.textContent = img.dataset.fallback || '🔖';
+    }
+}, true);
+
+// Lesezeichen-Gruppen bearbeiten: Icon/Farbe via Popup
+document.getElementById('bookmarksList').addEventListener('click', (e) => {
+    const editBtn = e.target.closest('[data-bookmarkgroupedit]');
+    if (!editBtn) return;
+    e.stopPropagation();
+    const gName = editBtn.dataset.bookmarkgroupedit;
+    const meta = bookmarkGroupMetadata[gName] || { color: '#ff8c00', icon: '🔖' };
+    document.getElementById('editBookmarkGroupName').value = gName;
+    document.getElementById('bookmarkGroupIconInput').value = meta.icon || '🔖';
+    document.getElementById('bookmarkGroupColorInput').value = meta.color || '#ff8c00';
+    const popup = document.getElementById('bookmarkGroupEditPopup');
+    const rect = editBtn.getBoundingClientRect();
+    popup.style.display = 'block';
+    popup.style.top = (rect.bottom + 4) + 'px';
+    popup.style.left = Math.max(4, rect.left - 180) + 'px';
+});
+document.getElementById('bookmarkGroupIconPick').addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-icon]');
+    if (btn) document.getElementById('bookmarkGroupIconInput').value = btn.dataset.icon;
+});
+document.getElementById('cancelBookmarkGroupBtn').addEventListener('click', () => {
+    document.getElementById('bookmarkGroupEditPopup').style.display = 'none';
+});
+document.getElementById('sortBookmarkGroupBtn').addEventListener('click', () => {
+    const gName = document.getElementById('editBookmarkGroupName').value;
+    if (gName) sortBookmarksInScope(gName);
+});
+document.getElementById('saveBookmarkGroupBtn').addEventListener('click', () => {
+    const gName = document.getElementById('editBookmarkGroupName').value;
+    if (!gName) return;
+    bookmarkGroupMetadata[gName] = {
+        ...(bookmarkGroupMetadata[gName] || {}),
+        icon: document.getElementById('bookmarkGroupIconInput').value || '🔖',
+        color: document.getElementById('bookmarkGroupColorInput').value || '#ff8c00'
+    };
+    syncSet({ bookmarkGroupMetadata }, () => {
+        document.getElementById('bookmarkGroupEditPopup').style.display = 'none';
+        renderBookmarks();
+    });
+});
+
+function closeBookmarkEditMode() {
+    document.getElementById('bookmarkInputGroup').style.display = 'none';
+    document.getElementById('mainContainer').style.display = 'block';
+    document.getElementById('editBookmarkIndex').value = "";
+    document.getElementById('bookmarkTitleInput').value = '';
+    document.getElementById('bookmarkUrlInput').value = '';
+    document.getElementById('bookmarkGroupInput').value = '';
+    document.getElementById('bookmarkGroupInput').style.display = 'none';
+    document.getElementById('bookmarkGroupSelectOptions').value = '';
+}
+
+document.getElementById('cancelBookmarkBtn').addEventListener('click', closeBookmarkEditMode);
+
+document.getElementById('saveBookmarkBtn').addEventListener('click', () => {
+    const i = document.getElementById('editBookmarkIndex').value;
+    const selectedColor = document.getElementById('bookmarkColor').value;
+
+    let finalGroup = '';
+    const dropdownValue = document.getElementById('bookmarkGroupSelectOptions').value;
+    if (dropdownValue === '__NEW_GROUP__') {
+        finalGroup = document.getElementById('bookmarkGroupInput').value.trim();
+    } else {
+        finalGroup = dropdownValue;
+    }
+
+    const existingBookmark = i !== "" ? bookmarks[parseInt(i)] : null;
+    const newBookmark = {
+        title: document.getElementById('bookmarkTitleInput').value,
+        url: document.getElementById('bookmarkUrlInput').value.trim(),
+        color: selectedColor,
+        group: finalGroup,
+        createdAt: existingBookmark ? (existingBookmark.createdAt || Date.now()) : Date.now(),
+        updatedAt: Date.now()
+    };
+
+    if (i !== "") {
+        bookmarks[parseInt(i)] = newBookmark;
+    } else {
+        bookmarks.push(newBookmark);
+    }
+
+    updateRecentColors(selectedColor);
+    syncSet({ bookmarks }, () => {
+        closeBookmarkEditMode();
+        renderBookmarks();
+    });
+});
+
+document.getElementById('addBookmarkToggleBtn').addEventListener('click', openBookmarkEditorForCurrentPage);
+
+// Ordner-Import über die chrome.bookmarks-API (zuverlässiger Weg neben Drag & Drop, das für
+// Ordner keine verwertbaren Drag-Daten liefert - siehe importBookmarkFolderBtn-Handler unten).
+function renderBookmarkFolderPicker(nodes, depth) {
+    let html = '';
+    (nodes || []).forEach(node => {
+        if (node.children) {
+            const childCount = node.children.filter(c => c.url).length;
+            html += `<button class="btn-icon-elegant bookmark-folder-item" data-folder-id="${node.id}" style="width:100%; text-align:left; margin-left:${depth * 14}px; margin-bottom:4px;">📁 ${node.title || 'Ordner'} <span style="opacity:0.5; font-size:11px;">(${childCount})</span></button>`;
+            html += renderBookmarkFolderPicker(node.children, depth + 1);
+        }
+    });
+    return html;
+}
+
+document.getElementById('importBookmarkFolderBtn').addEventListener('click', () => {
+    chrome.bookmarks.getTree((tree) => {
+        document.getElementById('bookmarkFolderPickerList').innerHTML = renderBookmarkFolderPicker(tree, 0) || '<p style="font-size:12px; opacity:0.5;">Keine Ordner gefunden.</p>';
+        document.getElementById('mainContainer').style.display = 'none';
+        document.getElementById('bookmarkFolderPickerOverlay').style.display = 'flex';
+    });
+});
+
+document.getElementById('closeBookmarkFolderPickerBtn').addEventListener('click', () => {
+    document.getElementById('bookmarkFolderPickerOverlay').style.display = 'none';
+    document.getElementById('mainContainer').style.display = 'block';
+});
+
+document.getElementById('bookmarkFolderPickerList').addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-folder-id]');
+    if (!btn) return;
+    const folderId = btn.dataset.folderId;
+    const folderName = btn.textContent.replace(/\(\d+\)$/, '').replace('📁', '').trim();
+    chrome.bookmarks.getChildren(folderId, (children) => {
+        const links = (children || []).filter(c => c.url);
+        if (links.length === 0) { alert('Dieser Ordner enthält keine Lesezeichen.'); return; }
+        const groupName = folderName || 'Importierter Ordner';
+        links.forEach(c => bookmarks.push({ title: c.title || c.url, url: c.url, color: '#ff8c00', group: groupName, createdAt: Date.now(), updatedAt: Date.now() }));
+        if (!bookmarkGroupMetadata[groupName]) bookmarkGroupMetadata[groupName] = { color: '#ff8c00', icon: '📁' };
+        syncSet({ bookmarks, bookmarkGroupMetadata }, () => {
+            renderBookmarks();
+            document.getElementById('bookmarkFolderPickerOverlay').style.display = 'none';
+            document.getElementById('mainContainer').style.display = 'block';
+        });
+    });
+});
+
+// Lesezeichen sortieren: entweder alle ohne Gruppe (Header-Button) oder alle innerhalb einer
+// bestimmten Gruppe (Button im Gruppen-Bearbeiten-Popup, siehe saveBookmarkGroupBtn-Bereich).
+function sortBookmarksInScope(groupName) {
+    const scoped = [];
+    bookmarks.forEach((b, i) => { if ((b.group || '') === (groupName || '')) scoped.push({ b, i }); });
+    if (scoped.length < 2) return;
+    const sortedItems = scoped.map(s => s.b).slice().sort((a, b) => (a.title || '').localeCompare(b.title || '', undefined, { sensitivity: 'base' }));
+    scoped.forEach((s, idx) => { bookmarks[s.i] = sortedItems[idx]; });
+    syncSet({ bookmarks }, renderBookmarks);
+}
+
+document.getElementById('sortBookmarksBtn').addEventListener('click', () => sortBookmarksInScope(''));
+
+document.getElementById('searchBookmarksInput').addEventListener('input', (e) => {
+    const query = e.target.value.toLowerCase();
+    document.querySelectorAll('.bookmark-card').forEach(card => {
+        const title = card.querySelector('.prompt-title').innerText.toLowerCase();
+        const url = card.querySelector('.content-box').innerText.toLowerCase();
+        card.style.display = (title.includes(query) || url.includes(query)) ? 'block' : 'none';
+    });
+});
+
+// Lesezeichen per Drag & Drop importieren (einzelne Links, mehrere Links oder ganze Ordner aus der Lesezeichenleiste)
+// Listener hängen am gesamten Tab-Bereich (#bookmarksView), nicht nur an der (bei wenigen
+// Einträgen sehr kleinen) #bookmarksList, damit auch ein Drop im "leeren" Bereich unterhalb
+// der Liste erkannt wird und nicht die Browser-Standardaktion (Link in neuem Tab öffnen) greift.
+const bookmarksViewEl = document.getElementById('bookmarksView');
+bookmarksViewEl.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    bookmarksViewEl.classList.add('bookmarks-dropzone-active');
+});
+bookmarksViewEl.addEventListener('dragleave', (e) => {
+    if (!bookmarksViewEl.contains(e.relatedTarget)) {
+        bookmarksViewEl.classList.remove('bookmarks-dropzone-active');
+    }
+});
+bookmarksViewEl.addEventListener('drop', (e) => {
+    e.preventDefault();
+    bookmarksViewEl.classList.remove('bookmarks-dropzone-active');
+
+    const links = [];
+    const seenUrls = new Set();
+    const addLink = (group, url, title) => {
+        if (!url) return;
+        url = url.trim();
+        if (!url || seenUrls.has(url)) return;
+        seenUrls.add(url);
+        links.push({ group: group || '', title: (title || '').trim() || url, url });
+    };
+
+    // Chrome-Lesezeichen-HTML (Netscape-Bookmark-Format): <h3>Ordnername</h3> gefolgt von <a>-Links.
+    // Verlinkte <h3>/<a>-Elemente in Dokumentreihenfolge durchlaufen: jeder Link gehört zum zuletzt
+    // gesehenen <h3> (= seinem unmittelbaren Ordner), so werden auch verschachtelte Ordner korrekt zugeordnet.
+    const html = e.dataTransfer.getData('text/html');
+    if (html) {
+        try {
+            const doc = new DOMParser().parseFromString(html, 'text/html');
+            let currentGroup = '';
+            doc.querySelectorAll('h3, a[href]').forEach(el => {
+                if (el.tagName === 'H3') {
+                    currentGroup = (el.textContent || '').trim();
+                } else {
+                    addLink(currentGroup, el.getAttribute('href'), el.textContent);
+                }
+            });
+        } catch (err) {}
+    }
+
+    if (links.length === 0) {
+        const uriList = e.dataTransfer.getData('text/uri-list');
+        if (uriList) {
+            uriList.split(/\r?\n/).forEach(line => {
+                if (line && !line.startsWith('#')) addLink('', line, '');
+            });
+        }
+    }
+
+    if (links.length === 0) {
+        const plain = e.dataTransfer.getData('text/plain');
+        if (plain) addLink('', plain, '');
+    }
+
+    if (links.length === 0) return;
+
+    // Mehrere Links ohne erkannte Ordner-Gruppe (z.B. wenn Chrome beim Ordner-Drag nur
+    // text/uri-list ohne Ordnernamen liefert) -> Nutzer nach einem Gruppennamen fragen,
+    // damit der Ordner trotzdem als Gruppe importiert wird statt ungruppiert zu landen.
+    if (links.length > 1 && links.every(l => !l.group)) {
+        const folderGroup = prompt(`${links.length} Lesezeichen erkannt. Als Gruppe importieren unter dem Namen:`, 'Importierter Ordner');
+        if (folderGroup && folderGroup.trim()) {
+            links.forEach(l => { l.group = folderGroup.trim(); });
+        }
+    }
+
+    const newGroupNames = new Set();
+    links.forEach(l => {
+        if (l.group && !bookmarkGroupMetadata[l.group]) newGroupNames.add(l.group);
+        bookmarks.push({ title: l.title, url: l.url, color: '#ff8c00', group: l.group, createdAt: Date.now(), updatedAt: Date.now() });
+    });
+    newGroupNames.forEach(gName => {
+        bookmarkGroupMetadata[gName] = { color: '#ff8c00', icon: '🔖' };
+    });
+    syncSet({ bookmarks, bookmarkGroupMetadata }, renderBookmarks);
+});
+
+// Clipboard-Copy via Event-Delegation (Listener muss auf dem DOM-Element sein, nicht auf outerHTML)
+document.getElementById('notesList').addEventListener('click', (e) => {
+    const titleEl = e.target.closest('[data-note-copy-idx]');
+    if (!titleEl) return;
+    e.stopPropagation();
+    const i = parseInt(titleEl.dataset.noteCopyIdx);
+    const n = notes[i];
+    if (!n) return;
+    let content = n.text || '';
+    if (n.todos && n.todos.length)
+        content += '\n' + n.todos.map(t => (t.done ? '✓ ' : '○ ') + t.text).join('\n');
+    navigator.clipboard.writeText(content).then(() => {
+        const orig = titleEl.innerHTML;
+        titleEl.innerHTML = '✓ Kopiert';
+        setTimeout(() => { titleEl.innerHTML = orig; }, 1200);
+    }).catch(() => {});
+});
 
 function renderEditorTodos() {
     const listEl = document.getElementById('editorTodoList');
@@ -1328,9 +3963,15 @@ function closeNoteEditMode() {
     document.getElementById('noteGroupInput').style.display = 'none';
     document.getElementById('noteGroupSelectOptions').value = '';
     currentEditorTodos = [];
+    document.getElementById('noteIconInput').value = '';
 }
 
 document.getElementById('cancelNoteBtn').addEventListener('click', closeNoteEditMode);
+
+document.getElementById('noteIconQuickPick').addEventListener('click', (e) => {
+    const btn = e.target.closest('.note-icon-pick');
+    if (btn) document.getElementById('noteIconInput').value = btn.dataset.icon;
+});
 
 document.getElementById('saveNoteBtn').addEventListener('click', () => {
     const i = document.getElementById('editNoteIndex').value;
@@ -1351,17 +3992,21 @@ document.getElementById('saveNoteBtn').addEventListener('click', () => {
         color: selectedColor,
         pinned: pinned,
         group: finalGroup,
-        todos: currentEditorTodos
+        todos: currentEditorTodos,
+        icon: document.getElementById('noteIconInput').value.trim(),
+        createdAt: Date.now(),
+        updatedAt: Date.now()
     };
 
     if (i !== "") {
+        newNote.createdAt = notes[parseInt(i)].createdAt || Date.now();
         notes[parseInt(i)] = newNote;
     } else {
         notes.push(newNote);
     }
 
     updateRecentColors(selectedColor);
-    chrome.storage.sync.set({ notes }, () => {
+    syncSet({ notes }, () => {
         closeNoteEditMode();
     });
 });
@@ -1408,7 +4053,9 @@ document.getElementById('sessionsView').addEventListener('click', (e) => {
         const newName = prompt("Sitzungs-Name ändern:", session.name || "");
         if (newName !== null) {
             session.name = newName.trim() || "Unbenannte Session";
-            chrome.storage.sync.set({ savedSessions });
+            session.updatedAt = Date.now();
+            saveSessions();
+            renderSessions();
         }
         return;
     }
@@ -1416,7 +4063,8 @@ document.getElementById('sessionsView').addEventListener('click', (e) => {
         if (confirm("Sitzung wirklich löschen?")) {
             savedSessions.splice(sIdx, 1);
             delete collapsedSessions[sIdx];
-            chrome.storage.sync.set({ savedSessions });
+            saveSessions();
+            renderSessions();
         }
         return;
     }
@@ -1455,9 +4103,11 @@ document.getElementById('sessionsView').addEventListener('click', (e) => {
                 return;
             }
             session.windows = savedWindows;
+            session.updatedAt = Date.now();
             if (session.tabs) delete session.tabs;
-            chrome.storage.sync.set({ savedSessions }, () => { 
+            saveSessions(() => {
                 alert("Session erfolgreich für alle geöffneten Fenster aktualisiert!");
+                renderSessions();
             });
         });
         return;
@@ -1484,7 +4134,7 @@ document.getElementById('sessionsView').addEventListener('click', (e) => {
             const newTabTitle = prompt(`Seiten-Titel ändern für:\nURL: ${currentTab.url || "Neuer Tab"}\n\nAktueller Titel:`, currentTab.title || "");
             if (newTabTitle !== null) {
                 currentTab.title = newTabTitle.trim() || currentTab.url || "Neuer Tab";
-                chrome.storage.sync.set({ savedSessions });
+                saveSessions();
             }
         }
     }
@@ -1495,7 +4145,7 @@ document.getElementById('sessionsView').addEventListener('click', (e) => {
                 const wIdx = parseInt(target.dataset.winIdx);
                 session.windows.splice(wIdx, 1);
             }
-            chrome.storage.sync.set({ savedSessions });
+            saveSessions();
         }
     }
     else if (action === 'move-up') {
@@ -1503,7 +4153,7 @@ document.getElementById('sessionsView').addEventListener('click', (e) => {
             const temp = targetTabsArr[tIdx];
             targetTabsArr[tIdx] = targetTabsArr[tIdx - 1];
             targetTabsArr[tIdx - 1] = temp;
-            chrome.storage.sync.set({ savedSessions });
+            saveSessions();
         }
     }
     else if (action === 'move-down') {
@@ -1511,7 +4161,7 @@ document.getElementById('sessionsView').addEventListener('click', (e) => {
             const temp = targetTabsArr[tIdx];
             targetTabsArr[tIdx] = targetTabsArr[tIdx + 1];
             targetTabsArr[tIdx + 1] = temp;
-            chrome.storage.sync.set({ savedSessions });
+            saveSessions();
         }
     }
 });
@@ -1583,15 +4233,48 @@ document.getElementById('saveGroupBtn').addEventListener('click', () => {
         promts.forEach(p => { if (p.group === oldName) p.group = newName; });
         notes.forEach(n => { if (n.group === oldName) n.group = newName; });
         if (groupMetadata[oldName]) delete groupMetadata[oldName];
+        const goIdx = groupOrder.indexOf(oldName);
+        if (goIdx !== -1) groupOrder[goIdx] = newName;
+        const ngoIdx = noteGroupOrder.indexOf(oldName);
+        if (ngoIdx !== -1) noteGroupOrder[ngoIdx] = newName;
     }
     groupMetadata[newName] = { color, icon, groupProvider };
     updateRecentColors(color);
-    chrome.storage.sync.set({ promts, notes, groupMetadata }, () => {
+    syncSet({ promts, notes, groupMetadata, groupOrder, noteGroupOrder }, () => {
         closeGroupEditMode();
     });
 });
 
 document.getElementById('cancelGroupBtn').addEventListener('click', closeGroupEditMode);
+
+document.getElementById('groupIconQuickPick').addEventListener('click', (e) => {
+    const btn = e.target.closest('.group-icon-pick');
+    if (btn) document.getElementById('groupIconInput').value = btn.dataset.icon;
+});
+
+document.getElementById('addCustomProviderBtn').addEventListener('click', () => {
+    const nameIn = document.getElementById('customProviderNameInput');
+    const iconIn = document.getElementById('customProviderIconInput');
+    const name = nameIn.value.trim();
+    const icon = iconIn.value.trim() || '⚬';
+    if (!name) return;
+    if (customProviders.some(cp => cp.name === name)) {
+        alert('Ein Anbieter mit diesem Namen existiert bereits.');
+        return;
+    }
+    customProviders.push({ name, icon });
+    nameIn.value = '';
+    iconIn.value = '';
+    syncSet({ customProviders }, populateProviderDropdowns);
+});
+
+document.getElementById('customProviderList').addEventListener('click', (e) => {
+    const btn = e.target.closest('.remove-custom-provider');
+    if (!btn) return;
+    const idx = parseInt(btn.dataset.index);
+    customProviders.splice(idx, 1);
+    syncSet({ customProviders }, populateProviderDropdowns);
+});
 
 document.addEventListener('click', (e) => {
     const dot = e.target.closest('.color-dot[data-color]');
@@ -1605,6 +4288,8 @@ document.addEventListener('click', (e) => {
         document.getElementById('noteColor').value = dot.dataset.color;
     } else if (document.getElementById('makroInputGroup').style.display === 'flex') {
         document.getElementById('makroColor').value = dot.dataset.color;
+    } else if (document.getElementById('bookmarkInputGroup').style.display === 'flex') {
+        document.getElementById('bookmarkColor').value = dot.dataset.color;
     }
 });
 
@@ -1617,11 +4302,11 @@ document.getElementById('trashList').addEventListener('click', (e) => {
     if (action === 'restore') {
         const restored = deletedPromts.splice(i, 1)[0];
         promts.push(restored);
-        chrome.storage.sync.set({ promts, deletedPromts });
+        syncSet({ promts, deletedPromts });
     } 
     else if (action === 'perma-delete') {
         deletedPromts.splice(i, 1);
-        chrome.storage.sync.set({ deletedPromts });
+        syncSet({ deletedPromts });
     }
 });
 
@@ -1631,11 +4316,42 @@ function closeEditMode() {
     document.getElementById('editIndex').value = "";
     document.getElementById('titleInput').value = '';
     document.getElementById('textInput').value = '';
+    autoResizeTextInput();
     document.getElementById('shortcutInput').value = '';
     document.getElementById('groupInput').value = '';
     document.getElementById('groupInput').style.display = 'none';
     document.getElementById('groupSelectOptions').value = '';
 }
+
+// Prompt-Text-Feld: Höhe an Inhalt anpassen (leer = doppelte Standardhöhe)
+function autoResizeTextInput() {
+    const el = document.getElementById('textInput');
+    if (!el) return;
+    if (!el.value) {
+        el.style.height = '200px';
+    } else {
+        el.style.height = 'auto';
+        el.style.height = el.scrollHeight + 'px';
+    }
+}
+document.getElementById('textInput').addEventListener('input', autoResizeTextInput);
+
+// Shortcut per Tastendruck aufnehmen statt manuell eintippen
+document.getElementById('shortcutInput').addEventListener('keydown', (e) => {
+    e.preventDefault();
+    if (['Control', 'Alt', 'Shift', 'Meta'].includes(e.key)) return;
+    const parts = [];
+    if (e.ctrlKey) parts.push('Ctrl');
+    if (e.altKey) parts.push('Alt');
+    if (e.shiftKey) parts.push('Shift');
+    if (e.metaKey) parts.push('Meta');
+    parts.push(e.key.length === 1 ? e.key.toUpperCase() : e.key);
+    e.target.value = parts.join('+');
+});
+
+document.getElementById('clearShortcutBtn').addEventListener('click', () => {
+    document.getElementById('shortcutInput').value = '';
+});
 
 document.getElementById('saveBtn').addEventListener('click', () => {
     const i = document.getElementById('editIndex').value;
@@ -1655,17 +4371,20 @@ document.getElementById('saveBtn').addEventListener('click', () => {
         color: selectedColor,
         shortcut: document.getElementById('shortcutInput').value,
         provider: document.getElementById('aiProvider').value,
-        group: finalGroup
+        group: finalGroup,
+        createdAt: Date.now(),
+        updatedAt: Date.now()
     };
 
     if (i !== "") {
+        newP.createdAt = promts[parseInt(i)].createdAt || Date.now();
         promts[parseInt(i)] = newP;
     } else {
         promts.push(newP);
     }
 
     updateRecentColors(selectedColor);
-    chrome.storage.sync.set({ promts }, () => {
+    syncSet({ promts }, () => {
         closeEditMode();
     });
 });
@@ -1704,6 +4423,7 @@ document.getElementById('addToggleBtn').addEventListener('click', () => {
     document.getElementById('inputGroup').style.display = 'flex';
     populateGroupDropdowns();
     renderRecentColors();
+    autoResizeTextInput();
 });
 
 document.getElementById('themeToggle').addEventListener('click', () => {
@@ -1723,7 +4443,7 @@ document.getElementById('closeTrashBtn').addEventListener('click', () => {
 document.getElementById('emptyTrashBtn').addEventListener('click', () => {
     if(confirm("Möchtest du den Papierkorb unwiderruflich leeren?")) {
         deletedPromts = [];
-        chrome.storage.sync.set({ deletedPromts });
+        syncSet({ deletedPromts });
     }
 });
 
@@ -1733,6 +4453,15 @@ document.getElementById('backupToggleBtn').addEventListener('click', () => {
     checkSyncStatus();
 });
 
+document.getElementById('syncRefreshBtn').addEventListener('click', () => {
+    loadData();
+    checkSyncStatus();
+});
+
+document.getElementById('openSyncSettingsBtn').addEventListener('click', () => {
+    chrome.tabs.create({ url: 'chrome://settings/syncSetup/advanced' });
+});
+
 document.getElementById('closeBackupBtn').addEventListener('click', () => {
     document.getElementById('backupOverlay').style.display = 'none';
     document.getElementById('mainContainer').style.display = 'block';
@@ -1740,20 +4469,26 @@ document.getElementById('closeBackupBtn').addEventListener('click', () => {
 
 document.getElementById('btnExecuteBackupExport').addEventListener('click', () => {
     if(confirm("Möchtest du jetzt ein vollständiges Backup erstellen und den Speicherort festlegen?")) {
-        chrome.storage.sync.get(null, (syncData) => {
-            const totalBackup = {
-                K_SIDEBAR_BACKUP_VERSION: "1.0.16",
-                timestamp: Date.now(),
-                syncStorage: syncData
-            };
-            const blob = new Blob([JSON.stringify(totalBackup, null, 2)], { type: "application/json" });
-            const url = URL.createObjectURL(blob);
-            chrome.downloads.download({
-                url: url,
-                filename: `k_sidebar_full_backup_${new Date().toISOString().slice(0,10)}.json`,
-                saveAs: true
-            }, () => {
-                URL.revokeObjectURL(url);
+        syncGet(SYNC_LOAD_DEFAULTS, (syncData) => {
+            chrome.storage.local.get({ tabCustomIcons: {}, makros: [] }, (localData) => {
+                const totalBackup = {
+                    K_SIDEBAR_BACKUP_VERSION: "1.0.19",
+                    timestamp: Date.now(),
+                    syncStorage: syncData,
+                    localStorage: {
+                        tabCustomIcons: localData.tabCustomIcons || {},
+                        makros: localData.makros || []
+                    }
+                };
+                const blob = new Blob([JSON.stringify(totalBackup, null, 2)], { type: "application/json" });
+                const url = URL.createObjectURL(blob);
+                chrome.downloads.download({
+                    url: url,
+                    filename: `k_sidebar_full_backup_${new Date().toISOString().slice(0,10)}.json`,
+                    saveAs: true
+                }, () => {
+                    URL.revokeObjectURL(url);
+                });
             });
         });
     }
@@ -1772,12 +4507,25 @@ document.getElementById('backupFileInput').addEventListener('change', (e) => {
             const backup = JSON.parse(event.target.result);
             if (backup && backup.syncStorage) {
                 if (confirm("Achtung! Das Einspielen überschreibt alle aktuellen Daten. Fortfahren?")) {
-                    const syncToSet = backup.syncStorage || {};
+                    // Alte Backup-Formate (< v1.0.19) hatten savedSessions in localStorage; Makros
+                    // liegen immer in localStorage (nicht mehr synchronisiert)
+                    const syncToSet = Object.assign({}, SYNC_LOAD_DEFAULTS, backup.syncStorage || {});
+                    delete syncToSet.makros;
+                    if (backup.localStorage && backup.localStorage.savedSessions && backup.localStorage.savedSessions.length > 0) {
+                        syncToSet.savedSessions = backup.localStorage.savedSessions;
+                    }
+                    const localToSet = {
+                        tabCustomIcons: (backup.localStorage && backup.localStorage.tabCustomIcons) || {},
+                        makros: (backup.localStorage && backup.localStorage.makros) || (backup.syncStorage && backup.syncStorage.makros) || []
+                    };
                     chrome.storage.sync.clear(() => {
-                        chrome.storage.sync.set(syncToSet, () => {
-                            alert("System-Backup erfolgreich eingespielt!");
-                            document.getElementById('backupOverlay').style.display = 'none';
-                            document.getElementById('mainContainer').style.display = 'block';
+                        syncSet(syncToSet, () => {
+                            chrome.storage.local.set(localToSet, () => {
+                                alert("System-Backup erfolgreich eingespielt!");
+                                document.getElementById('backupOverlay').style.display = 'none';
+                                document.getElementById('mainContainer').style.display = 'block';
+                                loadData();
+                            });
                         });
                     });
                 }
@@ -1828,9 +4576,620 @@ document.getElementById('saveCurrentSessionBtn').addEventListener('click', () =>
                 updatedCollapsed[parseInt(k) + 1] = collapsedSessions[k];
             });
             collapsedSessions = updatedCollapsed;
-            chrome.storage.sync.set({ savedSessions });
+            saveSessions();
         }
     });
+});
+
+// Kontextmenü-Trigger für Rechtsklick auf Prompts, Notizen, Lesezeichen, Makros und Gruppen
+document.addEventListener('contextmenu', (e) => {
+    const promptCard = e.target.closest('.prompt-card');
+    const noteCard = e.target.closest('.note-card');
+    const bookmarkCard = e.target.closest('.bookmark-card');
+    const makroCard = e.target.closest('.makro-card');
+    const groupHeader = e.target.closest('.group-header[data-group]');
+    const noteGroupHeader = e.target.closest('.group-header[data-notegroup]');
+    const bookmarkGroupHeader = e.target.closest('.group-header[data-bookmarkgroup]');
+
+    if (makroCard) {
+        e.preventDefault();
+        const actionEl = makroCard.querySelector('[data-index]');
+        const idx = actionEl ? parseInt(actionEl.dataset.index) : -1;
+        const menu = document.getElementById('makroContextMenu');
+        menu.dataset.index = idx;
+        menu.style.visibility = 'hidden';
+        menu.style.left = '0px';
+        menu.style.top = '0px';
+        menu.style.display = 'block';
+        requestAnimationFrame(() => {
+            const rect = menu.getBoundingClientRect();
+            let x = Math.max(5, Math.min(e.clientX, window.innerWidth - rect.width - 5));
+            let y = Math.max(5, Math.min(e.clientY, window.innerHeight - rect.height - 5));
+            menu.style.left = x + 'px';
+            menu.style.top = y + 'px';
+            menu.style.visibility = 'visible';
+        });
+        return;
+    }
+
+    if (promptCard || noteCard || bookmarkCard || groupHeader || noteGroupHeader || bookmarkGroupHeader) {
+        e.preventDefault();
+        document.getElementById('tabContextMenu').style.display = 'none';
+        document.getElementById('promptContextMenu').style.display = 'none';
+        document.getElementById('noteContextMenu').style.display = 'none';
+        document.getElementById('bookmarkContextMenu').style.display = 'none';
+        document.getElementById('groupContextMenu').style.display = 'none';
+        document.getElementById('makroContextMenu').style.display = 'none';
+
+        const positionMenu = (menu) => {
+            menu.style.visibility = 'hidden';
+            menu.style.left = '0px';
+            menu.style.top = '0px';
+            menu.style.display = 'block';
+            requestAnimationFrame(() => {
+                const rect = menu.getBoundingClientRect();
+                let x = Math.min(e.clientX, window.innerWidth - rect.width - 5);
+                let y = Math.min(e.clientY, window.innerHeight - rect.height - 5);
+                x = Math.max(5, x);
+                y = Math.max(5, y);
+                menu.style.left = x + 'px';
+                menu.style.top = y + 'px';
+                menu.style.visibility = 'visible';
+            });
+        };
+
+        if (promptCard) {
+            const actionEl = promptCard.querySelector('[data-index]');
+            const idx = actionEl ? parseInt(actionEl.dataset.index) : -1;
+            const menu = document.getElementById('promptContextMenu');
+            positionMenu(menu);
+            menu.dataset.index = idx;
+        } else if (noteCard) {
+            const actionEl = noteCard.querySelector('[data-index]');
+            const idx = actionEl ? parseInt(actionEl.dataset.index) : -1;
+            const menu = document.getElementById('noteContextMenu');
+            positionMenu(menu);
+            menu.dataset.index = idx;
+        } else if (bookmarkCard) {
+            const actionEl = bookmarkCard.querySelector('[data-index]');
+            const idx = actionEl ? parseInt(actionEl.dataset.index) : -1;
+            const menu = document.getElementById('bookmarkContextMenu');
+            positionMenu(menu);
+            menu.dataset.index = idx;
+        } else if (groupHeader) {
+            const menu = document.getElementById('groupContextMenu');
+            positionMenu(menu);
+            menu.dataset.group = groupHeader.dataset.group;
+            menu.dataset.type = 'prompt';
+            document.getElementById('ctxDuplicateGroup').style.display = 'block';
+            document.getElementById('ctxAddEntryToGroup').style.display = 'block';
+        } else if (noteGroupHeader) {
+            const menu = document.getElementById('groupContextMenu');
+            positionMenu(menu);
+            menu.dataset.group = noteGroupHeader.dataset.notegroup;
+            menu.dataset.type = 'note';
+            document.getElementById('ctxDuplicateGroup').style.display = 'none';
+            document.getElementById('ctxAddEntryToGroup').style.display = 'none';
+        } else if (bookmarkGroupHeader) {
+            const menu = document.getElementById('groupContextMenu');
+            positionMenu(menu);
+            menu.dataset.group = bookmarkGroupHeader.dataset.bookmarkgroup;
+            menu.dataset.type = 'bookmark';
+            document.getElementById('ctxDuplicateGroup').style.display = 'none';
+            document.getElementById('ctxAddEntryToGroup').style.display = 'none';
+        }
+        return;
+    }
+});
+
+// Session-Kontextmenü
+document.getElementById('sessionList').addEventListener('contextmenu', (e) => {
+    const card = e.target.closest('.session-card');
+    if (!card) return;
+    e.preventDefault();
+    const idx = parseInt(card.dataset.sessionIndex);
+    const menu = document.getElementById('sessionContextMenu');
+    menu.dataset.index = idx;
+    menu.style.visibility = 'hidden';
+    menu.style.left = '0px';
+    menu.style.top = '0px';
+    menu.style.display = 'block';
+    requestAnimationFrame(() => {
+        const rect = menu.getBoundingClientRect();
+        let x = Math.max(5, Math.min(e.clientX, window.innerWidth - rect.width - 5));
+        let y = Math.max(5, Math.min(e.clientY, window.innerHeight - rect.height - 5));
+        menu.style.left = x + 'px';
+        menu.style.top = y + 'px';
+        menu.style.visibility = 'visible';
+    });
+});
+
+document.getElementById('ctxMoveSessionUp').addEventListener('click', () => {
+    const menu = document.getElementById('sessionContextMenu');
+    const idx = parseInt(menu.dataset.index);
+    menu.style.display = 'none';
+    if (isNaN(idx) || idx <= 0) return;
+    [savedSessions[idx - 1], savedSessions[idx]] = [savedSessions[idx], savedSessions[idx - 1]];
+    renderSessions();
+    saveSessions();
+});
+
+document.getElementById('ctxMoveSessionDown').addEventListener('click', () => {
+    const menu = document.getElementById('sessionContextMenu');
+    const idx = parseInt(menu.dataset.index);
+    menu.style.display = 'none';
+    if (isNaN(idx) || idx >= savedSessions.length - 1) return;
+    [savedSessions[idx], savedSessions[idx + 1]] = [savedSessions[idx + 1], savedSessions[idx]];
+    renderSessions();
+    saveSessions();
+});
+
+document.getElementById('sortSessionsAZBtn').addEventListener('click', () => {
+    savedSessions.sort((a, b) => (a.name || '').localeCompare(b.name || '', 'de'));
+    renderSessions();
+    saveSessions();
+});
+
+document.getElementById('sortSessionsZABtn').addEventListener('click', () => {
+    savedSessions.sort((a, b) => (b.name || '').localeCompare(a.name || '', 'de'));
+    renderSessions();
+    saveSessions();
+});
+
+document.getElementById('sortSessionsDateBtn').addEventListener('click', () => {
+    savedSessions.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+    renderSessions();
+    saveSessions();
+});
+
+document.getElementById('ctxMovePromptUp').addEventListener('click', () => {
+    const menu = document.getElementById('promptContextMenu');
+    const idx = parseInt(menu.dataset.index);
+    menu.style.display = 'none';
+    if (isNaN(idx) || idx <= 0) return;
+    [promts[idx - 1], promts[idx]] = [promts[idx], promts[idx - 1]];
+    render();
+    syncSet({ promts });
+});
+
+document.getElementById('ctxMovePromptDown').addEventListener('click', () => {
+    const menu = document.getElementById('promptContextMenu');
+    const idx = parseInt(menu.dataset.index);
+    menu.style.display = 'none';
+    if (isNaN(idx) || idx >= promts.length - 1) return;
+    [promts[idx], promts[idx + 1]] = [promts[idx + 1], promts[idx]];
+    render();
+    syncSet({ promts });
+});
+
+document.getElementById('ctxDuplicatePrompt').addEventListener('click', () => {
+    const menu = document.getElementById('promptContextMenu');
+    const idx = parseInt(menu.dataset.index);
+    menu.style.display = 'none';
+    if (isNaN(idx) || !promts[idx]) return;
+    const orig = promts[idx];
+    const copy = Object.assign({}, orig, { title: orig.title + ' (Kopie)' });
+    promts.splice(idx + 1, 0, copy);
+    syncSet({ promts }, render);
+});
+
+document.getElementById('ctxAddEntryToGroup').addEventListener('click', () => {
+    const menu = document.getElementById('groupContextMenu');
+    const gName = menu.dataset.group;
+    menu.style.display = 'none';
+    if (!gName || menu.dataset.type !== 'prompt') return;
+    document.getElementById('editIndex').value = "";
+    document.getElementById('mainContainer').style.display = 'none';
+    document.getElementById('inputGroup').style.display = 'flex';
+    populateGroupDropdowns();
+    renderRecentColors();
+    autoResizeTextInput();
+    document.getElementById('groupSelectOptions').value = gName;
+});
+
+document.getElementById('ctxDuplicateGroup').addEventListener('click', () => {
+    const menu = document.getElementById('groupContextMenu');
+    const gName = menu.dataset.group;
+    menu.style.display = 'none';
+    if (!gName || menu.dataset.type === 'note') return;
+    let newName = gName + ' (Kopie)';
+    let counter = 2;
+    while (promts.some(p => p.group === newName) || groupMetadata[newName]) {
+        newName = gName + ` (Kopie ${counter++})`;
+    }
+    // Gruppe-Metadaten kopieren
+    if (groupMetadata[gName]) {
+        groupMetadata[newName] = Object.assign({}, groupMetadata[gName]);
+    }
+    // Alle Prompts der Gruppe kopieren
+    const groupPrompts = promts.filter(p => p.group === gName);
+    const copies = groupPrompts.map(p => Object.assign({}, p, { title: p.title + ' (Kopie)', group: newName }));
+    // Kopien direkt nach dem letzten Prompt der Originalgruppe einfügen
+    const lastIdx = promts.reduce((acc, p, i) => p.group === gName ? i : acc, -1);
+    promts.splice(lastIdx + 1, 0, ...copies);
+    groupOrder.push(newName);
+    syncSet({ promts, groupMetadata, groupOrder }, render);
+});
+
+document.getElementById('ctxRenamePrompt').addEventListener('click', () => {
+    const menu = document.getElementById('promptContextMenu');
+    const idx = parseInt(menu.dataset.index);
+    menu.style.display = 'none';
+    if (isNaN(idx) || !promts[idx]) return;
+    const newTitle = prompt('Neuer Titel:', promts[idx].title || '');
+    if (newTitle === null) return;
+    const trimmed = newTitle.trim();
+    if (!trimmed) return;
+    promts[idx].title = trimmed;
+    syncSet({ promts }, render);
+});
+
+document.getElementById('ctxDeletePrompt').addEventListener('click', () => {
+    const menu = document.getElementById('promptContextMenu');
+    const idx = parseInt(menu.dataset.index);
+    menu.style.display = 'none';
+    if (isNaN(idx) || !promts[idx]) return;
+    const removed = promts.splice(idx, 1)[0];
+    deletedPromts.push(removed);
+    syncSet({ promts, deletedPromts }, render);
+});
+
+document.getElementById('ctxRenameNote').addEventListener('click', () => {
+    const menu = document.getElementById('noteContextMenu');
+    const idx = parseInt(menu.dataset.index);
+    menu.style.display = 'none';
+    if (isNaN(idx) || !notes[idx]) return;
+    const newTitle = prompt('Neuer Titel:', notes[idx].title || '');
+    if (newTitle === null) return;
+    const trimmed = newTitle.trim();
+    if (!trimmed) return;
+    notes[idx].title = trimmed;
+    syncSet({ notes }, renderNotes);
+});
+
+document.getElementById('ctxDeleteNote').addEventListener('click', () => {
+    const menu = document.getElementById('noteContextMenu');
+    const idx = parseInt(menu.dataset.index);
+    menu.style.display = 'none';
+    if (isNaN(idx) || !notes[idx]) return;
+    notes.splice(idx, 1);
+    syncSet({ notes }, renderNotes);
+});
+
+document.getElementById('ctxAddCurrentPageBookmark').addEventListener('click', () => {
+    document.getElementById('bookmarkContextMenu').style.display = 'none';
+    openBookmarkEditorForCurrentPage();
+});
+
+document.getElementById('ctxEditBookmark').addEventListener('click', () => {
+    const menu = document.getElementById('bookmarkContextMenu');
+    const idx = parseInt(menu.dataset.index);
+    menu.style.display = 'none';
+    if (isNaN(idx) || !bookmarks[idx]) return;
+    openBookmarkEditor(idx);
+});
+
+document.getElementById('ctxDeleteBookmark').addEventListener('click', () => {
+    const menu = document.getElementById('bookmarkContextMenu');
+    const idx = parseInt(menu.dataset.index);
+    menu.style.display = 'none';
+    if (isNaN(idx) || !bookmarks[idx]) return;
+    bookmarks.splice(idx, 1);
+    syncSet({ bookmarks }, renderBookmarks);
+});
+
+// Neue Prompt-Kontextmenü-Aktionen
+document.getElementById('ctxTogglePrompt').addEventListener('click', () => {
+    const menu = document.getElementById('promptContextMenu');
+    const idx = parseInt(menu.dataset.index);
+    menu.style.display = 'none';
+    if (isNaN(idx)) return;
+    const box = document.getElementById('content-' + idx);
+    if (box) box.style.display = box.style.display === 'block' ? 'none' : 'block';
+});
+
+document.getElementById('ctxEditPrompt').addEventListener('click', () => {
+    const menu = document.getElementById('promptContextMenu');
+    const idx = parseInt(menu.dataset.index);
+    menu.style.display = 'none';
+    if (isNaN(idx) || !promts[idx]) return;
+    const p = promts[idx];
+    document.getElementById('editIndex').value = idx;
+    document.getElementById('titleInput').value = p.title || '';
+    document.getElementById('textInput').value = p.text || '';
+    document.getElementById('promptColor').value = p.color || '#ff8c00';
+    document.getElementById('shortcutInput').value = p.shortcut || '';
+    populateProviderDropdowns();
+    document.getElementById('aiProvider').value = p.provider || 'ChatGPT';
+    populateGroupDropdowns();
+    const textInput = document.getElementById('groupInput');
+    if (p.group && p.group.trim() !== '') {
+        document.getElementById('groupSelectOptions').value = p.group;
+    } else {
+        document.getElementById('groupSelectOptions').value = '';
+    }
+    textInput.style.display = 'none';
+    textInput.value = '';
+    document.getElementById('mainContainer').style.display = 'none';
+    document.getElementById('inputGroup').style.display = 'flex';
+    autoResizeTextInput();
+    renderRecentColors();
+});
+
+// Neue Notiz-Kontextmenü-Aktionen
+document.getElementById('ctxToggleNote').addEventListener('click', () => {
+    const menu = document.getElementById('noteContextMenu');
+    const idx = parseInt(menu.dataset.index);
+    menu.style.display = 'none';
+    if (isNaN(idx)) return;
+    const box = document.getElementById('note-content-' + idx);
+    if (box) box.style.display = box.style.display === 'block' ? 'none' : 'block';
+});
+
+document.getElementById('ctxEditNote').addEventListener('click', () => {
+    const menu = document.getElementById('noteContextMenu');
+    const idx = parseInt(menu.dataset.index);
+    menu.style.display = 'none';
+    if (isNaN(idx) || !notes[idx]) return;
+    const n = notes[idx];
+    document.getElementById('editNoteIndex').value = idx;
+    document.getElementById('noteTitleInput').value = n.title || '';
+    document.getElementById('noteTextInput').value = n.text || '';
+    document.getElementById('noteColor').value = n.color || '#ff8c00';
+    document.getElementById('notePinnedInput').checked = n.pinned || false;
+    currentEditorTodos = JSON.parse(JSON.stringify(n.todos || []));
+    renderEditorTodos();
+    populateGroupDropdowns();
+    const textInput = document.getElementById('noteGroupInput');
+    if (n.group && n.group.trim() !== '') {
+        document.getElementById('noteGroupSelectOptions').value = n.group;
+    } else {
+        document.getElementById('noteGroupSelectOptions').value = '';
+    }
+    textInput.style.display = 'none';
+    textInput.value = '';
+    document.getElementById('noteIconInput').value = n.icon || '';
+    document.getElementById('mainContainer').style.display = 'none';
+    document.getElementById('noteInputGroup').style.display = 'flex';
+    renderRecentColors();
+});
+
+// Neue Lesezeichen-Kontextmenü-Aktion
+document.getElementById('ctxToggleBookmark').addEventListener('click', () => {
+    const menu = document.getElementById('bookmarkContextMenu');
+    const idx = parseInt(menu.dataset.index);
+    menu.style.display = 'none';
+    if (isNaN(idx)) return;
+    const box = document.getElementById('bookmark-content-' + idx);
+    if (box) box.style.display = box.style.display === 'block' ? 'none' : 'block';
+});
+
+// Makro-Kontextmenü-Aktionen
+document.getElementById('ctxRunMakro').addEventListener('click', () => {
+    const menu = document.getElementById('makroContextMenu');
+    const idx = parseInt(menu.dataset.index);
+    menu.style.display = 'none';
+    if (isNaN(idx)) return;
+    const m = makros[idx];
+    if (m && m.steps) {
+        chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+            if (!tabs[0]) return;
+            if (m.domain) {
+                let currentDomain = '';
+                try { currentDomain = new URL(tabs[0].url).hostname; } catch(e) {}
+                if (currentDomain && m.domain !== currentDomain) {
+                    const ok = confirm(`⚠️ Dieses Makro wurde auf „${m.domain}" aufgenommen.\nAktueller Tab: „${currentDomain}".\nTrotzdem ausführen?`);
+                    if (!ok) return;
+                }
+            }
+            if (m.askRepeatBeforePlay) {
+                document.getElementById('makroRepeatAskInput').value = m.repeat || 1;
+                document.getElementById('mainContainer').style.display = 'none';
+                document.getElementById('makroRepeatAskDialog').style.display = 'block';
+                window._pendingPlayTabId = tabs[0].id;
+                window._pendingPlayMakro = m;
+                return;
+            }
+            playMakroFull(tabs[0].id, m, m.steps);
+        });
+    }
+});
+
+document.getElementById('ctxStepMakro').addEventListener('click', () => {
+    const menu = document.getElementById('makroContextMenu');
+    const idx = parseInt(menu.dataset.index);
+    menu.style.display = 'none';
+    if (isNaN(idx)) return;
+    openStepPlayback(idx);
+});
+
+document.getElementById('ctxToggleMakro').addEventListener('click', () => {
+    const menu = document.getElementById('makroContextMenu');
+    const idx = parseInt(menu.dataset.index);
+    menu.style.display = 'none';
+    if (isNaN(idx)) return;
+    const box = document.getElementById('makro-content-' + idx);
+    if (box) box.style.display = box.style.display === 'block' ? 'none' : 'block';
+});
+
+document.getElementById('ctxEditMakro').addEventListener('click', () => {
+    const menu = document.getElementById('makroContextMenu');
+    const idx = parseInt(menu.dataset.index);
+    menu.style.display = 'none';
+    if (isNaN(idx)) return;
+    const m = makros[idx];
+    if (m) {
+        document.getElementById('editMakroIndex').value = idx;
+        document.getElementById('makroTitleInput').value = m.title || '';
+        document.getElementById('makroStepsInput').value = JSON.stringify(m.steps, null, 2);
+        document.getElementById('makroColor').value = m.color || '#ff8c00';
+        document.getElementById('makroRepeatInput').value = m.repeat || 1;
+        const sd = (m.speedDelay !== undefined) ? m.speedDelay : 700;
+        const speedActive = sd > 0;
+        document.getElementById('makroSpeedToggle').checked = speedActive;
+        document.getElementById('makroSpeedInput').value = speedActive ? sd : 700;
+        document.getElementById('makroSpeedRow').style.display = speedActive ? 'flex' : 'none';
+        document.getElementById('makroAskRepeatInput').checked = !!m.askRepeatBeforePlay;
+        document.getElementById('makroScrollToStartInput').checked = !!m.scrollToStart;
+        document.getElementById('makroScrollToEndInput').checked = !!m.scrollToEnd;
+        document.getElementById('makroLockScrollInput').checked = !!m.lockScroll;
+        const mMethod = m.method || 2;
+        document.getElementById('makroMethodInput').value = mMethod;
+        ['1','2','3','4'].forEach(n => document.getElementById('methodBtn' + n).classList.remove('active'));
+        document.getElementById('methodBtn' + mMethod).classList.add('active');
+        document.getElementById('makroRepeatDelayInput').value = m.repeatDelay || 0;
+        document.getElementById('makroWaitReloadInput').checked = !!m.waitReloadBetweenRepeats;
+        document.getElementById('mainContainer').style.display = 'none';
+        document.getElementById('makroInputGroup').style.display = 'flex';
+        renderRecentColors();
+        chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+            if (!tabs[0]) return;
+            chrome.scripting.executeScript({ target: { tabId: tabs[0].id }, func: injectEditMarkersFunc, args: [m.steps] });
+            document.getElementById('showStepsOnPageBtn').style.display = 'none';
+            document.getElementById('applyPageEditsBtn').style.display = 'flex';
+            document.getElementById('cancelPageEditsBtn').style.display = 'flex';
+        });
+    }
+});
+
+document.getElementById('ctxDeleteMakro').addEventListener('click', () => {
+    const menu = document.getElementById('makroContextMenu');
+    const idx = parseInt(menu.dataset.index);
+    menu.style.display = 'none';
+    if (isNaN(idx)) return;
+    makros.splice(idx, 1);
+    saveMakros(renderMakros);
+});
+
+document.getElementById('ctxMoveGroupUp').addEventListener('click', () => {
+    const menu = document.getElementById('groupContextMenu');
+    const gName = menu.dataset.group;
+    const type = menu.dataset.type;
+    menu.style.display = 'none';
+    if (!gName) return;
+    if (type === 'prompt') {
+        const idx = groupOrder.indexOf(gName);
+        if (idx > 0) { [groupOrder[idx - 1], groupOrder[idx]] = [groupOrder[idx], groupOrder[idx - 1]]; syncSet({ groupOrder }, renderPromts); }
+    } else if (type === 'note') {
+        const idx = noteGroupOrder.indexOf(gName);
+        if (idx > 0) { [noteGroupOrder[idx - 1], noteGroupOrder[idx]] = [noteGroupOrder[idx], noteGroupOrder[idx - 1]]; syncSet({ noteGroupOrder }, renderNotes); }
+    } else if (type === 'bookmark') {
+        const idx = bookmarkGroupOrder.indexOf(gName);
+        if (idx > 0) { [bookmarkGroupOrder[idx - 1], bookmarkGroupOrder[idx]] = [bookmarkGroupOrder[idx], bookmarkGroupOrder[idx - 1]]; syncSet({ bookmarkGroupOrder }, renderBookmarks); }
+    }
+});
+
+document.getElementById('ctxMoveGroupDown').addEventListener('click', () => {
+    const menu = document.getElementById('groupContextMenu');
+    const gName = menu.dataset.group;
+    const type = menu.dataset.type;
+    menu.style.display = 'none';
+    if (!gName) return;
+    if (type === 'prompt') {
+        const idx = groupOrder.indexOf(gName);
+        if (idx >= 0 && idx < groupOrder.length - 1) { [groupOrder[idx], groupOrder[idx + 1]] = [groupOrder[idx + 1], groupOrder[idx]]; syncSet({ groupOrder }, renderPromts); }
+    } else if (type === 'note') {
+        const idx = noteGroupOrder.indexOf(gName);
+        if (idx >= 0 && idx < noteGroupOrder.length - 1) { [noteGroupOrder[idx], noteGroupOrder[idx + 1]] = [noteGroupOrder[idx + 1], noteGroupOrder[idx]]; syncSet({ noteGroupOrder }, renderNotes); }
+    } else if (type === 'bookmark') {
+        const idx = bookmarkGroupOrder.indexOf(gName);
+        if (idx >= 0 && idx < bookmarkGroupOrder.length - 1) { [bookmarkGroupOrder[idx], bookmarkGroupOrder[idx + 1]] = [bookmarkGroupOrder[idx + 1], bookmarkGroupOrder[idx]]; syncSet({ bookmarkGroupOrder }, renderBookmarks); }
+    }
+});
+
+document.getElementById('ctxRenameGroup').addEventListener('click', () => {
+    const menu = document.getElementById('groupContextMenu');
+    const gName = menu.dataset.group;
+    const type = menu.dataset.type || 'prompt';
+    menu.style.display = 'none';
+    if (!gName) return;
+    const newName = prompt('Neuer Gruppenname:', gName);
+    if (newName === null) return;
+    const trimmed = newName.trim();
+    if (!trimmed || trimmed === gName) return;
+    if (type === 'bookmark') {
+        if (bookmarkGroupMetadata[gName]) {
+            bookmarkGroupMetadata[trimmed] = bookmarkGroupMetadata[gName];
+            delete bookmarkGroupMetadata[gName];
+        }
+        bookmarks.forEach(b => { if (b.group === gName) b.group = trimmed; });
+        const oi = bookmarkGroupOrder.indexOf(gName);
+        if (oi !== -1) bookmarkGroupOrder[oi] = trimmed;
+        syncSet({ bookmarks, bookmarkGroupMetadata, bookmarkGroupOrder }, renderBookmarks);
+        return;
+    }
+    if (groupMetadata[gName]) {
+        groupMetadata[trimmed] = groupMetadata[gName];
+        delete groupMetadata[gName];
+    }
+    if (type === 'note') {
+        notes.forEach(n => { if (n.group === gName) n.group = trimmed; });
+        const oi = noteGroupOrder.indexOf(gName);
+        if (oi !== -1) noteGroupOrder[oi] = trimmed;
+        syncSet({ notes, groupMetadata, noteGroupOrder }, renderNotes);
+    } else {
+        promts.forEach(p => { if (p.group === gName) p.group = trimmed; });
+        const oi = groupOrder.indexOf(gName);
+        if (oi !== -1) groupOrder[oi] = trimmed;
+        syncSet({ promts, groupMetadata, groupOrder }, render);
+    }
+});
+
+document.getElementById('ctxDeleteGroup').addEventListener('click', () => {
+    const menu = document.getElementById('groupContextMenu');
+    const gName = menu.dataset.group;
+    const type = menu.dataset.type || 'prompt';
+    menu.style.display = 'none';
+    if (!gName) return;
+    window._pendingDeleteGroup = { gName, type };
+    document.getElementById('groupDeletePopupInfo').textContent = `Gruppe "${gName}" wirklich löschen?`;
+    document.getElementById('groupDeletePopup').style.display = 'flex';
+});
+
+function finishGroupDelete(alsoDeleteItems) {
+    const pending = window._pendingDeleteGroup;
+    document.getElementById('groupDeletePopup').style.display = 'none';
+    window._pendingDeleteGroup = null;
+    if (!pending) return;
+    const { gName, type } = pending;
+    if (type === 'bookmark') {
+        delete bookmarkGroupMetadata[gName];
+        if (alsoDeleteItems) {
+            bookmarks = bookmarks.filter(b => b.group !== gName);
+        } else {
+            bookmarks.forEach(b => { if (b.group === gName) b.group = ''; });
+        }
+        bookmarkGroupOrder = bookmarkGroupOrder.filter(g => g !== gName);
+        syncSet({ bookmarks, bookmarkGroupMetadata, bookmarkGroupOrder }, renderBookmarks);
+        return;
+    }
+    delete groupMetadata[gName];
+    if (type === 'note') {
+        if (alsoDeleteItems) {
+            notes = notes.filter(n => n.group !== gName);
+        } else {
+            notes.forEach(n => { if (n.group === gName) n.group = ''; });
+        }
+        noteGroupOrder = noteGroupOrder.filter(g => g !== gName);
+        syncSet({ notes, groupMetadata, noteGroupOrder }, renderNotes);
+    } else {
+        if (alsoDeleteItems) {
+            const removedPrompts = promts.filter(p => p.group === gName);
+            deletedPromts.push(...removedPrompts);
+            promts = promts.filter(p => p.group !== gName);
+        } else {
+            promts.forEach(p => { if (p.group === gName) p.group = ''; });
+        }
+        groupOrder = groupOrder.filter(g => g !== gName);
+        syncSet({ promts, deletedPromts, groupMetadata, groupOrder }, render);
+    }
+}
+
+document.getElementById('groupDeleteAllBtn').addEventListener('click', () => finishGroupDelete(true));
+document.getElementById('groupDeleteKeepItemsBtn').addEventListener('click', () => finishGroupDelete(false));
+document.getElementById('groupDeleteCancelBtn').addEventListener('click', () => {
+    document.getElementById('groupDeletePopup').style.display = 'none';
+    window._pendingDeleteGroup = null;
 });
 
 // Kontextmenü-Trigger für Rechtsklick auf Reiter
@@ -1838,21 +5197,37 @@ document.addEventListener('contextmenu', (e) => {
     const btn = e.target.closest('.tab-btn');
     if (btn) {
         e.preventDefault();
+        document.getElementById('promptContextMenu').style.display = 'none';
+        document.getElementById('groupContextMenu').style.display = 'none';
         const menu = document.getElementById('tabContextMenu');
         const key = btn.dataset.tab;
-        
-        let x = e.clientX;
-        let y = e.clientY;
-        
-        if (x + 150 > window.innerWidth) x = window.innerWidth - 160;
-        if (y + 130 > window.innerHeight) y = window.innerHeight - 140;
-        
-        menu.style.left = x + 'px';
-        menu.style.top = y + 'px';
-        menu.style.display = 'block';
+
         menu.dataset.activeKey = key;
-        
         document.getElementById('tabColorPicker').value = tabColors[key] || '#ff8c00';
+        document.getElementById('tabRenameInput').value = tabLabels[key] || tabNames[key] || key;
+        document.getElementById('tabIconInput').value = tabIcons[key] || '';
+        document.getElementById('tabIconOnlyInput').checked = !!tabIconOnly[key];
+        // Alle Sektionen beim Öffnen einklappen
+        document.getElementById('tabColorSection').style.display = 'none';
+        document.getElementById('tabTextColorSection').style.display = 'none';
+        document.getElementById('tabIconSection').style.display = 'none';
+
+        // Menü zunächst unsichtbar positionieren, um die tatsächliche Größe zu messen,
+        // damit es garantiert im sichtbaren Bereich bleibt (unabhängig vom Inhalt)
+        menu.style.visibility = 'hidden';
+        menu.style.left = '0px';
+        menu.style.top = '0px';
+        menu.style.display = 'block';
+        requestAnimationFrame(() => {
+            const rect = menu.getBoundingClientRect();
+            let x = Math.min(e.clientX, window.innerWidth - rect.width - 5);
+            let y = Math.min(e.clientY, window.innerHeight - rect.height - 5);
+            x = Math.max(5, x);
+            y = Math.max(5, y);
+            menu.style.left = x + 'px';
+            menu.style.top = y + 'px';
+            menu.style.visibility = 'visible';
+        });
     }
 });
 
@@ -1860,7 +5235,7 @@ document.getElementById('tabColorPicker').addEventListener('input', (e) => {
     const key = document.getElementById('tabContextMenu').dataset.activeKey;
     if (key) {
         tabColors[key] = e.target.value;
-        chrome.storage.sync.set({ tabColors });
+        syncSet({ tabColors });
         applyTabColors();
     }
 });
@@ -1869,10 +5244,112 @@ document.getElementById('resetTabColorBtn').addEventListener('click', () => {
     const key = document.getElementById('tabContextMenu').dataset.activeKey;
     if (key) {
         delete tabColors[key];
-        chrome.storage.sync.set({ tabColors });
+        syncSet({ tabColors });
         applyTabColors();
         document.getElementById('tabContextMenu').style.display = 'none';
     }
+});
+
+document.getElementById('tabRenameApplyBtn').addEventListener('click', () => {
+    const key = document.getElementById('tabContextMenu').dataset.activeKey;
+    if (!key) return;
+    const newLabel = document.getElementById('tabRenameInput').value.trim();
+    if (!newLabel || newLabel === (tabNames[key] || key)) {
+        delete tabLabels[key];
+    } else {
+        tabLabels[key] = newLabel;
+    }
+    syncSet({ tabLabels }, () => {
+        renderTabsNavigation();
+        applyTabColors();
+        document.getElementById('tabContextMenu').style.display = 'none';
+    });
+});
+
+document.getElementById('tabRenameInput').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+        e.preventDefault();
+        document.getElementById('tabRenameApplyBtn').click();
+    }
+});
+
+document.getElementById('tabIconInput').addEventListener('input', (e) => {
+    const key = document.getElementById('tabContextMenu').dataset.activeKey;
+    if (!key) return;
+    const icon = e.target.value.trim();
+    if (icon) tabIcons[key] = icon; else delete tabIcons[key];
+    delete tabCustomIcons[key];
+    syncSet({ tabIcons }, () => {
+        chrome.storage.local.set({ tabCustomIcons }, () => {
+            renderTabsNavigation();
+            applyTabColors();
+        });
+    });
+});
+
+document.getElementById('tabIconQuickPick').addEventListener('click', (e) => {
+    const btn = e.target.closest('.tab-icon-pick');
+    if (!btn) return;
+    const key = document.getElementById('tabContextMenu').dataset.activeKey;
+    if (!key) return;
+    tabIcons[key] = btn.dataset.icon;
+    delete tabCustomIcons[key];
+    document.getElementById('tabIconInput').value = btn.dataset.icon;
+    syncSet({ tabIcons }, () => {
+        chrome.storage.local.set({ tabCustomIcons }, () => {
+            renderTabsNavigation();
+            applyTabColors();
+        });
+    });
+});
+
+document.getElementById('tabIconUploadBtn').addEventListener('click', () => {
+    document.getElementById('tabIconFileInput').click();
+});
+
+document.getElementById('tabIconFileInput').addEventListener('change', (e) => {
+    const file = e.target.files[0];
+    e.target.value = '';
+    if (!file) return;
+    const key = document.getElementById('tabContextMenu').dataset.activeKey;
+    if (!key) return;
+    const reader = new FileReader();
+    reader.onload = (event) => {
+        tabCustomIcons[key] = event.target.result;
+        delete tabIcons[key];
+        document.getElementById('tabIconInput').value = '';
+        chrome.storage.local.set({ tabCustomIcons }, () => {
+            syncSet({ tabIcons }, () => {
+                renderTabsNavigation();
+                applyTabColors();
+            });
+        });
+    };
+    reader.readAsDataURL(file);
+});
+
+document.getElementById('tabIconClearBtn').addEventListener('click', () => {
+    const key = document.getElementById('tabContextMenu').dataset.activeKey;
+    if (!key) return;
+    delete tabIcons[key];
+    delete tabCustomIcons[key];
+    document.getElementById('tabIconInput').value = '';
+    syncSet({ tabIcons }, () => {
+        chrome.storage.local.set({ tabCustomIcons }, () => {
+            renderTabsNavigation();
+            applyTabColors();
+        });
+    });
+});
+
+document.getElementById('tabIconOnlyInput').addEventListener('change', (e) => {
+    const key = document.getElementById('tabContextMenu').dataset.activeKey;
+    if (!key) return;
+    if (e.target.checked) tabIconOnly[key] = true; else delete tabIconOnly[key];
+    syncSet({ tabIconOnly }, () => {
+        renderTabsNavigation();
+        applyTabColors();
+    });
 });
 
 document.getElementById('moveTabLeftBtn').addEventListener('click', () => {
@@ -1882,7 +5359,7 @@ document.getElementById('moveTabLeftBtn').addEventListener('click', () => {
     if (index > 0) {
         tabOrder[index] = tabOrder[index - 1];
         tabOrder[index - 1] = key;
-        chrome.storage.sync.set({ tabOrder }, () => {
+        syncSet({ tabOrder }, () => {
             renderTabsNavigation();
             applyTabColors();
             document.getElementById('tabContextMenu').style.display = 'none';
@@ -1897,11 +5374,207 @@ document.getElementById('moveTabRightBtn').addEventListener('click', () => {
     if (index !== -1 && index < tabOrder.length - 1) {
         tabOrder[index] = tabOrder[index + 1];
         tabOrder[index + 1] = key;
-        chrome.storage.sync.set({ tabOrder }, () => {
+        syncSet({ tabOrder }, () => {
             renderTabsNavigation();
             applyTabColors();
             document.getElementById('tabContextMenu').style.display = 'none';
         });
+    }
+});
+
+function activateTab(key) {
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.tab-view').forEach(v => v.style.display = 'none');
+    const btn = document.querySelector(`.tab-btn[data-tab="${key}"]`);
+    if (btn) btn.classList.add('active');
+    const targetView = document.getElementById(key + 'View');
+    if (targetView) targetView.style.display = 'flex';
+}
+
+document.getElementById('manageTabVisibilityBtn').addEventListener('click', () => {
+    document.getElementById('tabContextMenu').style.display = 'none';
+    const list = document.getElementById('tabVisibilityList');
+    list.innerHTML = tabOrder.map(key => {
+        const label = tabNames[key] || key;
+        const checked = tabHidden[key] ? '' : 'checked';
+        return `<label style="display:flex; align-items:center; gap:8px; cursor:pointer;">` +
+            `<input type="checkbox" class="tab-visibility-checkbox" data-key="${key}" ${checked}>` +
+            `<span>${label}</span></label>`;
+    }).join('');
+    document.getElementById('mainContainer').style.display = 'none';
+    document.getElementById('tabVisibilityOverlay').style.display = 'flex';
+});
+
+document.getElementById('closeTabVisibilityBtn').addEventListener('click', () => {
+    document.getElementById('tabVisibilityOverlay').style.display = 'none';
+    document.getElementById('mainContainer').style.display = 'block';
+});
+
+document.getElementById('saveTabVisibilityBtn').addEventListener('click', () => {
+    const checkboxes = document.querySelectorAll('.tab-visibility-checkbox');
+    const newHidden = {};
+    let visibleCount = 0;
+    checkboxes.forEach(cb => {
+        if (!cb.checked) newHidden[cb.dataset.key] = true;
+        else visibleCount++;
+    });
+    if (visibleCount === 0) {
+        alert('Mindestens ein Tab muss sichtbar bleiben.');
+        return;
+    }
+    tabHidden = newHidden;
+    syncSet({ tabHidden }, () => {
+        renderTabsNavigation();
+        applyTabColors();
+        if (!document.querySelector('.tab-btn.active')) {
+            const firstVisible = tabOrder.find(key => !tabHidden[key]);
+            if (firstVisible) activateTab(firstVisible);
+        }
+        document.getElementById('tabVisibilityOverlay').style.display = 'none';
+        document.getElementById('mainContainer').style.display = 'block';
+    });
+});
+
+// Tab-Kontextmenü: Toggle-Sektionen
+function makeTabSectionToggle(btnId, sectionId) {
+    document.getElementById(btnId).addEventListener('click', (e) => {
+        e.stopPropagation();
+        const sec = document.getElementById(sectionId);
+        const isOpening = sec.style.display === 'none';
+        sec.style.display = isOpening ? 'block' : 'none';
+        if (isOpening) {
+            requestAnimationFrame(() => {
+                const menu = document.getElementById('tabContextMenu');
+                const rect = menu.getBoundingClientRect();
+                if (rect.bottom > window.innerHeight - 5) {
+                    menu.style.top = Math.max(5, window.innerHeight - rect.height - 5) + 'px';
+                }
+            });
+        }
+    });
+}
+makeTabSectionToggle('tabColorSectionToggle', 'tabColorSection');
+makeTabSectionToggle('tabTextColorSectionToggle', 'tabTextColorSection');
+makeTabSectionToggle('tabIconSectionToggle', 'tabIconSection');
+
+// 64-Farben-Palette für Schriftfarbe (lazy init)
+const TAB_TEXT_COLORS_64 = [
+    '#000000','#1a1a1a','#333333','#4d4d4d','#666666','#808080','#b3b3b3','#ffffff',
+    '#ff0000','#ff4d00','#ff9900','#ffcc00','#ffff00','#99cc00','#00cc00','#00cc99',
+    '#00ccff','#0099ff','#0000ff','#6600cc','#cc00cc','#ff0099','#ff6699','#ff99cc',
+    '#cc0000','#cc3300','#cc6600','#cc9900','#999900','#336600','#006600','#006633',
+    '#006699','#003399','#000099','#330099','#660066','#990033','#993300','#996633',
+    '#ff6666','#ff9966','#ffcc66','#ffff66','#ccff66','#66ff66','#66ffcc','#66ffff',
+    '#66ccff','#6699ff','#6666ff','#9966ff','#ff66ff','#ff66cc','#ffcccc','#ffd9b3',
+    '#ffe0b3','#fff5cc','#ffffcc','#e6ffcc','#ccffcc','#ccffe6','#ccffff','#cce6ff',
+];
+let _tabTextColorPickerInited = false;
+function initTabTextColorPicker() {
+    if (_tabTextColorPickerInited) return;
+    _tabTextColorPickerInited = true;
+    const grid = document.getElementById('tabTextColorPicker64');
+    grid.innerHTML = TAB_TEXT_COLORS_64.map(c =>
+        `<button class="tab-text-color-swatch" data-color="${c}" style="background:${c}; width:22px; height:22px; border-radius:3px; border:1px solid rgba(128,128,128,0.3); cursor:pointer;" title="${c}"></button>`
+    ).join('');
+    grid.addEventListener('click', (e) => {
+        const sw = e.target.closest('.tab-text-color-swatch');
+        if (!sw) return;
+        const key = document.getElementById('tabContextMenu').dataset.activeKey;
+        if (!key) return;
+        tabTextColors[key] = sw.dataset.color;
+        syncSet({ tabTextColors });
+        applyTabColors();
+    });
+}
+document.getElementById('tabTextColorSectionToggle').addEventListener('click', initTabTextColorPicker, { once: true });
+
+document.getElementById('resetTabTextColorBtn').addEventListener('click', () => {
+    const key = document.getElementById('tabContextMenu').dataset.activeKey;
+    if (!key) return;
+    delete tabTextColors[key];
+    syncSet({ tabTextColors });
+    applyTabColors();
+    document.getElementById('tabContextMenu').style.display = 'none';
+});
+
+document.addEventListener('click', () => {
+    document.getElementById('promptContextMenu').style.display = 'none';
+    document.getElementById('noteContextMenu').style.display = 'none';
+    document.getElementById('bookmarkContextMenu').style.display = 'none';
+    document.getElementById('groupContextMenu').style.display = 'none';
+    document.getElementById('ghActionsContextMenu').style.display = 'none';
+    document.getElementById('ghActionsAllContextMenu').style.display = 'none';
+});
+
+// Browser-Tab umbenennen
+let _renameTabId = null;
+let _renameTabUrl = null;
+
+document.getElementById('renameTabBtn').addEventListener('click', () => {
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        if (!tabs || !tabs[0]) return;
+        _renameTabId = tabs[0].id;
+        _renameTabUrl = tabs[0].url || null;
+        syncGet({ tabTitleOverrides: {} }, ({ tabTitleOverrides }) => {
+            const saved = _renameTabUrl && tabTitleOverrides[_renameTabUrl];
+            document.getElementById('renameTabInput').value = saved || tabs[0].title || '';
+            const overlay = document.getElementById('renameTabOverlay');
+            overlay.style.display = 'block';
+            document.getElementById('renameTabInput').focus();
+            document.getElementById('renameTabInput').select();
+        });
+    });
+});
+
+function applyRenameTab() {
+    const newTitle = document.getElementById('renameTabInput').value.trim();
+    if (!newTitle || _renameTabId === null) {
+        document.getElementById('renameTabOverlay').style.display = 'none';
+        return;
+    }
+    chrome.scripting.executeScript({
+        target: { tabId: _renameTabId },
+        func: (t) => { document.title = t; },
+        args: [newTitle]
+    });
+    if (_renameTabUrl) {
+        syncGet({ tabTitleOverrides: {} }, ({ tabTitleOverrides }) => {
+            tabTitleOverrides[_renameTabUrl] = newTitle;
+            syncSet({ tabTitleOverrides });
+        });
+    }
+    document.getElementById('renameTabOverlay').style.display = 'none';
+    _renameTabId = null;
+    _renameTabUrl = null;
+}
+
+function resetRenameTab() {
+    if (!_renameTabUrl) { document.getElementById('renameTabOverlay').style.display = 'none'; return; }
+    syncGet({ tabTitleOverrides: {} }, ({ tabTitleOverrides }) => {
+        delete tabTitleOverrides[_renameTabUrl];
+        syncSet({ tabTitleOverrides });
+        if (_renameTabId !== null) chrome.tabs.reload(_renameTabId);
+        document.getElementById('renameTabOverlay').style.display = 'none';
+        _renameTabId = null;
+        _renameTabUrl = null;
+    });
+}
+
+document.getElementById('renameTabApplyBtn').addEventListener('click', applyRenameTab);
+document.getElementById('renameTabResetBtn').addEventListener('click', resetRenameTab);
+
+document.getElementById('renameTabCancelBtn').addEventListener('click', () => {
+    document.getElementById('renameTabOverlay').style.display = 'none';
+    _renameTabId = null;
+    _renameTabUrl = null;
+});
+
+document.getElementById('renameTabInput').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') applyRenameTab();
+    if (e.key === 'Escape') {
+        document.getElementById('renameTabOverlay').style.display = 'none';
+        _renameTabId = null;
+        _renameTabUrl = null;
     }
 });
 
