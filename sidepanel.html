@@ -68,20 +68,6 @@
         <input type="text" id="searchMakrosInput" placeholder="⌕ Makros durchsuchen...">
         <button id="recordMakroBtn" class="record-btn" title="Makro live im aktiven Tab aufnehmen"><span class="record-dot"></span> REC</button>
       </div>
-      <div style="display:flex; flex-direction:column; gap:6px; margin-bottom:8px;">
-        <button id="cleanupGhActionsBtn" class="btn-icon-elegant" style="text-align:left;" title="Alle GitHub-Actions-Runs bis auf den neuesten löschen"><svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor" style="vertical-align:middle; margin-right:5px;"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>Github alte Actions löschen</button>
-        <button id="cleanupAllGhActionsBtn" class="btn-icon-elegant" style="text-align:left;" title="Alle Repos laden und Actions aufräumen"><svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor" style="vertical-align:middle; margin-right:5px;"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>Github aufräumen</button>
-        <div id="ghActionsLogBox" style="display:none; font-size:11px; font-family:monospace; background:rgba(0,0,0,0.25); border-radius:6px; padding:8px; white-space:pre-wrap;"></div>
-        <button id="clearGhActionsLogBtn" class="btn-icon-elegant" style="display:none; font-size:11px; padding:4px 8px; align-self:flex-end;">✕ Log leeren</button>
-        <div id="ghActionsContextMenu" class="context-menu" style="display:none; position:fixed; z-index:99999; width:200px; gap:8px;">
-          <button id="ctxChangeGhToken" class="btn-icon-elegant" style="width:100%; text-align:left; padding:9px 10px; font-size:12px;">🔑 Token ändern</button>
-          <button id="ctxClearGhActionsLog" class="btn-icon-elegant" style="width:100%; text-align:left; padding:9px 10px; font-size:12px;">✕ Log leeren</button>
-        </div>
-        <div id="ghActionsAllContextMenu" class="context-menu" style="display:none; position:fixed; z-index:99999; width:200px; gap:8px;">
-          <button id="ctxChangeGhTokenAll" class="btn-icon-elegant" style="width:100%; text-align:left; padding:9px 10px; font-size:12px;">🔑 Token ändern</button>
-          <button id="ctxClearGhCleanupAllLog" class="btn-icon-elegant" style="width:100%; text-align:left; padding:9px 10px; font-size:12px;">✕ Log leeren</button>
-        </div>
-      </div>
       <div id="makroPlaybackBar" style="display:none; flex-direction:column; padding:8px 10px; border-bottom:1px solid #444; background:rgba(255,140,0,0.1); gap:6px; margin-bottom:2px;">
         <div style="display:flex; align-items:center; gap:8px;">
           <span id="makroPlaybackTitle" style="font-size:12px; flex:1; font-weight:600; opacity:0.9; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">Makro</span>
@@ -114,12 +100,34 @@
       <div id="bookmarksList"></div>
     </div>
 
+    <div id="githubView" class="tab-view" style="display:none;">
+      <div class="header">
+        <h3 style="margin:0; font-size:13px; display:flex; align-items:center; gap:6px;"><svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>Github</h3>
+      </div>
+      <div style="display:flex; flex-direction:column; gap:6px; margin-bottom:8px;">
+        <button id="cleanupGhActionsBtn" class="btn-icon-elegant" style="text-align:left;" title="Alle GitHub-Actions-Runs bis auf den neuesten löschen"><svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor" style="vertical-align:middle; margin-right:5px;"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>Github alte Actions löschen</button>
+        <button id="cleanupAllGhActionsBtn" class="btn-icon-elegant" style="text-align:left;" title="Alle Repos laden und Actions aufräumen"><svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor" style="vertical-align:middle; margin-right:5px;"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>Github aufräumen</button>
+        <button id="ghArtifactDownloadBtn" class="btn-icon-elegant" style="text-align:left;" title="Neuestes Release-Artefakt eines Repos herunterladen"><svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor" style="vertical-align:middle; margin-right:5px;"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>Github Artefakt Download</button>
+        <div id="ghActionsLogBox" style="display:none; font-size:11px; font-family:monospace; background:rgba(0,0,0,0.25); border-radius:6px; padding:8px; white-space:pre-wrap;"></div>
+        <button id="clearGhActionsLogBtn" class="btn-icon-elegant" style="display:none; font-size:11px; padding:4px 8px; align-self:flex-end;">✕ Log leeren</button>
+        <div id="ghActionsContextMenu" class="context-menu" style="display:none; position:fixed; z-index:99999; width:200px; gap:8px;">
+          <button id="ctxChangeGhToken" class="btn-icon-elegant" style="width:100%; text-align:left; padding:9px 10px; font-size:12px;">🔑 Token ändern</button>
+          <button id="ctxClearGhActionsLog" class="btn-icon-elegant" style="width:100%; text-align:left; padding:9px 10px; font-size:12px;">✕ Log leeren</button>
+        </div>
+        <div id="ghActionsAllContextMenu" class="context-menu" style="display:none; position:fixed; z-index:99999; width:200px; gap:8px;">
+          <button id="ctxChangeGhTokenAll" class="btn-icon-elegant" style="width:100%; text-align:left; padding:9px 10px; font-size:12px;">🔑 Token ändern</button>
+          <button id="ctxClearGhCleanupAllLog" class="btn-icon-elegant" style="width:100%; text-align:left; padding:9px 10px; font-size:12px;">✕ Log leeren</button>
+        </div>
+      </div>
+    </div>
+
     <div class="tabs-nav" id="tabsNavContainer">
       <button id="navPrompts" class="tab-btn active" data-tab="prompts">Promts</button>
       <button id="navSessions" class="tab-btn" data-tab="sessions">Sessions</button>
       <button id="navNotes" class="tab-btn" data-tab="notes">Notizen</button>
       <button id="navMakros" class="tab-btn" data-tab="makros">Makros</button>
       <button id="navBookmarks" class="tab-btn" data-tab="bookmarks">Sites</button>
+      <button id="navGithub" class="tab-btn" data-tab="github">Github</button>
     </div>
   </div>
 
@@ -161,6 +169,7 @@
           <button id="tabIconClearBtn" class="btn-icon" style="font-size:11px; padding:4px 6px; flex:1;" title="Icon entfernen">✕ Entfernen</button>
         </div>
         <div id="tabIconQuickPick" style="display:flex; gap:4px; flex-wrap:wrap; padding:6px 0;">
+          <button class="tab-icon-pick btn-icon-elegant" data-icon="🐙">🐙</button>
           <button class="tab-icon-pick btn-icon-elegant" data-icon="📝">📝</button>
           <button class="tab-icon-pick btn-icon-elegant" data-icon="💬">💬</button>
           <button class="tab-icon-pick btn-icon-elegant" data-icon="📁">📁</button>
@@ -236,6 +245,22 @@
     <div style="padding-top: 6px; display: flex; gap: 4px;">
       <button id="moveTabLeftBtn" class="btn-icon-elegant" style="flex:1; padding:9px 10px; font-size:11px;" title="Nach links verschieben">◀</button>
       <button id="moveTabRightBtn" class="btn-icon-elegant" style="flex:1; padding:9px 10px; font-size:11px;" title="Nach rechts verschieben">▶</button>
+    </div>
+
+    <!-- Sichtbarkeit -->
+    <div style="padding-top: 6px;">
+      <button id="manageTabVisibilityBtn" class="btn-icon-elegant" style="width:100%; text-align:left; padding:9px 10px; font-size:11px;">👁 Tabs ein-/ausblenden</button>
+    </div>
+  </div>
+
+  <div id="tabVisibilityOverlay" style="display:none;">
+    <div class="input-header">
+      <h3>👁 Tabs ein-/ausblenden</h3>
+      <button id="closeTabVisibilityBtn" class="btn-icon btn-icon-accent">✕</button>
+    </div>
+    <div style="display:flex; flex-direction:column; gap:8px; padding:15px;">
+      <div id="tabVisibilityList" style="display:flex; flex-direction:column; gap:6px; font-size:13px;"></div>
+      <button id="saveTabVisibilityBtn" class="primary-btn">💾 Speichern</button>
     </div>
   </div>
 
@@ -718,6 +743,19 @@
       <button id="ghStartCleanupAllBtn" class="primary-btn">🗑️ Ausgewählte aufräumen</button>
       <div id="ghCleanupAllLogBox" style="display:none; font-size:11px; font-family:monospace; background:rgba(0,0,0,0.25); border-radius:6px; padding:8px; white-space:pre-wrap; max-height:200px; overflow-y:auto;"></div>
       <button id="clearGhCleanupAllLogBtn" class="btn-icon-elegant" style="display:none; font-size:11px; padding:4px 8px; align-self:flex-end;">✕ Log leeren</button>
+    </div>
+  </div>
+
+  <div id="ghArtifactOverlay" style="display:none;">
+    <div class="input-header">
+      <h3><svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor" style="vertical-align:middle; margin-right:5px;"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>Github Artefakt Download</h3>
+      <button id="closeGhArtifactBtn" class="btn-icon btn-icon-accent">✕</button>
+    </div>
+    <div style="display:flex; flex-direction:column; gap:10px; padding:15px;">
+      <p style="font-size:12px; opacity:0.8; margin:0;">Repo auswählen — lädt automatisch das neueste Release-Artefakt herunter.</p>
+      <div id="ghArtifactRepoList" style="display:flex; flex-direction:column; gap:4px; max-height:280px; overflow-y:auto; font-size:12px;"></div>
+      <div id="ghArtifactLogBox" style="display:none; font-size:11px; font-family:monospace; background:rgba(0,0,0,0.25); border-radius:6px; padding:8px; white-space:pre-wrap; max-height:150px; overflow-y:auto;"></div>
+      <button id="clearGhArtifactLogBtn" class="btn-icon-elegant" style="display:none; font-size:11px; padding:4px 8px; align-self:flex-end;">✕ Log leeren</button>
     </div>
   </div>
 

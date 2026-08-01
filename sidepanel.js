@@ -17,6 +17,7 @@ let tabIcons = {};
 let tabIconOnly = {};
 let tabLabels = {};
 let tabCustomIcons = {};
+let tabHidden = {};
 let customProviders = [];
 let groupOrder = [];
 let noteGroupOrder = [];
@@ -60,7 +61,8 @@ const tabNames = {
     'sessions': 'Sessions',
     'notes': 'Notizen',
     'makros': 'Makros',
-    'bookmarks': 'Sites'
+    'bookmarks': 'Sites',
+    'github': 'Github'
 };
 
 const providerIcons = {
@@ -232,7 +234,8 @@ const SYNC_LOAD_DEFAULTS = {
     groupOrder: [],
     noteGroupOrder: [],
     bookmarkGroupOrder: [],
-    savedSessions: []
+    savedSessions: [],
+    tabHidden: {}
 };
 
 function saveMakros(cb) {
@@ -324,10 +327,17 @@ function loadData() {
             noteGroupOrder = syncRes.noteGroupOrder || [];
             bookmarkGroupOrder = syncRes.bookmarkGroupOrder || [];
             savedSessions = syncRes.savedSessions || [];
+            tabHidden = syncRes.tabHidden || {};
 
             if (!tabOrder.includes('bookmarks')) {
                 tabOrder.push('bookmarks');
                 syncSet({ tabOrder });
+            }
+
+            if (!tabOrder.includes('github')) {
+                tabOrder.push('github');
+                if (!tabIcons.github) tabIcons.github = '🐙';
+                syncSet({ tabOrder, tabIcons });
             }
 
             // Migration: bestehende Lesezeichen-Gruppen (früher in gemeinsamer groupMetadata) nach bookmarkGroupMetadata übernehmen
@@ -373,7 +383,7 @@ function renderTabsNavigation() {
     const activeBtn = navContainer.querySelector('.tab-btn.active');
     const activeTabKey = activeBtn ? activeBtn.dataset.tab : 'prompts';
 
-    navContainer.innerHTML = tabOrder.map(key => {
+    navContainer.innerHTML = tabOrder.filter(key => !tabHidden[key]).map(key => {
         const label = tabLabels[key] || tabNames[key] || key;
         const customIcon = tabCustomIcons[key] || '';
         const emojiIcon = tabIcons[key] || '';
@@ -448,7 +458,7 @@ function checkSyncStatus() {
 const MANUAL_SYNC_KEYS = ['promts', 'notes', 'bookmarks', 'deletedPromts', 'recentColors',
     'groupMetadata', 'bookmarkGroupMetadata', 'tabColors', 'tabTextColors', 'tabIcons',
     'tabIconOnly', 'tabLabels', 'tabOrder', 'customProviders', 'groupOrder', 'noteGroupOrder',
-    'bookmarkGroupOrder', 'savedSessions'];
+    'bookmarkGroupOrder', 'savedSessions', 'tabHidden'];
 
 const MANUAL_SYNC_SOURCE = {
     promts: () => promts, notes: () => notes, bookmarks: () => bookmarks,
@@ -458,7 +468,7 @@ const MANUAL_SYNC_SOURCE = {
     tabIconOnly: () => tabIconOnly, tabLabels: () => tabLabels, tabOrder: () => tabOrder,
     customProviders: () => customProviders, groupOrder: () => groupOrder,
     noteGroupOrder: () => noteGroupOrder, bookmarkGroupOrder: () => bookmarkGroupOrder,
-    savedSessions: () => savedSessions
+    savedSessions: () => savedSessions, tabHidden: () => tabHidden
 };
 
 function runManualSync() {
@@ -708,6 +718,101 @@ document.getElementById('clearGhCleanupAllLogBtn').addEventListener('click', () 
     document.getElementById('ghCleanupAllLogBox').style.display = 'none';
     document.getElementById('ghCleanupAllLogBox').textContent = '';
     document.getElementById('clearGhCleanupAllLogBtn').style.display = 'none';
+});
+
+async function downloadLatestArtifact(owner, repo, token, appendLog) {
+    const headers = { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' };
+    appendLog(`⏳ Suche neuestes Release für ${owner}/${repo} …`);
+    let res;
+    try {
+        res = await fetch(`https://api.github.com/repos/${owner}/${repo}/releases/latest`, { headers });
+    } catch (e) {
+        appendLog(`❌ Netzwerkfehler: ${e.message}`);
+        return;
+    }
+    if (!res.ok) { appendLog(`❌ Kein Release gefunden (HTTP ${res.status}).`); return; }
+    const release = await res.json();
+    const assets = release.assets || [];
+    if (!assets.length) { appendLog(`ℹ️ Release "${release.tag_name}" enthält keine Artefakte.`); return; }
+    const PRIORITY_EXT = ['.apk', '.exe', '.msi', '.dmg', '.appimage', '.zip'];
+    let chosen = null;
+    for (const ext of PRIORITY_EXT) {
+        chosen = assets.find(a => a.name.toLowerCase().endsWith(ext));
+        if (chosen) break;
+    }
+    if (!chosen) chosen = assets[0];
+    appendLog(`⬇️ Lade "${chosen.name}" (${release.tag_name}) …`);
+    chrome.downloads.download({
+        url: chosen.url,
+        filename: chosen.name,
+        headers: [
+            { name: 'Authorization', value: `Bearer ${token}` },
+            { name: 'Accept', value: 'application/octet-stream' }
+        ]
+    }, () => {
+        if (chrome.runtime.lastError) { appendLog(`❌ Download fehlgeschlagen: ${chrome.runtime.lastError.message}`); return; }
+        appendLog(`✅ Download gestartet: ${chosen.name}`);
+    });
+}
+
+async function openGhArtifactPicker() {
+    const token = await decryptGithubToken();
+    if (!token) {
+        document.getElementById('mainContainer').style.display = 'none';
+        document.getElementById('ghTokenOverlay').style.display = 'flex';
+        return;
+    }
+    document.getElementById('mainContainer').style.display = 'none';
+    document.getElementById('ghArtifactOverlay').style.display = 'flex';
+    const repoList = document.getElementById('ghArtifactRepoList');
+    const logBox = document.getElementById('ghArtifactLogBox');
+    repoList.innerHTML = '<div style="opacity:0.7;">⏳ Lade Repos…</div>';
+    logBox.style.display = 'none'; logBox.textContent = '';
+
+    const headers = { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' };
+    let allRepos = [];
+    try {
+        let page = 1;
+        while (true) {
+            const res = await fetch(`https://api.github.com/user/repos?per_page=100&page=${page}&type=all`, { headers });
+            if (!res.ok) { repoList.innerHTML = `<div style="color:#cf6679">❌ HTTP ${res.status} ${res.statusText}</div>`; return; }
+            const data = await res.json();
+            allRepos = allRepos.concat(data);
+            if (data.length < 100) break;
+            page++;
+        }
+    } catch (e) {
+        repoList.innerHTML = `<div style="color:#cf6679">❌ ${e.message}</div>`;
+        return;
+    }
+    allRepos.sort((a, b) => a.full_name.localeCompare(b.full_name));
+    repoList.innerHTML = allRepos.map(r =>
+        `<button class="btn-icon-elegant gh-artifact-repo-btn" data-owner="${r.owner.login}" data-repo="${r.name}" style="text-align:left; font-size:12px;">${r.full_name}</button>`
+    ).join('');
+}
+
+document.getElementById('ghArtifactDownloadBtn').addEventListener('click', openGhArtifactPicker);
+
+document.getElementById('ghArtifactRepoList').addEventListener('click', async (e) => {
+    const btn = e.target.closest('.gh-artifact-repo-btn');
+    if (!btn) return;
+    const token = await decryptGithubToken();
+    if (!token) return;
+    const logBox = document.getElementById('ghArtifactLogBox');
+    logBox.style.display = 'block'; logBox.textContent = '';
+    const appendLog = (line) => { logBox.textContent += line + '\n'; logBox.scrollTop = logBox.scrollHeight; document.getElementById('clearGhArtifactLogBtn').style.display = 'block'; };
+    await downloadLatestArtifact(btn.dataset.owner, btn.dataset.repo, token, appendLog);
+});
+
+document.getElementById('closeGhArtifactBtn').addEventListener('click', () => {
+    document.getElementById('ghArtifactOverlay').style.display = 'none';
+    document.getElementById('mainContainer').style.display = 'block';
+});
+
+document.getElementById('clearGhArtifactLogBtn').addEventListener('click', () => {
+    document.getElementById('ghArtifactLogBox').style.display = 'none';
+    document.getElementById('ghArtifactLogBox').textContent = '';
+    document.getElementById('clearGhArtifactLogBtn').style.display = 'none';
 });
 
 document.getElementById('cleanupGhActionsBtn').addEventListener('click', cleanupGithubActions);
@@ -5234,6 +5339,59 @@ document.getElementById('moveTabRightBtn').addEventListener('click', () => {
             document.getElementById('tabContextMenu').style.display = 'none';
         });
     }
+});
+
+function activateTab(key) {
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.tab-view').forEach(v => v.style.display = 'none');
+    const btn = document.querySelector(`.tab-btn[data-tab="${key}"]`);
+    if (btn) btn.classList.add('active');
+    const targetView = document.getElementById(key + 'View');
+    if (targetView) targetView.style.display = 'flex';
+}
+
+document.getElementById('manageTabVisibilityBtn').addEventListener('click', () => {
+    document.getElementById('tabContextMenu').style.display = 'none';
+    const list = document.getElementById('tabVisibilityList');
+    list.innerHTML = tabOrder.map(key => {
+        const label = tabNames[key] || key;
+        const checked = tabHidden[key] ? '' : 'checked';
+        return `<label style="display:flex; align-items:center; gap:8px; cursor:pointer;">` +
+            `<input type="checkbox" class="tab-visibility-checkbox" data-key="${key}" ${checked}>` +
+            `<span>${label}</span></label>`;
+    }).join('');
+    document.getElementById('mainContainer').style.display = 'none';
+    document.getElementById('tabVisibilityOverlay').style.display = 'flex';
+});
+
+document.getElementById('closeTabVisibilityBtn').addEventListener('click', () => {
+    document.getElementById('tabVisibilityOverlay').style.display = 'none';
+    document.getElementById('mainContainer').style.display = 'block';
+});
+
+document.getElementById('saveTabVisibilityBtn').addEventListener('click', () => {
+    const checkboxes = document.querySelectorAll('.tab-visibility-checkbox');
+    const newHidden = {};
+    let visibleCount = 0;
+    checkboxes.forEach(cb => {
+        if (!cb.checked) newHidden[cb.dataset.key] = true;
+        else visibleCount++;
+    });
+    if (visibleCount === 0) {
+        alert('Mindestens ein Tab muss sichtbar bleiben.');
+        return;
+    }
+    tabHidden = newHidden;
+    syncSet({ tabHidden }, () => {
+        renderTabsNavigation();
+        applyTabColors();
+        if (!document.querySelector('.tab-btn.active')) {
+            const firstVisible = tabOrder.find(key => !tabHidden[key]);
+            if (firstVisible) activateTab(firstVisible);
+        }
+        document.getElementById('tabVisibilityOverlay').style.display = 'none';
+        document.getElementById('mainContainer').style.display = 'block';
+    });
 });
 
 // Tab-Kontextmenü: Toggle-Sektionen
