@@ -720,7 +720,14 @@ document.getElementById('clearGhCleanupAllLogBtn').addEventListener('click', () 
     document.getElementById('clearGhCleanupAllLogBtn').style.display = 'none';
 });
 
-async function downloadLatestArtifact(owner, repo, token, appendLog) {
+function fmtDateTime(iso) {
+    if (!iso) return '';
+    const d = new Date(iso);
+    const pad = n => String(n).padStart(2, '0');
+    return `${pad(d.getDate())}.${pad(d.getMonth() + 1)}.${d.getFullYear()} - ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+
+async function findLatestArtifact(owner, repo, token, appendLog) {
     const headers = { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' };
     appendLog(`⏳ Suche neuestes Release für ${owner}/${repo} …`);
     let res;
@@ -728,20 +735,20 @@ async function downloadLatestArtifact(owner, repo, token, appendLog) {
         res = await fetch(`https://api.github.com/repos/${owner}/${repo}/releases/latest`, { headers });
     } catch (e) {
         appendLog(`❌ Netzwerkfehler: ${e.message}`);
-        return;
+        return null;
     }
-    if (!res.ok) { appendLog(`❌ Kein Release gefunden (HTTP ${res.status}).`); return; }
+    if (!res.ok) { appendLog(`❌ Kein Release gefunden (HTTP ${res.status}).`); return null; }
     const release = await res.json();
     const assets = release.assets || [];
-    if (!assets.length) { appendLog(`ℹ️ Release "${release.tag_name}" enthält keine Artefakte.`); return; }
-    const PRIORITY_EXT = ['.apk', '.exe', '.msi', '.dmg', '.appimage', '.zip'];
-    let chosen = null;
-    for (const ext of PRIORITY_EXT) {
-        chosen = assets.find(a => a.name.toLowerCase().endsWith(ext));
-        if (chosen) break;
-    }
-    if (!chosen) chosen = assets[0];
-    appendLog(`⬇️ Lade "${chosen.name}" (${release.tag_name}) …`);
+    const MATCH_EXT = ['.zip', '.exe', '.apk'];
+    const candidates = assets.filter(a => MATCH_EXT.some(ext => a.name.toLowerCase().endsWith(ext)));
+    if (!candidates.length) { appendLog(`ℹ️ Kein zip/exe/apk-Artefakt im Release "${release.tag_name}" gefunden.`); return null; }
+    candidates.sort((a, b) => new Date(b.updated_at || b.created_at) - new Date(a.updated_at || a.created_at));
+    return { chosen: candidates[0], release };
+}
+
+function downloadArtifactAsset(chosen, token, appendLog) {
+    appendLog(`⬇️ Lade "${chosen.name}" …`);
     chrome.downloads.download({
         url: chosen.url,
         filename: chosen.name,
@@ -766,6 +773,9 @@ async function openGhArtifactPicker() {
     document.getElementById('ghArtifactOverlay').style.display = 'flex';
     const repoList = document.getElementById('ghArtifactRepoList');
     const logBox = document.getElementById('ghArtifactLogBox');
+    _ghArtifactPending = null;
+    document.getElementById('ghArtifactConfirmBox').style.display = 'none';
+    repoList.style.display = 'flex';
     repoList.innerHTML = '<div style="opacity:0.7;">⏳ Lade Repos…</div>';
     logBox.style.display = 'none'; logBox.textContent = '';
 
@@ -793,6 +803,8 @@ async function openGhArtifactPicker() {
 
 document.getElementById('ghArtifactDownloadBtn').addEventListener('click', openGhArtifactPicker);
 
+let _ghArtifactPending = null;
+
 document.getElementById('ghArtifactRepoList').addEventListener('click', async (e) => {
     const btn = e.target.closest('.gh-artifact-repo-btn');
     if (!btn) return;
@@ -801,12 +813,36 @@ document.getElementById('ghArtifactRepoList').addEventListener('click', async (e
     const logBox = document.getElementById('ghArtifactLogBox');
     logBox.style.display = 'block'; logBox.textContent = '';
     const appendLog = (line) => { logBox.textContent += line + '\n'; logBox.scrollTop = logBox.scrollHeight; document.getElementById('clearGhArtifactLogBtn').style.display = 'block'; };
-    await downloadLatestArtifact(btn.dataset.owner, btn.dataset.repo, token, appendLog);
+    const result = await findLatestArtifact(btn.dataset.owner, btn.dataset.repo, token, appendLog);
+    if (!result) return;
+    _ghArtifactPending = { chosen: result.chosen, token };
+    document.getElementById('ghArtifactConfirmName').textContent = result.chosen.name;
+    document.getElementById('ghArtifactConfirmVersion').textContent = result.release.tag_name || '–';
+    document.getElementById('ghArtifactConfirmDate').textContent = fmtDateTime(result.chosen.updated_at || result.chosen.created_at);
+    document.getElementById('ghArtifactRepoList').style.display = 'none';
+    document.getElementById('ghArtifactConfirmBox').style.display = 'flex';
+});
+
+document.getElementById('ghArtifactConfirmBackBtn').addEventListener('click', () => {
+    _ghArtifactPending = null;
+    document.getElementById('ghArtifactConfirmBox').style.display = 'none';
+    document.getElementById('ghArtifactRepoList').style.display = 'flex';
+});
+
+document.getElementById('ghArtifactConfirmOkBtn').addEventListener('click', () => {
+    if (!_ghArtifactPending) return;
+    const logBox = document.getElementById('ghArtifactLogBox');
+    const appendLog = (line) => { logBox.textContent += line + '\n'; logBox.scrollTop = logBox.scrollHeight; document.getElementById('clearGhArtifactLogBtn').style.display = 'block'; };
+    downloadArtifactAsset(_ghArtifactPending.chosen, _ghArtifactPending.token, appendLog);
+    document.getElementById('ghArtifactConfirmBox').style.display = 'none';
+    document.getElementById('ghArtifactRepoList').style.display = 'flex';
+    _ghArtifactPending = null;
 });
 
 document.getElementById('closeGhArtifactBtn').addEventListener('click', () => {
     document.getElementById('ghArtifactOverlay').style.display = 'none';
     document.getElementById('mainContainer').style.display = 'block';
+    _ghArtifactPending = null;
 });
 
 document.getElementById('clearGhArtifactLogBtn').addEventListener('click', () => {

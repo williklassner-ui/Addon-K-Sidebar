@@ -752,8 +752,19 @@
       <button id="closeGhArtifactBtn" class="btn-icon btn-icon-accent">✕</button>
     </div>
     <div style="display:flex; flex-direction:column; gap:10px; padding:15px;">
-      <p style="font-size:12px; opacity:0.8; margin:0;">Repo auswählen — lädt automatisch das neueste Release-Artefakt herunter.</p>
-      <div id="ghArtifactRepoList" style="display:flex; flex-direction:column; gap:4px; max-height:280px; overflow-y:auto; font-size:12px;"></div>
+      <p style="font-size:12px; opacity:0.8; margin:0;">Repo auswählen — sucht automatisch das neueste zip-/exe-/apk-Artefakt.</p>
+      <div id="ghArtifactRepoList" style="display:flex; flex-direction:column; gap:4px; font-size:12px;"></div>
+      <div id="ghArtifactConfirmBox" style="display:none; flex-direction:column; gap:10px;">
+        <div style="font-size:12px; line-height:1.6; background:rgba(255,255,255,0.05); border-radius:6px; padding:10px;">
+          <div><b>Datei:</b> <span id="ghArtifactConfirmName"></span></div>
+          <div><b>Version:</b> <span id="ghArtifactConfirmVersion"></span></div>
+          <div><b>Datum:</b> <span id="ghArtifactConfirmDate"></span></div>
+        </div>
+        <div style="display:flex; gap:8px;">
+          <button id="ghArtifactConfirmBackBtn" class="btn-icon-elegant" style="flex:1;">← Zurück</button>
+          <button id="ghArtifactConfirmOkBtn" class="primary-btn" style="flex:1;">✅ Herunterladen</button>
+        </div>
+      </div>
       <div id="ghArtifactLogBox" style="display:none; font-size:11px; font-family:monospace; background:rgba(0,0,0,0.25); border-radius:6px; padding:8px; white-space:pre-wrap; max-height:150px; overflow-y:auto;"></div>
       <button id="clearGhArtifactLogBtn" class="btn-icon-elegant" style="display:none; font-size:11px; padding:4px 8px; align-self:flex-end;">✕ Log leeren</button>
     </div>
